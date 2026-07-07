@@ -1,15 +1,19 @@
 """
-长期记忆 — 基于向量数据库的持久化记忆
-存储用户画像、历史工单、知识库文档等需要持久化的信息。
-支持语义相似度检索，用于RAG知识检索Agent。
+Long-term memory backed by a vector index.
+
+The production path is:
+source documents -> chunks with metadata -> embedding backend -> FAISS index.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 
@@ -19,125 +23,315 @@ except ImportError:
     faiss = None
 
 
+class EmbeddingBackend(Protocol):
+    """Minimal interface for local or remote embedding providers."""
+
+    dimension: int
+
+    def embed_text(self, text: str) -> np.ndarray:
+        ...
+
+    def embed_batch(self, texts: list[str]) -> list[np.ndarray]:
+        ...
+
+
+def _normalize_vector(vector: np.ndarray) -> np.ndarray:
+    vec = np.asarray(vector, dtype=np.float32)
+    norm = float(np.linalg.norm(vec))
+    if norm == 0.0:
+        return vec
+    return vec / norm
+
+
+class HashEmbeddingBackend:
+    """
+    Deterministic local fallback embedding.
+
+    This is not a real semantic model, but it is stable, offline, and safer than
+    random vectors for tests and demos. Set EMBEDDING_BACKEND=sentence_transformers
+    or openai for stronger retrieval.
+    """
+
+    def __init__(self, dimension: int = 1536):
+        self.dimension = dimension
+
+    def embed_text(self, text: str) -> np.ndarray:
+        vec = np.zeros(self.dimension, dtype=np.float32)
+        tokens = self._tokens(text)
+        if not tokens:
+            tokens = [text.strip() or "<empty>"]
+
+        for token in tokens:
+            digest = hashlib.sha256(token.encode("utf-8")).digest()
+            idx = int.from_bytes(digest[:4], "big") % self.dimension
+            sign = 1.0 if digest[4] % 2 == 0 else -1.0
+            vec[idx] += sign
+
+        return _normalize_vector(vec)
+
+    def embed_batch(self, texts: list[str]) -> list[np.ndarray]:
+        return [self.embed_text(text) for text in texts]
+
+    @staticmethod
+    def _tokens(text: str) -> list[str]:
+        normalized = text.lower()
+        words = re.findall(r"[a-z0-9_]+", normalized)
+        cjk_chars = re.findall(r"[\u4e00-\u9fff]", normalized)
+        cjk_bigrams = [normalized[i : i + 2] for i in range(max(len(normalized) - 1, 0))]
+        cjk_bigrams = [item for item in cjk_bigrams if re.search(r"[\u4e00-\u9fff]", item)]
+        return words + cjk_chars + cjk_bigrams
+
+
+class SentenceTransformerEmbeddingBackend:
+    """Local embedding backend using sentence-transformers when installed."""
+
+    def __init__(self, model_name: str):
+        from sentence_transformers import SentenceTransformer
+
+        self.model_name = model_name
+        self._model = SentenceTransformer(model_name)
+        if hasattr(self._model, "get_embedding_dimension"):
+            self.dimension = int(self._model.get_embedding_dimension())
+        else:
+            self.dimension = int(self._model.get_sentence_embedding_dimension())
+
+    def embed_text(self, text: str) -> np.ndarray:
+        vec = self._model.encode(text, normalize_embeddings=True)
+        return _normalize_vector(vec)
+
+    def embed_batch(self, texts: list[str]) -> list[np.ndarray]:
+        vectors = self._model.encode(texts, normalize_embeddings=True)
+        return [_normalize_vector(vec) for vec in vectors]
+
+
+class OpenAIEmbeddingBackend:
+    """Remote embedding backend for deployments that prefer API-managed models."""
+
+    def __init__(
+        self,
+        model_name: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        dimension: int | None = None,
+    ):
+        from langchain_openai import OpenAIEmbeddings
+
+        self.model_name = model_name
+        self._embeddings = OpenAIEmbeddings(
+            model=model_name,
+            api_key=api_key or os.getenv("OPENAI_API_KEY"),
+            base_url=base_url or os.getenv("OPENAI_BASE_URL"),
+        )
+        self.dimension = dimension or self._detect_dimension()
+
+    def _detect_dimension(self) -> int:
+        sample = self._embeddings.embed_query("dimension probe")
+        return len(sample)
+
+    def embed_text(self, text: str) -> np.ndarray:
+        return _normalize_vector(np.asarray(self._embeddings.embed_query(text), dtype=np.float32))
+
+    def embed_batch(self, texts: list[str]) -> list[np.ndarray]:
+        vectors = self._embeddings.embed_documents(texts)
+        return [_normalize_vector(np.asarray(vec, dtype=np.float32)) for vec in vectors]
+
+
+def create_embedding_backend(embedding_dim: int = 1536) -> EmbeddingBackend:
+    backend = os.getenv("EMBEDDING_BACKEND", "hash").strip().lower()
+    model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
+
+    if backend in {"sentence_transformers", "local"}:
+        return SentenceTransformerEmbeddingBackend(model_name)
+
+    if backend in {"openai", "remote"}:
+        return OpenAIEmbeddingBackend(
+            model_name=os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
+            dimension=int(os.getenv("EMBEDDING_DIM", str(embedding_dim))),
+        )
+
+    if backend == "auto":
+        try:
+            return SentenceTransformerEmbeddingBackend(model_name)
+        except Exception:
+            return HashEmbeddingBackend(embedding_dim)
+
+    return HashEmbeddingBackend(embedding_dim)
+
+
 class LongTermMemory:
     """
-    长期记忆：基于FAISS的向量检索。
+    FAISS-based long-term memory for RAG retrieval.
 
-    特点：
-    - 向量化存储，支持语义相似度检索
-    - 持久化到磁盘，跨会话保持
-    - 支持增量更新和批量导入
-    - 生产环境可切换为Milvus/Pinecone
-
-    文档分块策略：
-    - 固定长度分块 (512 tokens) + 重叠窗口 (128 tokens)
-    - 按段落自然分割优先
+    It keeps the vector index and the original chunk metadata in sync, so a
+    retrieved result can be traced back to its source document.
     """
 
     def __init__(
         self,
         index_path: str = "./vector_store/faiss_index",
         embedding_dim: int = 1536,
+        embedding_backend: EmbeddingBackend | None = None,
+        min_score: float = -1.0,
     ):
         self.index_path = Path(index_path)
-        self.embedding_dim = embedding_dim
+        self.embedding_backend = embedding_backend or create_embedding_backend(embedding_dim)
+        self.embedding_dim = int(self.embedding_backend.dimension)
+        self.min_score = min_score
         self._documents: list[dict[str, Any]] = []
         self._index = None
         self._init_index()
 
-    def _init_index(self):
-        """初始化FAISS索引"""
+    @property
+    def documents(self) -> list[dict[str, Any]]:
+        return list(self._documents)
+
+    def _init_index(self) -> None:
         if faiss is None:
             self._index = None
+            self._load_metadata()
             return
 
         metadata_path = self.index_path.with_suffix(".meta.json")
         if self.index_path.exists():
             try:
-                self._index = faiss.read_index(str(self.index_path))
+                loaded_index = faiss.read_index(str(self.index_path))
+                if int(loaded_index.d) != self.embedding_dim:
+                    raise ValueError(
+                        f"FAISS dimension {loaded_index.d} does not match embedding dimension {self.embedding_dim}"
+                    )
+                self._index = loaded_index
                 if metadata_path.exists():
-                    with open(metadata_path, "r", encoding="utf-8") as f:
-                        self._documents = json.load(f)
+                    self._load_metadata()
+                return
             except Exception:
-                self._index = faiss.IndexFlatIP(self.embedding_dim)
-        else:
-            self._index = faiss.IndexFlatIP(self.embedding_dim)
+                self._documents = []
 
-    def _simple_embedding(self, text: str) -> np.ndarray:
-        """
-        简易文本嵌入（演示用）。
-        生产环境应替换为 OpenAI Embedding API 或本地模型。
-        """
-        text_hash = hashlib.sha256(text.encode()).hexdigest()
-        np.random.seed(int(text_hash[:8], 16) % (2**32))
-        vec = np.random.randn(self.embedding_dim).astype(np.float32)
-        vec /= np.linalg.norm(vec)
-        return vec
+        self._index = faiss.IndexFlatIP(self.embedding_dim)
+
+    def _load_metadata(self) -> None:
+        metadata_path = self.index_path.with_suffix(".meta.json")
+        if metadata_path.exists():
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                self._documents = json.load(f)
+
+    def _embed_text(self, text: str) -> np.ndarray:
+        return _normalize_vector(self.embedding_backend.embed_text(text))
+
+    def _embed_batch(self, texts: list[str]) -> list[np.ndarray]:
+        if hasattr(self.embedding_backend, "embed_batch"):
+            vectors = self.embedding_backend.embed_batch(texts)
+        else:
+            vectors = [self.embedding_backend.embed_text(text) for text in texts]
+        return [_normalize_vector(vector) for vector in vectors]
 
     def add_document(self, content: str, source: str = "", metadata: dict | None = None) -> str:
-        """添加文档到向量库"""
-        doc_id = hashlib.md5(content.encode()).hexdigest()[:12]
+        doc_metadata = dict(metadata or {})
+        doc_id = doc_metadata.get("doc_id") or self._stable_doc_id(content, source)
+        doc_metadata["doc_id"] = doc_id
+        doc_metadata.setdefault("content_hash", self._content_hash(content))
+        doc_metadata.setdefault("chunk_id", self._stable_chunk_id(doc_id, content, doc_metadata))
+        doc_metadata.setdefault("updated_at", self._now_iso())
 
         doc = {
             "id": doc_id,
             "content": content,
             "source": source,
-            "metadata": metadata or {},
+            "metadata": doc_metadata,
         }
         self._documents.append(doc)
 
         if self._index is not None:
-            embedding = self._simple_embedding(content)
+            embedding = self._embed_text(content)
             self._index.add(embedding.reshape(1, -1))
 
         return doc_id
 
+    def remove_documents_by_source_path(self, source_path: str) -> int:
+        before = len(self._documents)
+        self._documents = [
+            doc
+            for doc in self._documents
+            if doc.get("metadata", {}).get("source_path") != source_path
+        ]
+        removed = before - len(self._documents)
+        if removed:
+            self._rebuild_index()
+        return removed
+
     def add_documents_batch(self, documents: list[dict]) -> list[str]:
-        """批量添加文档"""
-        doc_ids = []
-        for doc in documents:
-            doc_id = self.add_document(
-                content=doc.get("content", ""),
-                source=doc.get("source", ""),
-                metadata=doc.get("metadata", {}),
+        prepared_docs: list[dict[str, Any]] = []
+        doc_ids: list[str] = []
+
+        for item in documents:
+            content = item.get("content", "")
+            source = item.get("source", "")
+            metadata = dict(item.get("metadata", {}))
+            doc_id = metadata.get("doc_id") or self._stable_doc_id(content, source)
+            metadata["doc_id"] = doc_id
+            prepared_docs.append(
+                {
+                    "id": doc_id,
+                    "content": content,
+                    "source": source,
+                    "metadata": metadata,
+                }
             )
             doc_ids.append(doc_id)
+
+        self._documents.extend(prepared_docs)
+
+        if self._index is not None and prepared_docs:
+            vectors = self._embed_batch([doc["content"] for doc in prepared_docs])
+            matrix = np.vstack(vectors).astype(np.float32)
+            self._index.add(matrix)
+
         return doc_ids
 
     def search(self, query: str, top_k: int = 5) -> list[dict]:
-        """语义相似度检索"""
         if self._index is None or not self._documents:
             return self._fallback_search(query, top_k)
 
-        query_vec = self._simple_embedding(query).reshape(1, -1)
-        scores, indices = self._index.search(query_vec, min(top_k, len(self._documents)))
+        limit = min(top_k, len(self._documents))
+        query_vec = self._embed_text(query).reshape(1, -1)
+        scores, indices = self._index.search(query_vec, limit)
 
         results = []
         for score, idx in zip(scores[0], indices[0]):
             if idx < 0 or idx >= len(self._documents):
                 continue
+            score_value = float(score)
+            if score_value < self.min_score:
+                continue
             doc = self._documents[idx].copy()
-            doc["score"] = float(score)
+            doc["metadata"] = dict(doc.get("metadata", {}))
+            doc["score"] = score_value
             results.append(doc)
 
         return results
 
     def _fallback_search(self, query: str, top_k: int) -> list[dict]:
-        """当FAISS不可用时的关键词回退搜索"""
         scored = []
-        query_terms = set(query.lower().split())
+        query_terms = set(HashEmbeddingBackend._tokens(query))
 
         for doc in self._documents:
-            content_lower = doc["content"].lower()
-            score = sum(1 for term in query_terms if term in content_lower)
-            if score > 0:
+            content_terms = set(HashEmbeddingBackend._tokens(doc["content"]))
+            if not query_terms or not content_terms:
+                continue
+            overlap = len(query_terms & content_terms)
+            score = overlap / max(len(query_terms), 1)
+            if score >= self.min_score and score > 0:
                 scored.append((score, doc))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [doc for _, doc in scored[:top_k]]
+        results = []
+        for score, doc in scored[:top_k]:
+            result = doc.copy()
+            result["metadata"] = dict(result.get("metadata", {}))
+            result["score"] = float(score)
+            results.append(result)
+        return results
 
-    def save(self):
-        """持久化索引到磁盘"""
+    def save(self) -> None:
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
 
         if self._index is not None:
@@ -148,31 +342,95 @@ class LongTermMemory:
             json.dump(self._documents, f, ensure_ascii=False, indent=2)
 
     def load_knowledge_base(self, kb_dir: str) -> int:
-        """从目录批量加载知识库文档"""
         kb_path = Path(kb_dir)
         if not kb_path.exists():
             return 0
 
         count = 0
-        for file_path in kb_path.glob("**/*.txt"):
+        supported_files = sorted(
+            path for path in kb_path.rglob("*") if path.suffix.lower() in {".md", ".txt"}
+        )
+        for file_path in supported_files:
             content = file_path.read_text(encoding="utf-8")
+            source_path = str(file_path)
+            document_hash = self._content_hash(content)
+            existing_docs = [
+                doc
+                for doc in self._documents
+                if doc.get("metadata", {}).get("source_path") == source_path
+            ]
+            if existing_docs and all(
+                doc.get("metadata", {}).get("document_hash") == document_hash
+                for doc in existing_docs
+            ):
+                continue
+            if existing_docs:
+                self.remove_documents_by_source_path(source_path)
+
             chunks = self._chunk_text(content)
-            for chunk in chunks:
+            source_doc_id = self._stable_doc_id(source_path, "document")
+            updated_at = self._now_iso()
+
+            for chunk_index, chunk in enumerate(chunks):
+                chunk_hash = self._content_hash(chunk)
                 self.add_document(
                     content=chunk,
-                    source=str(file_path.name),
-                    metadata={"file": str(file_path)},
+                    source=file_path.name,
+                    metadata={
+                        "file": str(file_path),
+                        "source_path": source_path,
+                        "doc_id": source_doc_id,
+                        "chunk_id": self._stable_chunk_id(
+                            source_doc_id,
+                            chunk,
+                            {"chunk_index": chunk_index},
+                        ),
+                        "content_hash": chunk_hash,
+                        "document_hash": document_hash,
+                        "chunk_index": chunk_index,
+                        "chunk_count": len(chunks),
+                        "file_type": file_path.suffix.lower().lstrip("."),
+                        "updated_at": updated_at,
+                    },
                 )
                 count += 1
 
         return count
 
+    def _rebuild_index(self) -> None:
+        if faiss is None:
+            self._index = None
+            return
+
+        self._index = faiss.IndexFlatIP(self.embedding_dim)
+        if not self._documents:
+            return
+
+        vectors = self._embed_batch([doc["content"] for doc in self._documents])
+        matrix = np.vstack(vectors).astype(np.float32)
+        self._index.add(matrix)
+
+    @staticmethod
+    def _stable_doc_id(content: str, source: str = "") -> str:
+        digest = hashlib.sha256(f"{source}\n{content}".encode("utf-8")).hexdigest()
+        return digest[:16]
+
+    @staticmethod
+    def _content_hash(content: str) -> str:
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _stable_chunk_id(doc_id: str, content: str, metadata: dict[str, Any]) -> str:
+        chunk_index = metadata.get("chunk_index", "")
+        digest = hashlib.sha256(f"{doc_id}\n{chunk_index}\n{content}".encode("utf-8")).hexdigest()
+        return digest[:16]
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
     @staticmethod
     def _chunk_text(text: str, chunk_size: int = 512, overlap: int = 128) -> list[str]:
-        """
-        文本分块：固定长度 + 重叠窗口。
-        优先按段落分割，段落过长则按句子分割。
-        """
         paragraphs = text.split("\n\n")
         chunks = []
         current_chunk = ""
@@ -184,23 +442,25 @@ class LongTermMemory:
 
             if len(current_chunk) + len(para) <= chunk_size:
                 current_chunk += para + "\n\n"
-            else:
-                if current_chunk:
-                    chunks.append(current_chunk.strip())
-                    overlap_text = current_chunk[-overlap:] if len(current_chunk) > overlap else current_chunk
-                    current_chunk = overlap_text + para + "\n\n"
+                continue
+
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+                overlap_text = current_chunk[-overlap:] if len(current_chunk) > overlap else current_chunk
+                current_chunk = overlap_text + para + "\n\n"
+                continue
+
+            sentences = re.split(r"(?<=[。！？.!?])\s*", para)
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if not sentence:
+                    continue
+                if len(current_chunk) + len(sentence) <= chunk_size:
+                    current_chunk += sentence
                 else:
-                    sentences = para.replace("。", "。\n").replace(".", ".\n").split("\n")
-                    for sentence in sentences:
-                        sentence = sentence.strip()
-                        if not sentence:
-                            continue
-                        if len(current_chunk) + len(sentence) <= chunk_size:
-                            current_chunk += sentence
-                        else:
-                            if current_chunk:
-                                chunks.append(current_chunk.strip())
-                            current_chunk = sentence
+                    if current_chunk:
+                        chunks.append(current_chunk.strip())
+                    current_chunk = sentence
 
         if current_chunk.strip():
             chunks.append(current_chunk.strip())

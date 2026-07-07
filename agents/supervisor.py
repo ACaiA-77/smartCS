@@ -6,6 +6,7 @@ Supervisor编排Agent — 中央协调者
 
 from __future__ import annotations
 
+import os
 from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage
@@ -176,7 +177,7 @@ def create_supervisor_graph(
     supervisor_route → intent_router → sub-agent → compliance_check → synthesize
     """
     if llm is None:
-        llm = create_traced_chat_openai(model="gpt-4o", temperature=0)
+        llm = create_traced_chat_openai(model=os.getenv("MODEL_NAME", "deepseek-v4-flash"), temperature=0)
     if working_memory is None:
         working_memory = WorkingMemory()
 

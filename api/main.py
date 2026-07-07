@@ -48,19 +48,6 @@ async def lifespan(app: FastAPI):
         mcp_server=mcp_server,
     )
 
-    long_term_memory.add_document(
-        content="我们的理财产品A年化收益率为3.5%-5.2%，投资期限为6个月至3年，最低投资金额10000元。注意：理财非存款，产品有风险，投资须谨慎。",
-        source="product_faq.md",
-    )
-    long_term_memory.add_document(
-        content="退款政策：用户在购买后7天内可申请无理由退款，超过7天需提供合理原因。退款将在3-5个工作日内原路退回。",
-        source="refund_policy.md",
-    )
-    long_term_memory.add_document(
-        content="开户流程：1.准备身份证原件 2.填写开户申请表 3.进行视频认证 4.设置交易密码 5.完成风险评估问卷。整个流程约需15-30分钟。",
-        source="account_guide.md",
-    )
-
     yield
 
 

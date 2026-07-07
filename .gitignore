@@ -1,0 +1,28 @@
+# Secrets and local runtime configuration
+.env
+.env.*
+!.env.example
+!.env.docker.example
+
+# Python cache and local tooling
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Generated vector indexes and retrieval artifacts
+vector_store/
+
+# Reproducible webpage fetch outputs
+knowledge_sources/raw_html/
+knowledge_sources/metadata/
+knowledge_sources/manifest.json
+knowledge_sources/review_samples.md
+
+# Logs and local runtime output
+*.log

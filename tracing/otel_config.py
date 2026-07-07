@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import functools
+import os
 import time
 from typing import Any, Callable
 
@@ -185,7 +186,24 @@ def annotate_llm_token_usage(response: Any) -> None:
 
 def create_traced_chat_openai(**kwargs: Any) -> Any:
     """创建带 Token 追踪的 ChatOpenAI 实例。"""
+    import httpx
     from langchain_openai import ChatOpenAI
+
+    def strip_user_agent(request: httpx.Request) -> None:
+        for key in list(request.headers.keys()):
+            if key.lower() == "user-agent":
+                del request.headers[key]
+
+    async def async_strip_user_agent(request: httpx.Request) -> None:
+        strip_user_agent(request)
+
+    if os.getenv("OPENAI_BASE_URL") and "base_url" not in kwargs:
+        kwargs["base_url"] = os.getenv("OPENAI_BASE_URL")
+    if os.getenv("OPENAI_API_KEY") and "api_key" not in kwargs:
+        kwargs["api_key"] = os.getenv("OPENAI_API_KEY")
+    kwargs.setdefault("model", os.getenv("MODEL_NAME", "deepseek-v4-flash"))
+    kwargs.setdefault("http_client", httpx.Client(event_hooks={"request": [strip_user_agent]}))
+    kwargs.setdefault("http_async_client", httpx.AsyncClient(event_hooks={"request": [async_strip_user_agent]}))
 
     class TracedChatOpenAI(ChatOpenAI):
         async def ainvoke(self, input, config=None, **kw):

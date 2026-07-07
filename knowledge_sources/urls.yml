@@ -1,0 +1,127 @@
+sources:
+  - id: apple_support_home
+    title: Apple 官方支持首页
+    url: https://support.apple.com/zh-cn
+    brand: Apple 中国
+    doc_type: 产品FAQ
+    language: zh-CN
+    output: apple_support_home.md
+  - id: apple_iphone_support
+    title: iPhone 官方支持
+    url: https://support.apple.com/zh-cn/iphone
+    brand: Apple 中国
+    doc_type: 产品FAQ
+    language: zh-CN
+    output: apple_iphone_support.md
+  - id: apple_mac_support
+    title: Mac 官方支持
+    url: https://support.apple.com/zh-cn/mac
+    brand: Apple 中国
+    doc_type: 产品FAQ
+    language: zh-CN
+    output: apple_mac_support.md
+  - id: apple_airpods_support
+    title: AirPods 官方支持
+    url: https://support.apple.com/zh-cn/airpods
+    brand: Apple 中国
+    doc_type: 产品FAQ
+    language: zh-CN
+    output: apple_airpods_support.md
+  - id: applecare_products_cn
+    title: AppleCare 官方介绍
+    url: https://www.apple.com.cn/support/products/
+    brand: Apple 中国
+    doc_type: 产品FAQ
+    language: zh-CN
+    output: applecare_products_cn.md
+  - id: apple_check_coverage
+    title: 查看保修状态
+    url: https://checkcoverage.apple.com/
+    brand: Apple 中国
+    doc_type: 产品FAQ
+    language: zh-CN
+    output: apple_check_coverage.md
+  - id: apple_iphone_repair
+    title: iPhone 维修与保修
+    url: https://support.apple.com/zh-cn/iphone/repair
+    brand: Apple 中国
+    doc_type: 产品FAQ
+    language: zh-CN
+    output: apple_iphone_repair.md
+  - id: apple_returns_refund_cn
+    title: Apple Store 中国退货与退款
+    url: https://www.apple.com.cn/shop/help/returns_refund
+    brand: Apple 中国
+    doc_type: 退款退货退订政策
+    language: zh-CN
+    output: apple_returns_refund_cn.md
+  - id: apple_sales_policies_cn
+    title: Apple Store 中国销售政策
+    url: https://www.apple.com.cn/shop/open/salespolicies
+    brand: Apple 中国
+    doc_type: 退款退货退订政策
+    language: zh-CN
+    output: apple_sales_policies_cn.md
+  - id: apple_retail_sales_policies_cn
+    title: Apple 零售店销售政策
+    url: https://www.apple.com/legal/sales-support/sales-policies/retail_cn.html
+    brand: Apple 中国
+    doc_type: 退款退货退订政策
+    language: zh-CN
+    output: apple_retail_sales_policies_cn.md
+  - id: apple_request_refund
+    title: App Store 申请退款
+    url: https://support.apple.com/zh-cn/118223
+    brand: Apple 中国
+    doc_type: 退款退货退订政策
+    language: zh-CN
+    output: apple_request_refund.md
+  - id: apple_cancel_subscription
+    title: 取消 Apple 订阅
+    url: https://support.apple.com/zh-cn/118428
+    brand: Apple 中国
+    doc_type: 退款退货退订政策
+    language: zh-CN
+    output: apple_cancel_subscription.md
+  - id: apple_cancel_applecare
+    title: 取消 AppleCare 计划
+    url: https://support.apple.com/zh-cn/118218
+    brand: Apple 中国
+    doc_type: 退款退货退订政策
+    language: zh-CN
+    output: apple_cancel_applecare.md
+  - id: apple_create_account
+    title: 创建 Apple 账户
+    url: https://support.apple.com/zh-cn/108647
+    brand: Apple 中国
+    doc_type: 账户注册与恢复指南
+    language: zh-CN
+    output: apple_create_account.md
+  - id: apple_account_login
+    title: Apple Account 登录
+    url: https://account.apple.com/
+    brand: Apple 中国
+    doc_type: 账户注册与恢复指南
+    language: zh-CN
+    output: apple_account_login.md
+  - id: apple_account_manage
+    title: Apple Account 管理
+    url: https://account.apple.com/account/manage
+    brand: Apple 中国
+    doc_type: 账户注册与恢复指南
+    language: zh-CN
+    output: apple_account_manage.md
+  - id: apple_account_recovery
+    title: Apple Account 恢复
+    url: https://support.apple.com/zh-cn/118574
+    brand: Apple 中国
+    doc_type: 账户注册与恢复指南
+    language: zh-CN
+    output: apple_account_recovery.md
+  - id: apple_iforgot
+    title: 找回 Apple Account
+    url: https://iforgot.apple.com/
+    brand: Apple 中国
+    doc_type: 账户注册与恢复指南
+    language: zh-CN
+    output: apple_iforgot.md
