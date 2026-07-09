@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from langchain_core.messages import HumanMessage
 
@@ -23,6 +25,44 @@ async def test_route_decision_injects_wm_context(mock_llm, working_memory, base_
     assert wm.get("last_intent") == "ticket_handler"
     assert "accumulated_entities" in wm
     assert "turn_count" in wm
+
+
+@pytest.mark.asyncio
+async def test_route_decision_restores_wm_snapshot_after_restart(mock_llm, base_state):
+    """route_decision restores persisted working-memory snapshot after restart."""
+
+    class SnapshotShortTermMemory:
+        async def get_history(self, session_id: str, last_n: int | None = None) -> list[dict]:
+            snapshot = {
+                "last_intent": "ticket_handler",
+                "accumulated_entities": {"order_id": "ORD-20260709-001"},
+                "turn_count": 3,
+            }
+            return [
+                {"role": "user", "content": "check order ORD-20260709-001"},
+                {
+                    "role": "system",
+                    "content": f"[wm_snapshot]{json.dumps(snapshot, ensure_ascii=False)}",
+                },
+            ]
+
+        async def get_context_window(self, session_id: str, max_tokens: int = 4000) -> str:
+            return "user: check order ORD-20260709-001"
+
+    restarted_working_memory = WorkingMemory()
+    supervisor = SupervisorNode(
+        mock_llm,
+        restarted_working_memory,
+        short_term_memory=SnapshotShortTermMemory(),
+    )
+
+    out = await supervisor.route_decision(base_state)
+
+    wm = out.get("sub_results", {}).get("_wm_context", {})
+    assert wm.get("last_intent") == "ticket_handler"
+    assert wm.get("accumulated_entities", {}).get("order_id") == "ORD-20260709-001"
+    assert wm.get("turn_count") == 3
+    assert restarted_working_memory.get_context("test-session")["last_intent"] == "ticket_handler"
 
 
 @pytest.mark.asyncio
@@ -153,6 +193,27 @@ async def test_export_for_persistence_exports_context():
     exported = wm.export_for_persistence("persist-test")
     assert exported["context"]["last_intent"] == "knowledge_rag"
     assert exported["context"]["accumulated_entities"]["product"] == "理财产品A"
+
+
+def test_working_memory_restores_snapshot_context():
+    wm = WorkingMemory()
+
+    restored = wm.restore_from_snapshot(
+        "restored-session",
+        {
+            "last_intent": "ticket_handler",
+            "accumulated_entities": {"order_id": "ORD-20260709-001"},
+            "turn_count": 4,
+            "ignored": "value",
+        },
+    )
+
+    ctx = wm.get_context("restored-session")
+    assert restored is True
+    assert ctx["last_intent"] == "ticket_handler"
+    assert ctx["accumulated_entities"]["order_id"] == "ORD-20260709-001"
+    assert ctx["turn_count"] == 4
+    assert "ignored" not in ctx
 
 
 @pytest.mark.asyncio

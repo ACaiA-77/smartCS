@@ -6,6 +6,7 @@ Supervisor编排Agent — 中央协调者
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Annotated, Any, TypedDict
 
@@ -60,6 +61,30 @@ class SupervisorNode:
         self.short_term_memory = short_term_memory
         self.mcp_server = mcp_server
 
+    async def _restore_wm_snapshot(self, session_id: str) -> dict[str, Any]:
+        if self.short_term_memory is None:
+            return {}
+
+        history = await self.short_term_memory.get_history(session_id)
+        for msg in reversed(history):
+            if msg.get("role") != "system":
+                continue
+
+            content = msg.get("content", "")
+            prefix = "[wm_snapshot]"
+            if not isinstance(content, str) or not content.startswith(prefix):
+                continue
+
+            try:
+                snapshot = json.loads(content[len(prefix):])
+            except json.JSONDecodeError:
+                continue
+
+            if self.working_memory.restore_from_snapshot(session_id, snapshot):
+                return self.working_memory.get_context(session_id)
+
+        return {}
+
     @trace_agent_call("supervisor")
     async def route_decision(self, state: AgentState) -> AgentState:
         """Supervisor 入口：读取工作记忆，注入 sub_results 供下游消费"""
@@ -67,6 +92,9 @@ class SupervisorNode:
         ctx = self.working_memory.get_context(session_id)
 
         if self.short_term_memory is not None:
+            if not ctx:
+                ctx = await self._restore_wm_snapshot(session_id)
+
             dialog = await self.short_term_memory.get_context_window(session_id, max_tokens=2000)
             if dialog:
                 ctx["dialog_context"] = dialog

@@ -57,6 +57,31 @@ class WorkingMemory:
             self._store.pop(session_id, None)
             self._context.pop(session_id, None)
 
+    def restore_from_snapshot(self, session_id: str, snapshot: dict[str, Any]) -> bool:
+        """Restore persisted working-memory fields for a session."""
+        if not isinstance(snapshot, dict):
+            return False
+
+        restored: dict[str, Any] = {}
+
+        last_intent = snapshot.get("last_intent")
+        if isinstance(last_intent, str) and last_intent:
+            restored["last_intent"] = last_intent
+
+        accumulated_entities = snapshot.get("accumulated_entities")
+        if isinstance(accumulated_entities, dict):
+            restored["accumulated_entities"] = accumulated_entities
+
+        turn_count = snapshot.get("turn_count")
+        if isinstance(turn_count, int):
+            restored["turn_count"] = max(turn_count, 0)
+
+        if not restored:
+            return False
+
+        self.update(session_id, restored)
+        return True
+
     def export_for_persistence(self, session_id: str) -> dict[str, Any]:
         """导出工作记忆，用于持久化到短期/长期记忆"""
         return {

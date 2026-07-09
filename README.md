@@ -118,7 +118,7 @@ graph.add_edge("compliance_check", "synthesize")
 | `accumulated_entities` | 每轮实体合并（新覆盖旧） | `knowledge_rag` / `ticket_handler` 实体补全 |
 | `turn_count` | 每轮递增 | 监控/调试 |
 
-请求结束时 `api/main.py` 调用 `export_for_persistence` 将工作记忆快照持久化到短期记忆。
+请求结束时 `api/main.py` 调用 `export_for_persistence` 将工作记忆快照持久化到短期记忆；服务重启后，`SupervisorNode` 会从最近的 `[wm_snapshot]` 恢复 `last_intent`、`accumulated_entities` 和 `turn_count`。
 
 ### RAG管线
 
