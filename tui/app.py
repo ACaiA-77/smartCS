@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import uuid
 from dataclasses import dataclass
 
@@ -51,9 +52,21 @@ def parse_input(raw_input: str) -> ParsedInput:
     return ParsedInput("message", text)
 
 
+def format_terminal_text(text: str) -> str:
+    """Convert common Markdown marks into readable plain terminal text."""
+    text = re.sub(r"\[\[([^\]]+)\]\]\(([^)]+)\)", r"\1 (\2)", text)
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", text)
+    text = re.sub(r"^\s{0,3}#{1,6}\s+", "", text, flags=re.MULTILINE)
+    text = text.replace("**", "")
+    text = text.replace("__", "")
+    text = text.replace("`", "")
+    return text
+
+
 def format_chat_result(result: ChatResult) -> str:
+    response = format_terminal_text(result.response)
     return (
-        f"\nAgent: {result.response}\n"
+        f"\nAgent: {response}\n"
         f"[intent={result.intent}; compliance_passed={result.compliance_passed}; "
         f"session_id={result.session_id}]"
     )
@@ -67,7 +80,7 @@ def format_history(history: dict) -> str:
     lines = [f"History for session {history.get('session_id', '')}:"]
     for item in messages:
         role = item.get("role", "unknown")
-        content = item.get("content", "")
+        content = format_terminal_text(item.get("content", ""))
         lines.append(f"- {role}: {content}")
     return "\n".join(lines)
 

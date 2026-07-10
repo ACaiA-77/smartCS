@@ -63,3 +63,43 @@ async def test_process_uses_intent_router_entity_for_query():
     out = await agent.process(state)
 
     assert ticket_id in out["sub_results"]["ticket_handler"]
+
+
+@pytest.mark.asyncio
+async def test_complaint_does_not_reuse_stale_order_id_from_working_memory():
+    store = TicketStore()
+    llm = MockLLM(
+        overrides={
+            "ticket_handler": {
+                "action": "create",
+                "ticket_type": "complaint",
+                "priority": "medium",
+                "summary": "service complaint",
+                "details": "user wants to complain about service",
+            },
+        }
+    )
+    agent = TicketHandlerAgent(llm, ticket_store=store)
+    state = {
+        "messages": [HumanMessage(content="我要投诉服务问题，请帮我创建工单")],
+        "user_id": "u1",
+        "sub_results": {
+            "intent_router": {
+                "primary": "complaint",
+                "secondary": "complaint",
+                "entities": {},
+                "confidence": 0.9,
+            },
+            "_wm_context": {
+                "last_intent": "ticket_handler",
+                "accumulated_entities": {"order_id": "ORD-20260401-001"},
+                "turn_count": 2,
+            },
+        },
+    }
+
+    out = await agent.process(state)
+
+    assert "ORD-20260401-001" not in out["sub_results"]["ticket_handler"]
+    assert len(store.query_by_user("u1")) == 1
+    assert store.query_by_user("u1")[0]["type"] == "complaint"

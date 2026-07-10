@@ -248,6 +248,16 @@ class TicketHandlerAgent:
                 return val
         return None
 
+    @staticmethod
+    def _should_backfill_entity(key: str, secondary: str, action: str) -> bool:
+        """Only reuse remembered business IDs when the current turn asks for them."""
+        normalized_key = key.lower()
+        if "order" in normalized_key or "璁㈠崟" in key:
+            return secondary == "order_query"
+        if "ticket" in normalized_key or "宸ュ崟" in key:
+            return action == "query" or secondary in {"ticket_query", "ticket_status"}
+        return action == "query"
+
     @trace_agent_call("ticket_handler_process")
     async def process(self, state: dict[str, Any]) -> dict[str, Any]:
         """作为Graph节点处理状态"""
@@ -259,24 +269,27 @@ class TicketHandlerAgent:
 
         last_message = messages[-1].content
         intent_info = state.get("sub_results", {}).get("intent_router", {})
-        entities = intent_info.get("entities", {}) or {}
+        entities = dict(intent_info.get("entities", {}) or {})
+        ticket_info = await self.analyze_request(last_message)
+        action = ticket_info.get("action", "create")
+        secondary = intent_info.get("secondary", "")
 
         # 从工作记忆累积实体中回退补全
         wm = state.get("sub_results", {}).get("_wm_context", {})
         accumulated = wm.get("accumulated_entities", {}) or {}
         for key, val in accumulated.items():
-            if key not in entities or not entities[key]:
+            if (
+                (key not in entities or not entities[key])
+                and self._should_backfill_entity(key, secondary, action)
+            ):
                 entities[key] = val
 
         entity_id = self._extract_entity_id(entities)
 
-        ticket_info = await self.analyze_request(last_message)
         if entity_id:
             ticket_info.setdefault("ticket_id", entity_id)
 
-        action = ticket_info.get("action", "create")
         query_id = ticket_info.get("ticket_id") or entity_id
-        secondary = intent_info.get("secondary", "")
 
         if secondary == "order_query" or (entity_id and entity_id.startswith("ORD")):
             result = await self.query_order(entity_id or query_id or "", user_id)
