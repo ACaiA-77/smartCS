@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tui.app import build_arg_parser, format_chat_result, make_session_id, parse_input
+from tui.app import build_arg_parser, format_chat_result, format_terminal_text, make_session_id, parse_input
 from tui.client import ChatResult
 
 
@@ -47,3 +47,19 @@ def test_format_chat_result_includes_answer_and_debug_fields():
     assert "intent=knowledge_rag" in formatted
     assert "compliance_passed=True" in formatted
     assert "session_id=tui_12345678" in formatted
+
+
+def test_format_terminal_text_converts_markdown_for_plain_terminal():
+    text = (
+        "Use **[[My Support]](https://mysupport.apple.com/)** website.\n"
+        "Open **Apple Support App**.\n"
+        "**Source**: apple_support.md"
+    )
+
+    formatted = format_terminal_text(text)
+
+    assert "My Support (https://mysupport.apple.com/)" in formatted
+    assert "Apple Support App" in formatted
+    assert "Source: apple_support.md" in formatted
+    assert "**" not in formatted
+    assert "](" not in formatted
