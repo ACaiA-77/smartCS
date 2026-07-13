@@ -47,6 +47,21 @@ python -m api.main
 
 服务启动后访问 http://localhost:8000/docs 查看 Swagger UI。
 
+### API 安全与就绪配置
+
+服务默认只允许本机常见前端来源，不接受 `CORS_ALLOWED_ORIGINS=*`。生产环境必须显式填写可信域名，并在依赖准备完成后启用强制就绪检查：
+
+```env
+CORS_ALLOWED_ORIGINS=https://support.example.com
+CORS_ALLOW_CREDENTIALS=false
+APP_REQUIRE_REDIS=true
+APP_REQUIRE_RAG_INDEX=true
+RAG_MIN_SCORE=0.35
+RELOAD=false
+```
+
+`/health` 是容器存活探针；`/ready` 是接流探针。当被标记为必需的 Redis 或 RAG 索引不可用时，`/ready` 返回 HTTP 503。`RAG_MIN_SCORE` 需要根据离线检索评测校准，示例值不能直接视为生产最优值。
+
 ## 项目结构
 
 ```
@@ -120,9 +135,47 @@ graph.add_edge("compliance_check", "synthesize")
 
 请求结束时 `api/main.py` 调用 `export_for_persistence` 将工作记忆快照持久化到短期记忆。
 
+
+
+### Redis 可用性与低延迟实验
+
+Redis 不可用时，服务会在首次快速失败后进入内存 fallback 冷却窗口，避免每条消息的每次读写都重复等待 Redis 超时；这项保护不改变 RAG、工单或合规的回答质量。
+
+默认仍保持完整质量链路：Query 改写、LLM 重排和 LLM 合规复审均启用。只有在完成质量评估并明确接受取舍时，才应将某个开关设为 `false`。
+
+```env
+REDIS_UNAVAILABLE_RETRY_SECONDS=30
+RAG_QUERY_REWRITE_ENABLED=true
+RAG_LLM_RERANK_ENABLED=true
+COMPLIANCE_LLM_REVIEW_ENABLED=true
+```
+
+高风险 PII 与不安全承诺始终由规则引擎立即拦截，不依赖这些开关。
+
+### Apple 售后意图路由与离线评测
+
+意图路由使用受控 taxonomy：模型仅提供结构化候选，服务端根据二级意图和优先级（安全 > 办理 > 查询 > 咨询）确定最终 Agent。低置信度、候选差值过小或上下文不足时，会返回 Apple 售后澄清，而不是猜测业务。工作记忆对订单、设备、订阅等实体按确认轮次记录，并由 `INTENT_ENTITY_TTL_TURNS` 自动淘汰。
+
+```env
+INTENT_CONFIDENCE_THRESHOLD=0.70
+INTENT_CANDIDATE_MARGIN=0.15
+INTENT_CONTEXT_TURNS=3
+INTENT_ENTITY_TTL_TURNS=5
+INTENT_FORMAT_REPAIR_ENABLED=true
+INTENT_PROMPT_VERSION=apple-support-v1
+```
+
+离线 golden dataset 位于 `evaluation/intent_routing_cases.jsonl`（53 条，覆盖全部 16 个二级意图）。将规范化预测写成 JSONL 后执行：
+
+```powershell
+python -m scripts.evaluate_intent_routing --predictions .\evaluation\intent_routing_predictions.jsonl
+```
+
+脚本输出 accuracy、macro-F1、安全意图召回、澄清准确率与实体 exact-match，适合在调整 prompt、阈值或 taxonomy 后作为回归门禁。
+
 ### RAG管线
 
-完整5步RAG流程：Query改写 → 向量检索(Top-5) → LLM重排序(Top-3) → 上下文注入 → 生成回答。
+完整 RAG 流程：Apple 售后 query 增强 → 向量检索(Top-5) → 去重与 LLM 重排序(Top-3，异常时按检索分数降级) → 带来源上下文生成。低于 `RAG_MIN_SCORE` 的结果不会进入回答。
 
 ### RAG向量库配置
 
@@ -227,7 +280,7 @@ SentenceTransformerEmbeddingBackend 512 512 95
 
 1. **规则引擎**（<2ms）：敏感词匹配 + PII检测
 2. **LLM深度审查**（~600ms）：处理越权承诺、隐晦违规等规则无法覆盖的场景
-3. 高风险直接拦截不走LLM，LLM失败安全降级为通过
+3. 高风险规则命中直接拦截；LLM 审查不可用时保留规则引擎结论，不会覆盖已识别的 PII 或不安全承诺
 
 ### MCP工具
 
@@ -246,7 +299,8 @@ SentenceTransformerEmbeddingBackend 512 512 95
 | `/api/tools` | GET | MCP工具列表 |
 | `/api/tools/call` | POST | MCP工具调用 |
 | `/api/metrics` | GET | 系统指标 |
-| `/health` | GET | 健康检查 |
+| `/health` | GET | 存活检查（仅表示 HTTP 进程可响应） |
+| `/ready` | GET | 就绪检查（Graph、Redis、RAG 索引） |
 
 ## Terminal TUI
 
@@ -270,6 +324,23 @@ python -m tui.app
 python -m tui.app --base-url http://localhost:8000 --user-id user_001
 ```
 
+### 路由可观测性与多轮维修预约
+
+每次 TUI 回复末尾都会显示语义路由信息：
+
+```text
+[target=ticket_handler; secondary=repair_request;
+ response_mode=collect_ticket_details; needs_clarification=False;
+ compliance_passed=True; session_id=...]
+```
+
+- `target`：最终业务 Agent；例如 `ticket_handler`。
+- `secondary`：细分业务意图；例如 `repair_request`。
+- `response_mode`：`execution`、`collect_ticket_details`、`clarification` 或 `security_guidance`。
+- `needs_clarification`：是否为真正的业务澄清；普通澄清不会再进入合规审查链路。
+
+同一 session 中，若先咨询设备维修政策，再说“那我想预约维修”，系统会继承已识别的设备实体并进入工单流程；若缺少预约信息，工单 Agent 只会补问城市/地区、设备状态等预约字段，不会重新询问“订单还是维修”。
+
 TUI 内置命令：
 
 | 命令 | 说明 |
@@ -285,7 +356,7 @@ TUI 内置命令：
 ```bash
 curl -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
-  -d '{"user_id": "user_001", "message": "理财产品A的收益率是多少？"}'
+  -d '{"user_id": "user_001", "message": "iPhone 的电池健康度在哪里查看？"}'
 ```
 
 ## Docker

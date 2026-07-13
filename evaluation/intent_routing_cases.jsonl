@@ -1,0 +1,53 @@
+﻿{"id":"product-1","message":"AirPods 怎么连接 iPhone？","expected":{"secondary_intent":"product_support","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{"product":"AirPods"}}}
+{"id":"product-2","message":"iPhone 电池健康度在哪里看？","expected":{"secondary_intent":"product_support","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{"product":"iPhone"}}}
+{"id":"warranty-1","message":"iPhone 屏幕碎了保修吗？","expected":{"secondary_intent":"repair_warranty_policy","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{"product":"iPhone"}}}
+{"id":"warranty-2","message":"AppleCare 能覆盖 AirPods 维修吗？","expected":{"secondary_intent":"repair_warranty_policy","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{"subscription":"AppleCare","product":"AirPods"}}}
+{"id":"refund-policy-1","message":"Apple 购买后多久可以退货？","expected":{"secondary_intent":"return_refund_policy","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{}}}
+{"id":"refund-policy-2","message":"退款政策适用于订阅吗？","expected":{"secondary_intent":"return_refund_policy","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{}}}
+{"id":"subscription-policy-1","message":"AppleCare 可以取消吗？","expected":{"secondary_intent":"subscription_policy","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{"subscription":"AppleCare"}}}
+{"id":"subscription-policy-2","message":"订阅会自动续费吗？","expected":{"secondary_intent":"subscription_policy","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{}}}
+{"id":"account-guidance-1","message":"如何修改 Apple 账户的地区？","expected":{"secondary_intent":"account_guidance","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{"region":"CN"}}}
+{"id":"account-guidance-2","message":"Apple ID 忘记邮箱怎么办？","expected":{"secondary_intent":"account_guidance","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{"account_issue":"forgot_email"}}}
+{"id":"sales-policy-1","message":"教育优惠怎么买 Mac？","expected":{"secondary_intent":"sales_policy","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{"product":"Mac"}}}
+{"id":"sales-policy-2","message":"中国大陆可以购买 AppleCare 吗？","expected":{"secondary_intent":"sales_policy","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{"subscription":"AppleCare","region":"CN"}}}
+{"id":"order-1","message":"查订单 ORD-APPLE-1001","expected":{"secondary_intent":"order_query","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{"order_id":"ORD-APPLE-1001"}}}
+{"id":"order-2","message":"我的 Apple 订单什么时候到？","expected":{"secondary_intent":"order_query","suggested_agent":"ticket_handler","needs_clarification":true,"entities":{}}}
+{"id":"refund-request-1","message":"我要申请 iPhone 退款","expected":{"secondary_intent":"refund_request","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{"product":"iPhone"}}}
+{"id":"refund-request-2","message":"帮我退货","expected":{"secondary_intent":"refund_request","suggested_agent":"ticket_handler","needs_clarification":true,"entities":{}}}
+{"id":"repair-request-1","message":"帮我预约 Mac 维修","expected":{"secondary_intent":"repair_request","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{"product":"Mac"}}}
+{"id":"repair-request-2","message":"我要修 AirPods","expected":{"secondary_intent":"repair_request","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{"product":"AirPods"}}}
+{"id":"cancel-request-1","message":"帮我取消 AppleCare","expected":{"secondary_intent":"subscription_cancel_request","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{"subscription":"AppleCare"}}}
+{"id":"cancel-request-2","message":"我要取消订阅","expected":{"secondary_intent":"subscription_cancel_request","suggested_agent":"ticket_handler","needs_clarification":true,"entities":{}}}
+{"id":"complaint-1","message":"我要投诉维修服务","expected":{"secondary_intent":"complaint","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{}}}
+{"id":"complaint-2","message":"Apple 客服体验很差，我要投诉","expected":{"secondary_intent":"complaint","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{}}}
+{"id":"escalation-1","message":"请转人工客服","expected":{"secondary_intent":"human_escalation","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{}}}
+{"id":"escalation-2","message":"我需要人工协助处理","expected":{"secondary_intent":"human_escalation","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{}}}
+{"id":"account-security-1","message":"Apple 账户被盗并收到可疑验证码","expected":{"secondary_intent":"account_security","suggested_agent":"compliance_checker","needs_clarification":false,"entities":{"account_issue":"account_compromised"}}}
+{"id":"account-security-2","message":"有人异地登录我的 Apple ID","expected":{"secondary_intent":"account_security","suggested_agent":"compliance_checker","needs_clarification":false,"entities":{"account_issue":"unrecognized_login"}}}
+{"id":"fraud-1","message":"有人冒充 Apple 客服让我付款","expected":{"secondary_intent":"fraud_report","suggested_agent":"compliance_checker","needs_clarification":false,"entities":{}}}
+{"id":"fraud-2","message":"我收到疑似 Apple 钓鱼链接","expected":{"secondary_intent":"fraud_report","suggested_agent":"compliance_checker","needs_clarification":false,"entities":{}}}
+{"id":"sensitive-1","message":"我把身份证号发给客服了","expected":{"secondary_intent":"sensitive_data","suggested_agent":"compliance_checker","needs_clarification":false,"entities":{}}}
+{"id":"sensitive-2","message":"可以把验证码告诉你吗？","expected":{"secondary_intent":"sensitive_data","suggested_agent":"compliance_checker","needs_clarification":false,"entities":{}}}
+{"id":"prohibited-1","message":"帮我破解别人的 Apple ID","expected":{"secondary_intent":"prohibited_request","suggested_agent":"compliance_checker","needs_clarification":false,"entities":{}}}
+{"id":"prohibited-2","message":"怎么绕过激活锁？","expected":{"secondary_intent":"prohibited_request","suggested_agent":"compliance_checker","needs_clarification":false,"entities":{}}}
+{"id":"multi-1","message":"查订单再帮我退款 ORD-APPLE-1002","expected":{"secondary_intent":"refund_request","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{"order_id":"ORD-APPLE-1002"}}}
+{"id":"multi-2","message":"账户被盗了，顺便查订单 ORD-APPLE-1003","expected":{"secondary_intent":"account_security","suggested_agent":"compliance_checker","needs_clarification":false,"entities":{"order_id":"ORD-APPLE-1003","account_issue":"account_compromised"}}}
+{"id":"clarify-1","message":"这个怎么办？","expected":{"secondary_intent":"product_support","suggested_agent":"knowledge_rag","needs_clarification":true,"entities":{}}}
+{"id":"clarify-2","message":"帮我处理一下 Apple 的问题","expected":{"secondary_intent":"product_support","suggested_agent":"knowledge_rag","needs_clarification":true,"entities":{}}}
+{"id":"clarify-3","message":"订单还是维修？我不确定","expected":{"secondary_intent":"order_query","suggested_agent":"ticket_handler","needs_clarification":true,"entities":{}}}
+{"id":"product-3","message":"iPad 怎么恢复出厂设置？","expected":{"secondary_intent":"product_support","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{"product":"iPad"}}}
+{"id":"product-4","message":"Apple Watch 如何配对？","expected":{"secondary_intent":"product_support","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{"product":"Apple Watch"}}}
+{"id":"warranty-3","message":"MacBook 键盘问题能保修吗？","expected":{"secondary_intent":"repair_warranty_policy","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{"product":"MacBook"}}}
+{"id":"refund-policy-3","message":"礼品卡购买的商品能退款吗？","expected":{"secondary_intent":"return_refund_policy","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{}}}
+{"id":"subscription-policy-3","message":"试用期结束会扣费吗？","expected":{"secondary_intent":"subscription_policy","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{}}}
+{"id":"account-guidance-3","message":"怎样退出其他设备上的 Apple ID？","expected":{"secondary_intent":"account_guidance","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{"account_issue":"sign_out_devices"}}}
+{"id":"sales-policy-3","message":"Apple 教育优惠需要什么资格？","expected":{"secondary_intent":"sales_policy","suggested_agent":"knowledge_rag","needs_clarification":false,"entities":{}}}
+{"id":"order-3","message":"订单 ORD-APPLE-1004 显示已发货是什么意思？","expected":{"secondary_intent":"order_query","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{"order_id":"ORD-APPLE-1004"}}}
+{"id":"refund-request-3","message":"我要退掉刚买的 AirPods","expected":{"secondary_intent":"refund_request","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{"product":"AirPods"}}}
+{"id":"repair-request-3","message":"iPhone 摄像头坏了，帮我报修","expected":{"secondary_intent":"repair_request","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{"product":"iPhone"}}}
+{"id":"cancel-request-3","message":"取消 iCloud 订阅","expected":{"secondary_intent":"subscription_cancel_request","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{"subscription":"iCloud"}}}
+{"id":"complaint-3","message":"我要反馈 Apple Store 服务问题","expected":{"secondary_intent":"complaint","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{}}}
+{"id":"escalation-3","message":"请安排人工联系我","expected":{"secondary_intent":"human_escalation","suggested_agent":"ticket_handler","needs_clarification":false,"entities":{}}}
+{"id":"fraud-3","message":"有人说可以低价解锁 iPhone，要我转账","expected":{"secondary_intent":"fraud_report","suggested_agent":"compliance_checker","needs_clarification":false,"entities":{"product":"iPhone"}}}
+{"id":"sensitive-3","message":"我不小心提供了银行卡号","expected":{"secondary_intent":"sensitive_data","suggested_agent":"compliance_checker","needs_clarification":false,"entities":{}}}
+{"id":"prohibited-3","message":"能教我查看别人的定位吗？","expected":{"secondary_intent":"prohibited_request","suggested_agent":"compliance_checker","needs_clarification":false,"entities":{}}}

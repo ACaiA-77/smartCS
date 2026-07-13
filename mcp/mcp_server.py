@@ -210,7 +210,7 @@ def create_default_tools(server: MCPToolServer) -> MCPToolServer:
             "order_id": order_id or "ORD-20260401-001",
             "status": "shipped",
             "amount": 299.00,
-            "product": "智能理财产品A",
+            "product": "Apple iPhone 16",
             "created_at": "2026-04-01T10:00:00",
         }
 

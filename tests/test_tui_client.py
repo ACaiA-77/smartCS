@@ -20,7 +20,10 @@ def test_chat_posts_expected_payload_and_returns_response_fields():
             json={
                 "response": "你好，我是 SmartCS。",
                 "session_id": "tui_12345678",
-                "intent": "knowledge_rag",
+                "intent": "ticket_handler",
+                "secondary_intent": "repair_request",
+                "response_mode": "collect_ticket_details",
+                "needs_clarification": False,
                 "compliance_passed": True,
             },
         )
@@ -41,7 +44,10 @@ def test_chat_posts_expected_payload_and_returns_response_fields():
         "session_id": "tui_12345678",
     }
     assert result.response == "你好，我是 SmartCS。"
-    assert result.intent == "knowledge_rag"
+    assert result.intent == "ticket_handler"
+    assert result.secondary_intent == "repair_request"
+    assert result.response_mode == "collect_ticket_details"
+    assert result.needs_clarification is False
     assert result.compliance_passed is True
     assert result.session_id == "tui_12345678"
 

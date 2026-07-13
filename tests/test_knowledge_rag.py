@@ -1,4 +1,4 @@
-"""KnowledgeRAGAgent 二级意图改写测试。"""
+﻿"""KnowledgeRAGAgent Apple taxonomy tests."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from tests.conftest import MockLLM
 
 
 class RecordingLLM(MockLLM):
-    """记录 Query 改写时的 human 输入。"""
+    """Records query-rewrite user input."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -20,40 +20,32 @@ class RecordingLLM(MockLLM):
     async def ainvoke(self, messages):
         system, human = "", ""
         from langchain_core.messages import HumanMessage, SystemMessage
-        for m in messages:
-            if isinstance(m, SystemMessage):
-                system += m.content
-            elif isinstance(m, HumanMessage):
-                human += m.content
+
+        for message in messages:
+            if isinstance(message, SystemMessage):
+                system += message.content
+            elif isinstance(message, HumanMessage):
+                human += message.content
         if "改写为更适合向量检索" in human:
             self.rewrite_inputs.append(human)
         return await super().ainvoke(messages)
 
 
 @pytest.mark.asyncio
-async def test_process_uses_product_entity_in_rewrite():
-    llm = RecordingLLM(
-        overrides={
-            "intent_router": {
-                "primary_intent": "consultation",
-                "secondary_intent": "product_inquiry",
-                "confidence": 0.95,
-                "entities": {"product": "理财产品A"},
-                "suggested_agent": "knowledge_rag",
-            }
-        }
-    )
+async def test_process_uses_apple_product_support_entity_in_rewrite():
+    llm = RecordingLLM()
     agent = KnowledgeRAGAgent(llm, LongTermMemory())
     state = {
-        "messages": [HumanMessage(content="收益怎么样？")],
+        "messages": [HumanMessage(content="怎么更换电池？")],
         "sub_results": {
             "intent_router": {
-                "secondary": "product_inquiry",
-                "entities": {"product": "理财产品A"},
+                "secondary": "product_support",
+                "entities": {"product": "iPhone"},
             }
         },
     }
+
     await agent.process(state)
 
     assert llm.rewrite_inputs
-    assert "理财产品A" in llm.rewrite_inputs[0]
+    assert "iPhone" in llm.rewrite_inputs[0]

@@ -54,8 +54,9 @@ def parse_input(raw_input: str) -> ParsedInput:
 def format_chat_result(result: ChatResult) -> str:
     return (
         f"\nAgent: {result.response}\n"
-        f"[intent={result.intent}; compliance_passed={result.compliance_passed}; "
-        f"session_id={result.session_id}]"
+        f"[target={result.intent}; secondary={result.secondary_intent}; "
+        f"response_mode={result.response_mode}; needs_clarification={result.needs_clarification}; "
+        f"compliance_passed={result.compliance_passed}; session_id={result.session_id}]"
     )
 
 

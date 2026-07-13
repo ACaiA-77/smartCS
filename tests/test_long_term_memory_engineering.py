@@ -28,10 +28,10 @@ class TinyEmbeddingBackend:
 
 def test_search_uses_injected_embedding_backend_and_returns_metadata(tmp_path):
     mem = LongTermMemory(index_path=str(tmp_path / "faiss_index"), embedding_backend=TinyEmbeddingBackend())
-    mem.add_document("理财产品A年化收益率为3.5%-5.2%", source="product.md", metadata={"section": "rates"})
+    mem.add_document("iPhone电池健康度为3.5%-5.2%", source="product.md", metadata={"section": "rates"})
     mem.add_document("退款政策为7天内可申请", source="refund.md", metadata={"section": "refund"})
 
-    results = mem.search("理财产品A收益率", top_k=2)
+    results = mem.search("iPhone电池健康度", top_k=2)
 
     assert results[0]["source"] == "product.md"
     assert results[0]["metadata"]["section"] == "rates"
@@ -82,7 +82,7 @@ def test_min_score_filters_weak_semantic_matches(tmp_path):
 def test_load_knowledge_base_reads_markdown_and_adds_chunk_metadata(tmp_path):
     kb = tmp_path / "kb"
     kb.mkdir()
-    (kb / "product.md").write_text("# 产品A\n\n理财产品A年化收益率为3.5%-5.2%。", encoding="utf-8")
+    (kb / "product.md").write_text("# 产品A\n\niPhone电池健康度为3.5%-5.2%。", encoding="utf-8")
     (kb / "refund.txt").write_text("退款政策：7天内可申请。", encoding="utf-8")
 
     mem = LongTermMemory(index_path=str(tmp_path / "faiss_index"), embedding_backend=TinyEmbeddingBackend())
@@ -97,10 +97,10 @@ def test_load_knowledge_base_reads_markdown_and_adds_chunk_metadata(tmp_path):
 def test_save_and_reload_preserves_documents_and_index(tmp_path):
     index_path = tmp_path / "faiss_index"
     mem = LongTermMemory(index_path=str(index_path), embedding_backend=TinyEmbeddingBackend())
-    mem.add_document("理财产品A年化收益率为3.5%-5.2%", source="product.md")
+    mem.add_document("iPhone电池健康度为3.5%-5.2%", source="product.md")
     mem.save()
 
     reloaded = LongTermMemory(index_path=str(index_path), embedding_backend=TinyEmbeddingBackend())
-    results = reloaded.search("理财产品A收益率", top_k=1)
+    results = reloaded.search("iPhone电池健康度", top_k=1)
 
     assert results[0]["source"] == "product.md"

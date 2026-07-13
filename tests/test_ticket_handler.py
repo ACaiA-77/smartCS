@@ -34,7 +34,7 @@ async def test_process_uses_intent_router_entity_for_query():
     llm = MockLLM(
         overrides={
             "intent_router": {
-                "primary_intent": "transaction",
+                "primary_intent": "action",
                 "secondary_intent": "order_query",
                 "confidence": 0.9,
                 "entities": {"order_id": ticket_id},

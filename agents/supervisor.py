@@ -41,7 +41,65 @@ class AgentState(TypedDict):
     current_agent: str
     retry_count: int
     needs_clarification: bool
+    response_mode: str
 
+
+
+_POLICY_OR_APPLICATION_SECONDARIES = {
+    "return_refund_policy",
+    "subscription_policy",
+    "refund_request",
+    "subscription_cancel_request",
+}
+_ORDER_OR_REPAIR_SECONDARIES = {
+    "order_query",
+    "repair_warranty_policy",
+    "repair_request",
+}
+_ACCOUNT_SECONDARIES = {"account_guidance", "account_security", "fraud_report", "sensitive_data"}
+_SECURITY_GUIDANCE = {
+    "account_security": (
+        "为保护您的 Apple 账户安全，请不要提供验证码、密码或受信任设备验证码。"
+        "请尽快访问 iforgot.apple.com 重设密码，并检查账户中的受信任设备和登录记录。"
+    ),
+    "fraud_report": (
+        "请立即停止与可疑人员互动，不要付款、不要提供验证码或账户信息，并保留聊天记录和付款凭证。"
+        "请通过 Apple 官方支持渠道核实或报告该情况。"
+    ),
+    "sensitive_data": (
+        "请不要继续发送身份证件、银行卡、密码或验证码等敏感信息。"
+        "如已发送，请删除可撤回的信息，并通过 Apple 官方支持渠道获取后续帮助。"
+    ),
+    "prohibited_request": (
+        "我无法协助获取、破解或绕过他人的 Apple 账户和设备安全措施。"
+        "如您需要找回自己的账户，请使用 Apple 官方账户恢复流程。"
+    ),
+}
+
+
+def build_clarification_message(intent_info: dict[str, Any]) -> str:
+    """Return deterministic Apple-support clarification without legacy financial wording."""
+    secondary_values = {str(intent_info.get("secondary", ""))}
+    secondary_values.update(
+        str(candidate.get("secondary_intent", ""))
+        for candidate in intent_info.get("candidates", [])
+        if isinstance(candidate, dict)
+    )
+    if secondary_values & _POLICY_OR_APPLICATION_SECONDARIES:
+        return "您想了解 Apple 售后政策，还是希望我协助发起退款、退货或取消订阅申请？请说明具体产品和需求。"
+    if secondary_values & _ORDER_OR_REPAIR_SECONDARIES:
+        return "请告诉我是要查询 Apple 订单，还是需要维修设备；如有订单号或工单号，也可以一并提供。"
+    if secondary_values & _ACCOUNT_SECONDARIES:
+        return "请说明这是 Apple 账户使用问题，还是账户安全异常；请不要发送密码、验证码或其他敏感信息。"
+    return "我还不确定您的具体 Apple 售后需求。请补充说明是产品使用或维修、订单/退款，还是 Apple 账户相关情况。"
+
+
+def build_security_guidance(secondary_intent: str) -> str:
+    """Return safe, non-transactional guidance for security-related intents."""
+    return _SECURITY_GUIDANCE.get(
+        secondary_intent,
+        "为保护您的 Apple 账户和隐私，请不要提供密码、验证码或敏感信息，并通过 Apple 官方支持渠道获取帮助。",
+    )
 
 # ─── Supervisor节点 ───
 
@@ -84,6 +142,15 @@ class SupervisorNode:
                     "turn_count": ctx.get("turn_count", 0),
                 },
             },
+        }
+
+    @staticmethod
+    def present_clarification(state: AgentState) -> AgentState:
+        """Mark a deterministic business clarification without invoking compliance review."""
+        return {
+            **state,
+            "current_agent": "clarification",
+            "response_mode": "clarification",
         }
 
     async def _create_escalation_ticket(self, state: AgentState) -> str:
@@ -154,9 +221,9 @@ def route_to_agent(state: AgentState) -> str:
 
 
 def route_after_intent(state: AgentState) -> str:
-    """intent_router 完成后：低置信度跳过 sub-agent 仍走合规，否则按 intent 分发"""
+    """Dispatch a routine clarification directly; only security intents enter compliance."""
     if state.get("needs_clarification"):
-        return "compliance_check"
+        return "clarification"
     return route_to_agent(state)
 
 
@@ -169,6 +236,15 @@ def create_supervisor_graph(
     long_term_memory: LongTermMemory | None = None,
     mcp_server: MCPToolServer | None = None,
     enable_checkpointing: bool = True,
+    intent_confidence_threshold: float = 0.70,
+    intent_candidate_margin: float = 0.15,
+    intent_context_turns: int = 3,
+    intent_entity_ttl_turns: int = 5,
+    intent_format_repair_enabled: bool = True,
+    intent_prompt_version: str = "apple-support-v1",
+    rag_query_rewrite_enabled: bool = True,
+    rag_llm_rerank_enabled: bool = True,
+    compliance_llm_review_enabled: bool = True,
 ) -> StateGraph:
     """
     构建Supervisor编排的多Agent StateGraph。
@@ -182,10 +258,22 @@ def create_supervisor_graph(
         working_memory = WorkingMemory()
 
     supervisor = SupervisorNode(llm, working_memory, short_term_memory, mcp_server)
-    intent_router = IntentRouterAgent(llm)
-    knowledge_agent = KnowledgeRAGAgent(llm, long_term_memory)
+    intent_router = IntentRouterAgent(
+        llm,
+        confidence_threshold=intent_confidence_threshold,
+        candidate_margin=intent_candidate_margin,
+        enable_format_repair=intent_format_repair_enabled,
+        context_turns=intent_context_turns,
+        prompt_version=intent_prompt_version,
+    )
+    knowledge_agent = KnowledgeRAGAgent(
+        llm,
+        long_term_memory,
+        enable_query_rewrite=rag_query_rewrite_enabled,
+        enable_llm_rerank=rag_llm_rerank_enabled,
+    )
     ticket_agent = TicketHandlerAgent(llm, mcp_server=mcp_server)
-    compliance_agent = ComplianceCheckerAgent(llm)
+    compliance_agent = ComplianceCheckerAgent(llm, enable_llm_review=compliance_llm_review_enabled)
 
     async def intent_router_node(state: AgentState) -> AgentState:
         updated = await intent_router.process(state)
@@ -195,11 +283,15 @@ def create_supervisor_graph(
         ir = updated.get("sub_results", {}).get("intent_router", {})
         new_entities = ir.get("entities", {}) or {}
 
-        # 读取已有工作记忆，合并实体
+        # 读取已有工作记忆，合并本轮实体并按确认轮次淘汰过期值。
         wm_ctx = supervisor.working_memory.get_context(session_id)
-        accumulated = dict(wm_ctx.get("accumulated_entities", {}))
-        accumulated.update(new_entities)
-        new_turn = wm_ctx.get("turn_count", 0) + 1
+        new_turn = int(wm_ctx.get("turn_count", 0)) + 1
+        supervisor.working_memory.merge_entities(session_id, new_entities, confirmed_turn=new_turn)
+        accumulated = supervisor.working_memory.get_active_entities(
+            session_id,
+            ttl_turns=intent_entity_ttl_turns,
+            current_turn=new_turn,
+        )
 
         supervisor.working_memory.update(session_id, {
             "last_intent": intent,
@@ -215,18 +307,18 @@ def create_supervisor_graph(
             "turn_count": new_turn,
         }
 
-        confidence = ir.get("confidence", 1.0)
-        if confidence < 0.7:
+        if updated.get("needs_clarification", False):
             return {
                 **updated,
                 "sub_results": updated_sub,
                 "needs_clarification": True,
-                "final_response": (
-                    "抱歉，我还不太确定您的具体需求。"
-                    "您是想咨询产品信息、查询订单，还是办理退款/开户？"
-                    "请补充说明，我来帮您处理。"
-                ),
+                "response_mode": "clarification",
+                "final_response": build_clarification_message(ir),
             }
+
+        secondary = str(ir.get("secondary", ""))
+        if intent == "compliance_checker":
+            updated_sub["security_guidance"] = build_security_guidance(secondary)
         return {**updated, "sub_results": updated_sub, "needs_clarification": False}
 
     graph = StateGraph(AgentState)
@@ -236,6 +328,7 @@ def create_supervisor_graph(
     graph.add_node("knowledge_rag", knowledge_agent.process)
     graph.add_node("ticket_handler", ticket_agent.process)
     graph.add_node("compliance_check", compliance_agent.process)
+    graph.add_node("clarification", supervisor.present_clarification)
     graph.add_node("synthesize", supervisor.synthesize_response)
 
     graph.set_entry_point("supervisor_route")
@@ -248,9 +341,11 @@ def create_supervisor_graph(
             "knowledge_rag": "knowledge_rag",
             "ticket_handler": "ticket_handler",
             "compliance_check": "compliance_check",
+            "clarification": "clarification",
         },
     )
 
+    graph.add_edge("clarification", "synthesize")
     graph.add_edge("knowledge_rag", "compliance_check")
     graph.add_edge("ticket_handler", "compliance_check")
     graph.add_edge("compliance_check", "synthesize")

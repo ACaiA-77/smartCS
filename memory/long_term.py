@@ -185,6 +185,23 @@ class LongTermMemory:
     def documents(self) -> list[dict[str, Any]]:
         return list(self._documents)
 
+    def health_status(self) -> dict[str, Any]:
+        """Return index readiness and metadata consistency details."""
+        metadata_path = self.index_path.with_suffix(".meta.json")
+        vector_count = int(self._index.ntotal) if self._index is not None else 0
+        document_count = len(self._documents)
+        index_present = self.index_path.exists()
+        metadata_present = metadata_path.exists()
+        consistent = vector_count == document_count if self._index is not None else metadata_present
+        return {
+            "ready": index_present and metadata_present and consistent and document_count > 0,
+            "index_present": index_present,
+            "metadata_present": metadata_present,
+            "consistent": consistent,
+            "document_count": document_count,
+            "vector_count": vector_count,
+        }
+
     def _init_index(self) -> None:
         if faiss is None:
             self._index = None

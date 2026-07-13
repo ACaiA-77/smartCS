@@ -16,6 +16,9 @@ class ChatResult:
     session_id: str
     intent: str
     compliance_passed: bool
+    secondary_intent: str = "unknown"
+    response_mode: str = "execution"
+    needs_clarification: bool = False
 
 
 class AgentApiClient:
@@ -47,6 +50,9 @@ class AgentApiClient:
             session_id=str(data.get("session_id", session_id)),
             intent=str(data.get("intent", "")),
             compliance_passed=bool(data.get("compliance_passed", False)),
+            secondary_intent=str(data.get("secondary_intent", "unknown")),
+            response_mode=str(data.get("response_mode", "execution")),
+            needs_clarification=bool(data.get("needs_clarification", False)),
         )
 
     def history(self, session_id: str) -> dict[str, Any]:

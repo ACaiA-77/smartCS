@@ -29,7 +29,7 @@ async def test_route_decision_injects_wm_context(mock_llm, working_memory, base_
 async def test_intent_router_node_accumulates_entities(mock_llm, working_memory, base_state):
     """intent_router_node 应将本轮实体合并到工作记忆的 accumulated_entities。"""
     working_memory.update("test-session", {
-        "accumulated_entities": {"product": "理财产品A"},
+        "accumulated_entities": {"product": "iPhone"},
         "turn_count": 1,
     })
 
@@ -70,12 +70,12 @@ async def test_knowledge_rag_uses_accumulated_entities(working_memory, base_stat
         overrides={
             "intent_router": {
                 "primary_intent": "consultation",
-                "secondary_intent": "product_inquiry",
+                "secondary_intent": "product_support",
                 "confidence": 0.95,
                 "entities": {},
                 "suggested_agent": "knowledge_rag",
             },
-            "rag_answer": "理财产品A年化约3.5%-5.2%。",
+            "rag_answer": "iPhone 电池健康度信息。",
         }
     )
     graph = create_supervisor_graph(
@@ -86,11 +86,11 @@ async def test_knowledge_rag_uses_accumulated_entities(working_memory, base_stat
     )
 
     working_memory.update("test-session", {
-        "accumulated_entities": {"product": "理财产品A"},
+        "accumulated_entities": {"product": "iPhone"},
         "turn_count": 2,
     })
 
-    base_state["messages"] = [HumanMessage(content="收益率多少？")]
+    base_state["messages"] = [HumanMessage(content="电池健康度多少？")]
     result = await graph.ainvoke(base_state)
 
     assert "knowledge_rag" in result["sub_results"]
@@ -103,7 +103,7 @@ async def test_ticket_handler_uses_accumulated_entities(working_memory):
     llm = MockLLM(
         overrides={
             "intent_router": {
-                "primary_intent": "transaction",
+                "primary_intent": "action",
                 "secondary_intent": "order_query",
                 "confidence": 0.9,
                 "entities": {},
@@ -146,13 +146,13 @@ async def test_export_for_persistence_exports_context():
     wm = WorkingMemory()
     wm.update("persist-test", {
         "last_intent": "knowledge_rag",
-        "accumulated_entities": {"product": "理财产品A"},
+        "accumulated_entities": {"product": "iPhone"},
         "turn_count": 1,
     })
 
     exported = wm.export_for_persistence("persist-test")
     assert exported["context"]["last_intent"] == "knowledge_rag"
-    assert exported["context"]["accumulated_entities"]["product"] == "理财产品A"
+    assert exported["context"]["accumulated_entities"]["product"] == "iPhone"
 
 
 @pytest.mark.asyncio
@@ -166,13 +166,13 @@ async def test_synthesize_excludes_wm_context_from_output(working_memory):
         "sub_results": {
             "intent_router": {"primary": "consultation", "confidence": 0.9},
             "_wm_context": {"last_intent": "knowledge_rag", "accumulated_entities": {"product": "A"}},
-            "knowledge_rag": "理财产品A年化约3.5%-5.2%。",
+            "knowledge_rag": "iPhone 电池健康度信息。",
         },
     }
     out = await supervisor.synthesize_response(state)
     assert "last_intent" not in out["final_response"]
     assert "accumulated_entities" not in out["final_response"]
-    assert "理财产品" in out["final_response"]
+    assert "iPhone" in out["final_response"]
 
 
 @pytest.mark.asyncio
@@ -183,12 +183,12 @@ async def test_multi_turn_entity_accumulation_e2e(working_memory, seeded_long_te
         overrides={
             "intent_router": {
                 "primary_intent": "consultation",
-                "secondary_intent": "product_inquiry",
+                "secondary_intent": "product_support",
                 "confidence": 0.95,
-                "entities": {"product": "理财产品A"},
+                "entities": {"product": "iPhone"},
                 "suggested_agent": "knowledge_rag",
             },
-            "rag_answer": "理财产品A年化约3.5%-5.2%。",
+            "rag_answer": "iPhone 电池健康度信息。",
         }
     )
     graph1 = create_supervisor_graph(
@@ -198,7 +198,7 @@ async def test_multi_turn_entity_accumulation_e2e(working_memory, seeded_long_te
         enable_checkpointing=False,
     )
     state1 = {
-        "messages": [HumanMessage(content="理财产品A收益多少？")],
+        "messages": [HumanMessage(content="iPhone电池怎么样？")],
         "user_id": "u1",
         "session_id": "e2e-session",
         "intent": "",
@@ -214,7 +214,7 @@ async def test_multi_turn_entity_accumulation_e2e(working_memory, seeded_long_te
 
     # 验证工作记忆已累积实体
     ctx = working_memory.get_context("e2e-session")
-    assert ctx.get("accumulated_entities", {}).get("product") == "理财产品A"
+    assert ctx.get("accumulated_entities", {}).get("product") == "iPhone"
     assert ctx.get("turn_count") == 1
     assert ctx.get("last_intent") == "knowledge_rag"
 
@@ -223,12 +223,12 @@ async def test_multi_turn_entity_accumulation_e2e(working_memory, seeded_long_te
         overrides={
             "intent_router": {
                 "primary_intent": "consultation",
-                "secondary_intent": "rate_inquiry",
+                "secondary_intent": "subscription_policy",
                 "confidence": 0.9,
                 "entities": {},
                 "suggested_agent": "knowledge_rag",
             },
-            "rag_answer": "理财产品A最新利率信息。",
+            "rag_answer": "iPhone最新订阅政策信息。",
         }
     )
     graph2 = create_supervisor_graph(
@@ -238,7 +238,7 @@ async def test_multi_turn_entity_accumulation_e2e(working_memory, seeded_long_te
         enable_checkpointing=False,
     )
     state2 = {
-        "messages": [HumanMessage(content="最新利率是多少？")],
+        "messages": [HumanMessage(content="最新订阅政策是多少？")],
         "user_id": "u1",
         "session_id": "e2e-session",
         "intent": "",
