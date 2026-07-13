@@ -1,11 +1,4 @@
-"""
-合规审查Agent — 金融/电商场景合规检查
-负责对所有Agent的回复进行合规审查，包括：
-- 敏感词检测
-- PII（个人身份信息）保护
-- 金融合规用语检查
-- 越权承诺检测
-"""
+"""Apple support policy, privacy, and safety checker."""
 
 from __future__ import annotations
 
@@ -21,199 +14,163 @@ from tracing.otel_config import trace_agent_call
 
 @dataclass
 class ComplianceResult:
-    """合规审查结果"""
     passed: bool
-    risk_level: str  # low, medium, high, critical
+    risk_level: str
     violations: list[str] = field(default_factory=list)
     suggestions: list[str] = field(default_factory=list)
     sanitized_content: str = ""
 
 
 SENSITIVE_PATTERNS = {
-    "phone": r"1[3-9]\d{9}",
-    "id_card": r"\d{17}[\dXx]",
-    "bank_card": r"\d{16,19}",
+    "phone": r"(?<!\d)1[3-9]\d{9}(?!\d)",
+    "id_card": r"(?<!\d)\d{17}[\dXx](?!\d)",
+    "bank_card": r"(?<!\d)\d{16,19}(?!\d)",
     "email": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
 }
-
 FORBIDDEN_TERMS = [
-    "保证收益", "稳赚不赔", "零风险", "保本保息",
-    "最高收益", "预期收益率", "承诺回报",
-    "内部消息", "内幕", "暗箱操作",
+    "保证退款",
+    "立即全额退款",
+    "永久免费维修",
+    "绕过激活锁",
+    "破解 Apple ID",
+    "获取他人账户",
 ]
 
-COMPLIANCE_SYSTEM_PROMPT = """你是一个金融合规审查Agent，负责审查客服回复内容的合规性。
+COMPLIANCE_SYSTEM_PROMPT = """你是 Apple 售后客服的安全与隐私审查 Agent。
 
-审查维度：
-1. 是否包含违规金融用语（如"保证收益"、"零风险"等）
-2. 是否泄露用户PII信息（手机号、身份证号、银行卡号）
-3. 是否存在越权承诺（如擅自承诺退款/赔偿金额）
-4. 是否符合金融监管要求（风险提示、免责声明）
-5. 是否包含歧视性、侮辱性内容
+检查客服回复是否：
+1. 泄露或要求密码、验证码、身份证件、银行卡或其他个人信息；
+2. 承诺未经授权的退款、维修结果、账户冻结或处理时效；
+3. 协助绕过设备、账户或激活锁安全机制；
+4. 包含歧视性、侮辱性或不安全指导。
 
-请以JSON格式返回审查结果：
-{
-    "passed": true/false,
-    "risk_level": "low|medium|high|critical",
-    "violations": ["违规项描述"],
-    "suggestions": ["修改建议"]
-}
+只返回 JSON：
+{"passed": true/false, "risk_level": "low|medium|high|critical", "violations": [], "suggestions": []}
 """
 
 
 class ComplianceCheckerAgent:
-    """合规审查Agent"""
+    """Runs deterministic PII/policy checks before an optional LLM review."""
 
-    def __init__(self, llm: ChatOpenAI):
+    def __init__(self, llm: ChatOpenAI, enable_llm_review: bool = True):
         self.llm = llm
+        self.enable_llm_review = enable_llm_review
+        self.decision_audit: list[dict[str, Any]] = []
 
     def _rule_based_check(self, content: str) -> list[str]:
-        """基于规则的快速检查（不依赖LLM，低延迟）"""
         violations = []
-
         for term in FORBIDDEN_TERMS:
             if term in content:
-                violations.append(f"包含违规金融用语: '{term}'")
-
+                violations.append(f"检测到不安全承诺或请求: '{term}'")
         for pii_type, pattern in SENSITIVE_PATTERNS.items():
             if re.search(pattern, content):
-                label = {
-                    "phone": "手机号", "id_card": "身份证号",
-                    "bank_card": "银行卡号", "email": "邮箱地址",
-                }.get(pii_type, pii_type)
-                violations.append(f"检测到PII信息泄露: {label}")
-
+                label = {"phone": "手机号", "id_card": "身份证号", "bank_card": "银行卡号", "email": "邮箱地址"}[pii_type]
+                violations.append(f"检测到 PII 信息: {label}")
         return violations
 
     def _mask_pii(self, content: str) -> str:
-        """对PII信息进行脱敏处理"""
+        def mask_match(match: re.Match[str]) -> str:
+            text = match.group()
+            prefix = min(2, max(1, len(text) // 3))
+            suffix = min(2, max(1, (len(text) - prefix) // 3))
+            mask_length = max(1, len(text) - prefix - suffix)
+            return text[:prefix] + "*" * mask_length + text[-suffix:]
+
         masked = content
-        for pii_type, pattern in SENSITIVE_PATTERNS.items():
-            def _mask_match(match):
-                text = match.group()
-                if len(text) <= 4:
-                    return "****"
-                return text[:3] + "*" * (len(text) - 6) + text[-3:]
-            masked = re.sub(pattern, _mask_match, masked)
+        for pattern in SENSITIVE_PATTERNS.values():
+            masked = re.sub(pattern, mask_match, masked)
         return masked
+
+    def _record_audit(self, result: ComplianceResult) -> None:
+        self.decision_audit.append(
+            {
+                "passed": result.passed,
+                "risk_level": result.risk_level,
+                "violation_count": len(result.violations),
+                "violation_types": [violation.split(":", 1)[0] for violation in result.violations],
+            }
+        )
+        del self.decision_audit[:-100]
 
     @trace_agent_call("compliance_rule_check")
     async def rule_check(self, content: str) -> ComplianceResult:
-        """规则引擎快速检查"""
         violations = self._rule_based_check(content)
         sanitized = self._mask_pii(content)
-
         if not violations:
-            return ComplianceResult(
-                passed=True,
-                risk_level="low",
-                sanitized_content=sanitized,
-            )
-
-        has_pii = any("PII" in v for v in violations)
-        has_forbidden = any("违规金融用语" in v for v in violations)
-
-        if has_pii and has_forbidden:
-            risk_level = "critical"
-        elif has_pii or has_forbidden:
-            risk_level = "high"
-        else:
-            risk_level = "medium"
-
-        return ComplianceResult(
-            passed=False,
-            risk_level=risk_level,
-            violations=violations,
-            sanitized_content=sanitized,
-        )
+            return ComplianceResult(passed=True, risk_level="low", sanitized_content=sanitized)
+        has_pii = any("PII" in violation for violation in violations)
+        has_unsafe = any("不安全" in violation for violation in violations)
+        risk_level = "critical" if has_pii and has_unsafe else "high" if has_pii or has_unsafe else "medium"
+        return ComplianceResult(False, risk_level, violations=violations, sanitized_content=sanitized)
 
     @trace_agent_call("compliance_llm_check")
     async def llm_check(self, content: str) -> ComplianceResult:
-        """LLM深度合规审查（处理规则引擎无法覆盖的场景）"""
-        messages = [
-            SystemMessage(content=COMPLIANCE_SYSTEM_PROMPT),
-            HumanMessage(content=f"请审查以下客服回复内容的合规性：\n\n{content}"),
-        ]
-
-        response = await self.llm.ainvoke(messages)
-
+        response = await self.llm.ainvoke(
+            [SystemMessage(content=COMPLIANCE_SYSTEM_PROMPT), HumanMessage(content=f"请审查以下客服回复内容：\n\n{content}")]
+        )
         import json
+
         try:
             result = json.loads(response.content)
-        except json.JSONDecodeError:
-            return ComplianceResult(passed=True, risk_level="low", sanitized_content=content)
-
+        except (TypeError, json.JSONDecodeError):
+            return ComplianceResult(
+                passed=True,
+                risk_level="low",
+                suggestions=["llm_review_unavailable"],
+                sanitized_content=self._mask_pii(content),
+            )
         return ComplianceResult(
-            passed=result.get("passed", True),
-            risk_level=result.get("risk_level", "low"),
-            violations=result.get("violations", []),
-            suggestions=result.get("suggestions", []),
+            passed=bool(result.get("passed", True)),
+            risk_level=str(result.get("risk_level", "low")),
+            violations=list(result.get("violations", [])),
+            suggestions=list(result.get("suggestions", [])),
             sanitized_content=self._mask_pii(content),
         )
 
     @trace_agent_call("compliance_full_check")
     async def full_check(self, content: str) -> ComplianceResult:
-        """
-        两阶段合规审查：
-        1. 规则引擎快速检查（毫秒级）
-        2. 若规则通过，再进行LLM深度审查
-        """
         rule_result = await self.rule_check(content)
-
-        if not rule_result.passed and rule_result.risk_level in ("high", "critical"):
+        if not rule_result.passed and rule_result.risk_level in {"high", "critical"}:
+            self._record_audit(rule_result)
             return rule_result
-
+        if not self.enable_llm_review:
+            self._record_audit(rule_result)
+            return rule_result
         llm_result = await self.llm_check(content)
-
-        all_violations = rule_result.violations + llm_result.violations
-        final_passed = rule_result.passed and llm_result.passed
-
         risk_priority = {"low": 0, "medium": 1, "high": 2, "critical": 3}
-        final_risk = max(
-            rule_result.risk_level, llm_result.risk_level,
-            key=lambda r: risk_priority.get(r, 0),
-        )
-
-        return ComplianceResult(
-            passed=final_passed,
-            risk_level=final_risk,
-            violations=all_violations,
+        result = ComplianceResult(
+            passed=rule_result.passed and llm_result.passed,
+            risk_level=max((rule_result.risk_level, llm_result.risk_level), key=lambda value: risk_priority.get(value, 0)),
+            violations=rule_result.violations + llm_result.violations,
             suggestions=llm_result.suggestions,
             sanitized_content=rule_result.sanitized_content,
         )
+        self._record_audit(result)
+        return result
 
     @trace_agent_call("compliance_process")
     async def process(self, state: dict[str, Any]) -> dict[str, Any]:
-        """作为Graph节点处理状态"""
         sub_results = state.get("sub_results", {})
-
-        content_to_check = ""
-        for agent_name, result in sub_results.items():
-            if isinstance(result, str):
-                content_to_check += result + "\n"
-
+        content_to_check = "\n".join(result for result in sub_results.values() if isinstance(result, str))
         if not content_to_check.strip() and state.get("final_response"):
             content_to_check = state["final_response"]
-
         if not content_to_check.strip():
             return {**state, "compliance_passed": True}
-
-        compliance_result = await self.full_check(content_to_check)
-
-        if not compliance_result.passed:
-            for key in sub_results:
-                if isinstance(sub_results[key], str):
-                    sub_results[key] = compliance_result.sanitized_content
-
+        result = await self.full_check(content_to_check)
+        if not result.passed:
+            for key, value in list(sub_results.items()):
+                if isinstance(value, str):
+                    sub_results[key] = self._mask_pii(value)
         return {
             **state,
-            "compliance_passed": compliance_result.passed,
+            "compliance_passed": result.passed,
             "sub_results": {
                 **sub_results,
                 "compliance": {
-                    "passed": compliance_result.passed,
-                    "risk_level": compliance_result.risk_level,
-                    "violations": compliance_result.violations,
+                    "passed": result.passed,
+                    "risk_level": result.risk_level,
+                    "violations": result.violations,
+                    "audit_event": self.decision_audit[-1] if self.decision_audit else {},
                 },
             },
         }

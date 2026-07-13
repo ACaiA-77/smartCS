@@ -35,7 +35,7 @@ def test_arg_parser_defaults_match_tui_plan():
 
 def test_format_chat_result_includes_answer_and_debug_fields():
     result = ChatResult(
-        response="理财产品A年化约3.5%-5.2%。",
+        response="iPhone年化约3.5%-5.2%。",
         session_id="tui_12345678",
         intent="knowledge_rag",
         compliance_passed=True,
@@ -43,7 +43,7 @@ def test_format_chat_result_includes_answer_and_debug_fields():
 
     formatted = format_chat_result(result)
 
-    assert "理财产品A年化约3.5%-5.2%。" in formatted
-    assert "intent=knowledge_rag" in formatted
+    assert "iPhone年化约3.5%-5.2%。" in formatted
+    assert "target=knowledge_rag" in formatted
     assert "compliance_passed=True" in formatted
     assert "session_id=tui_12345678" in formatted

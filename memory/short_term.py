@@ -1,12 +1,9 @@
-"""
-短期记忆 — 基于Redis的会话级记忆
-存储最近N轮对话上下文，设置TTL自动过期。
-适合维护多轮对话的连续性。
-"""
+"""Short-term conversation memory with fast fallback when Redis is unavailable."""
 
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 from typing import Any
 
@@ -17,101 +14,108 @@ except ImportError:
 
 
 class ShortTermMemory:
-    """
-    短期记忆：基于Redis的会话缓存。
-
-    特点：
-    - Redis存储，支持分布式部署
-    - TTL自动过期（默认30分钟）
-    - 保留最近N轮对话
-    - 支持滑动窗口淘汰
-    """
+    """Redis-backed memory with a bounded in-process fallback circuit breaker."""
 
     def __init__(
         self,
         redis_url: str = "redis://localhost:6379/0",
         max_turns: int = 20,
         ttl_seconds: int = 1800,
+        redis_unavailable_retry_seconds: float = 30.0,
+        redis_connect_timeout_seconds: float = 0.5,
     ):
+        if redis_unavailable_retry_seconds <= 0:
+            raise ValueError("redis_unavailable_retry_seconds must be positive")
+        if redis_connect_timeout_seconds <= 0:
+            raise ValueError("redis_connect_timeout_seconds must be positive")
         self.max_turns = max_turns
         self.ttl_seconds = ttl_seconds
         self._redis_url = redis_url
         self._redis: Any = None
-        self._fallback_store: dict[str, list] = {}
+        self._fallback_store: dict[str, list[dict[str, Any]]] = {}
+        self._redis_unavailable_retry_seconds = redis_unavailable_retry_seconds
+        self._redis_connect_timeout_seconds = redis_connect_timeout_seconds
+        self._redis_retry_after = 0.0
 
     async def _get_redis(self):
-        """懒加载Redis连接"""
-        if self._redis is None:
-            if aioredis is None:
-                return None
-            try:
-                self._redis = aioredis.from_url(self._redis_url, decode_responses=True)
-                await self._redis.ping()
-            except Exception:
-                self._redis = None
+        """Return Redis when available; otherwise use a timed memory-fallback window."""
+        if self._redis is not None:
+            return self._redis
+        if aioredis is None or time.monotonic() < self._redis_retry_after:
+            return None
+
+        candidate = None
+        try:
+            candidate = aioredis.from_url(
+                self._redis_url,
+                decode_responses=True,
+                socket_connect_timeout=self._redis_connect_timeout_seconds,
+                socket_timeout=self._redis_connect_timeout_seconds,
+            )
+            await candidate.ping()
+            self._redis = candidate
+            self._redis_retry_after = 0.0
+        except Exception:
+            close = getattr(candidate, "aclose", None)
+            if close is not None:
+                await close()
+            self._redis = None
+            self._redis_retry_after = time.monotonic() + self._redis_unavailable_retry_seconds
         return self._redis
 
     def _session_key(self, session_id: str) -> str:
         return f"smartcs:short_term:{session_id}"
 
-    async def add_message(self, session_id: str, role: str, content: str) -> None:
-        """添加一条对话消息"""
-        message = {
-            "role": role,
-            "content": content,
-            "timestamp": datetime.now().isoformat(),
+    async def health_status(self) -> dict[str, Any]:
+        client = await self._get_redis()
+        return {
+            "ready": client is not None,
+            "mode": "redis" if client is not None else "memory",
+            "retrying_after_seconds": max(0.0, round(self._redis_retry_after - time.monotonic(), 2)),
         }
 
-        r = await self._get_redis()
+    async def close(self) -> None:
+        if self._redis is not None:
+            await self._redis.aclose()
+            self._redis = None
 
-        if r is not None:
+    async def add_message(self, session_id: str, role: str, content: str) -> None:
+        message = {"role": role, "content": content, "timestamp": datetime.now().isoformat()}
+        client = await self._get_redis()
+        if client is not None:
             key = self._session_key(session_id)
-            await r.rpush(key, json.dumps(message, ensure_ascii=False))
-            await r.ltrim(key, -self.max_turns, -1)
-            await r.expire(key, self.ttl_seconds)
-        else:
-            if session_id not in self._fallback_store:
-                self._fallback_store[session_id] = []
-            self._fallback_store[session_id].append(message)
-            if len(self._fallback_store[session_id]) > self.max_turns:
-                self._fallback_store[session_id] = self._fallback_store[session_id][-self.max_turns:]
+            await client.rpush(key, json.dumps(message, ensure_ascii=False))
+            await client.ltrim(key, -self.max_turns, -1)
+            await client.expire(key, self.ttl_seconds)
+            return
+        self._fallback_store.setdefault(session_id, []).append(message)
+        if len(self._fallback_store[session_id]) > self.max_turns:
+            self._fallback_store[session_id] = self._fallback_store[session_id][-self.max_turns :]
 
-    async def get_history(self, session_id: str, last_n: int | None = None) -> list[dict]:
-        """获取对话历史"""
-        r = await self._get_redis()
-
-        if r is not None:
-            key = self._session_key(session_id)
-            n = last_n or self.max_turns
-            raw = await r.lrange(key, -n, -1)
+    async def get_history(self, session_id: str, last_n: int | None = None) -> list[dict[str, Any]]:
+        client = await self._get_redis()
+        if client is not None:
+            raw = await client.lrange(self._session_key(session_id), -(last_n or self.max_turns), -1)
             return [json.loads(item) for item in raw]
-        else:
-            history = self._fallback_store.get(session_id, [])
-            if last_n:
-                return history[-last_n:]
-            return list(history)
+        history = self._fallback_store.get(session_id, [])
+        return list(history[-last_n:] if last_n else history)
 
     async def clear(self, session_id: str) -> None:
-        """清除指定session的短期记忆"""
-        r = await self._get_redis()
-        if r is not None:
-            await r.delete(self._session_key(session_id))
+        client = await self._get_redis()
+        if client is not None:
+            await client.delete(self._session_key(session_id))
         else:
             self._fallback_store.pop(session_id, None)
 
     async def get_context_window(self, session_id: str, max_tokens: int = 4000) -> str:
-        """获取适配上下文窗口大小的对话历史文本"""
         history = await self.get_history(session_id)
-
-        context_parts = []
+        parts: list[str] = []
         estimated_tokens = 0
-
-        for msg in reversed(history):
-            msg_text = f"{msg['role']}: {msg['content']}"
-            msg_tokens = len(msg_text) // 2  # 粗略估算
-            if estimated_tokens + msg_tokens > max_tokens:
+        for message in reversed(history):
+            text = f"{message['role']}: {message['content']}"
+            token_count = len(text) // 2
+            if estimated_tokens + token_count > max_tokens:
                 break
-            context_parts.insert(0, msg_text)
-            estimated_tokens += msg_tokens
-
-        return "\n".join(context_parts)
+            parts.insert(0, text)
+            estimated_tokens += token_count
+        return "\n".join(parts)

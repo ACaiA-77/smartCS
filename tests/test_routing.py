@@ -22,9 +22,9 @@ def test_route_to_agent_default_fallback():
     assert route_to_agent({}) == "knowledge_rag"
 
 
-def test_route_after_intent_low_confidence_goes_compliance():
+def test_route_after_intent_low_confidence_goes_clarification():
     state = {"needs_clarification": True, "intent": "knowledge_rag"}
-    assert route_after_intent(state) == "compliance_check"
+    assert route_after_intent(state) == "clarification"
 
 
 def test_route_after_intent_normal_dispatches_by_intent():
