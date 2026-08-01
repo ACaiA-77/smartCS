@@ -390,6 +390,14 @@ python -m scripts.ingest_knowledge_base --kb-dir .\knowledge_base\generated --in
 docker build -t smart-cs-python .
 ```
 
+如果本机访问 PyPI 较慢，可切换到清华 PyPI 镜像：
+
+```powershell
+docker build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple -t smart-cs-python .
+```
+
+Dockerfile 会预装 CPU 版 PyTorch。项目使用 CPU 本地 Embedding，不需要 CUDA 和 NVIDIA 运行库；因此不要把 GPU 版 PyTorch 安装进镜像。
+
 运行服务（临时前台模式，关闭终端会影响查看日志）：
 
 ```powershell
@@ -482,6 +490,9 @@ Pull Request 只执行测试和镜像构建，不发布镜像；合并到 `main`
 ```powershell
 # 首次使用：准备 Docker 配置
 Copy-Item .env.docker.example .env.docker
+
+# 当前手动部署已经创建过 smartcs-net 时无需执行；新机器首次部署时执行
+docker network create smartcs-net 2>$null
 
 # 如果旧 API 容器仍然占用相同名称，只删除旧 API 容器。
 # 不要直接删除已有 smartcs-redis，先确认是否需要保留其中的会话数据。

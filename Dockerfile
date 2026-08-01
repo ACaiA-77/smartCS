@@ -16,7 +16,15 @@ RUN adduser --disabled-password --gecos "" app \
     && chown -R app:app /app /home/app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG TORCH_VERSION=2.13.0+cpu
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir --prefer-binary \
+    --index-url "${TORCH_INDEX_URL}" --extra-index-url "${PIP_INDEX_URL}" \
+    "torch==${TORCH_VERSION}" \
+    && python -m pip install --no-cache-dir --prefer-binary --retries 5 --timeout 120 \
+    --index-url "${PIP_INDEX_URL}" -r requirements.txt
 
 COPY --chown=app:app . .
 

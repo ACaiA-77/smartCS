@@ -63,6 +63,7 @@ services:
 networks:
   smartcs-net:
     name: smartcs-net
+    external: true
 
 volumes:
   smartcs-hf-cache:
