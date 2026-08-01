@@ -65,3 +65,27 @@ async def test_process_writes_intent_and_sub_results():
     assert ir["secondary"] == "order_query"
     assert ir["confidence"] == 0.95
     assert ir["entities"]["order_id"] == "ORD-001"
+
+
+@pytest.mark.asyncio
+async def test_refund_how_to_question_routes_to_knowledge():
+    """退款政策/步骤咨询不能因为包含“退款”就创建工单。"""
+    agent = IntentRouterAgent(MockLLM())
+
+    result = await agent.classify("从 Apple 购买的 App 或内容怎么申请退款？")
+
+    assert result.primary_intent == IntentCategory.CONSULTATION
+    assert result.secondary_intent == "refund_policy"
+    assert result.suggested_agent == "knowledge_rag"
+
+
+@pytest.mark.asyncio
+async def test_explicit_refund_request_routes_to_ticket():
+    """明确要求代办退款仍然进入工单流程。"""
+    agent = IntentRouterAgent(MockLLM())
+
+    result = await agent.classify("我要申请退款，请帮我提交申请")
+
+    assert result.primary_intent == IntentCategory.TRANSACTION
+    assert result.secondary_intent == "refund_request"
+    assert result.suggested_agent == "ticket_handler"

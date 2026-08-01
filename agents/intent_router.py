@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import re
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -56,7 +57,9 @@ INTENT_SYSTEM_PROMPT = """你是一个专业的意图识别Agent，负责分析�
 
 金融场景特殊规则：
 - 涉及资金安全、账户异常、欺诈举报 → compliance_checker
-- 涉及订单查询、物流、退款、理赔、开户 → ticket_handler
+- 涉及订单查询、物流、理赔、开户办理 → ticket_handler
+- 退款问题只询问政策、条件、步骤、入口或“如何申请” → knowledge_rag
+- 明确要求代为提交、办理或处理退款 → ticket_handler
 - 涉及产品咨询、利率查询、政策了解 → knowledge_rag
 """
 
@@ -79,6 +82,39 @@ class IntentRouterAgent:
             elif isinstance(m, AIMessage):
                 lines.append(f"assistant: {m.content}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _correct_refund_route(user_message: str, result: dict[str, Any]) -> dict[str, Any]:
+        """区分退款知识查询和明确的退款办理请求，避免副作用路由误判。"""
+        if "退款" not in user_message:
+            return result
+
+        knowledge_signal = re.search(
+            r"怎么|如何|怎样|流程|步骤|政策|规则|条件|入口|在哪里|多久|资格|是否符合",
+            user_message,
+        )
+        action_signal = re.search(
+            r"帮我|请帮|替我|代我|请提交|提交(?:退款)?申请|发起(?:退款)?申请|办理退款|处理退款|我要退款|我要申请退款",
+            user_message,
+        )
+
+        if knowledge_signal and not action_signal:
+            result.update(
+                {
+                    "primary_intent": IntentCategory.CONSULTATION.value,
+                    "secondary_intent": "refund_policy",
+                    "suggested_agent": "knowledge_rag",
+                }
+            )
+        elif action_signal:
+            result.update(
+                {
+                    "primary_intent": IntentCategory.TRANSACTION.value,
+                    "secondary_intent": "refund_request",
+                    "suggested_agent": "ticket_handler",
+                }
+            )
+        return result
 
     @trace_agent_call("intent_router")
     async def classify(self, user_message: str, chat_context: str = "",
@@ -107,6 +143,8 @@ class IntentRouterAgent:
                 "entities": {},
                 "suggested_agent": "knowledge_rag",
             }
+
+        result = self._correct_refund_route(user_message, result)
 
         return IntentResult(
             primary_intent=IntentCategory(result.get("primary_intent", "unknown")),
