@@ -8,8 +8,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable, Awaitable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from datetime import datetime
+
+if TYPE_CHECKING:
+    from memory.long_term import LongTermMemory
+    from mcp.order_repository import OrderRepository
 
 
 @dataclass
@@ -190,28 +194,79 @@ class MCPToolServer:
         ]
 
 
-def create_default_tools(server: MCPToolServer) -> MCPToolServer:
-    """注册默认的MCP工具集"""
+def create_default_tools(
+    server: MCPToolServer,
+    long_term_memory: LongTermMemory | None = None,
+    order_repository: OrderRepository | None = None,
+) -> MCPToolServer:
+    """注册默认的 MCP 工具集，并复用应用级依赖实例。"""
+
+    if long_term_memory is None:
+        from memory.long_term import LongTermMemory
+
+        long_term_memory = LongTermMemory()
+    if order_repository is None:
+        from mcp.order_repository import OrderRepository
+
+        order_repository = OrderRepository()
 
     @server.register(
         name="order_query",
-        description="查询订单信息，支持按订单号或用户ID查询",
+        description="按订单号查询本地 SQLite 国内电商演示订单",
         input_schema={
             "type": "object",
             "properties": {
-                "order_id": {"type": "string", "description": "订单号"},
-                "user_id": {"type": "string", "description": "用户ID"},
+                "order_id": {
+                    "type": "string",
+                    "description": "订单号，例如 ORD-20260801-0001",
+                },
+                "user_id": {
+                    "type": "string",
+                    "description": "应用用户 ID，仅用于调用上下文",
+                },
             },
+            "required": ["order_id"],
         },
         category="order",
     )
     async def order_query(order_id: str = "", user_id: str = "") -> dict:
+        normalized_order_id = str(order_id).strip()
+        if not normalized_order_id:
+            raise ValueError("order_id must not be empty")
+
+        del user_id  # Demo data has no authentication layer; ownership checks require a real account system.
+        order = order_repository.get_order(normalized_order_id)
+        if order is None:
+            return {
+                "found": False,
+                "order_id": normalized_order_id,
+                "data_source": order_repository.DEMO_DATA_SOURCE,
+                "message": "本地演示订单不存在",
+            }
+
         return {
-            "order_id": order_id or "ORD-20260401-001",
-            "status": "shipped",
-            "amount": 299.00,
-            "product": "智能理财产品A",
-            "created_at": "2026-04-01T10:00:00",
+            "found": True,
+            "data_source": order_repository.DEMO_DATA_SOURCE,
+            "order_id": order["order_id"],
+            "status": order["status"],
+            "status_label": order["status_label"],
+            "payment_status": order["payment_status"],
+            "payment_status_label": order["payment_status_label"],
+            "amount": order["pay_amount"],
+            "original_amount": order["original_amount"],
+            "discount_amount": order["discount_amount"],
+            "product": order["product"],
+            "products": order["items"],
+            "recipient_name_masked": order["recipient_name_masked"],
+            "recipient_phone_masked": order["recipient_phone_masked"],
+            "city": order["city"],
+            "courier_company": order["courier_company"],
+            "tracking_number": order["tracking_number"],
+            "shipped_at": order["shipped_at"],
+            "delivered_at": order["delivered_at"],
+            "after_sale_status": order["after_sale_status"],
+            "after_sale_status_label": order["after_sale_status_label"],
+            "created_at": order["created_at"],
         }
 
     @server.register(
@@ -221,15 +276,37 @@ def create_default_tools(server: MCPToolServer) -> MCPToolServer:
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "搜索查询"},
-                "top_k": {"type": "integer", "description": "返回数量", "default": 3},
+                "top_k": {
+                    "type": "integer",
+                    "description": "返回数量，范围为 1 到 10",
+                    "default": 3,
+                    "minimum": 1,
+                    "maximum": 10,
+                },
             },
             "required": ["query"],
         },
         category="knowledge",
     )
     async def knowledge_search(query: str, top_k: int = 3) -> list[dict]:
+        normalized_query = query.strip()
+        if not normalized_query:
+            raise ValueError("query must not be empty")
+        if isinstance(top_k, bool) or not isinstance(top_k, int):
+            raise ValueError("top_k must be an integer")
+
+        retrieved_docs = long_term_memory.search(
+            normalized_query,
+            top_k=max(1, min(top_k, 10)),
+        )
         return [
-            {"content": f"关于'{query}'的知识库文档片段", "source": "FAQ.md", "score": 0.95},
+            {
+                "content": doc.get("content", ""),
+                "source": doc.get("source", ""),
+                "score": doc.get("score", 0.0),
+                "metadata": doc.get("metadata", {}),
+            }
+            for doc in retrieved_docs
         ]
 
     @server.register(

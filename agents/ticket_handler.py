@@ -188,6 +188,8 @@ class TicketHandlerAgent:
         """通过 MCP order_query 查询订单"""
         if self.mcp_server is None:
             return f"订单 {order_id or '未知'} 查询服务暂不可用，请联系人工客服。"
+        if not order_id or not order_id.strip():
+            return "请提供演示订单号，例如：查询订单 ORD-20260801-0001。"
 
         mcp_result = await self.mcp_server.call_tool(
             "order_query",
@@ -197,20 +199,35 @@ class TicketHandlerAgent:
             return f"订单查询失败：{mcp_result.error or '未知错误'}"
 
         order = mcp_result.result
+        if not order.get("found", True):
+            return (
+                f"未找到本地演示订单 {order.get('order_id', order_id)}。"
+                "请确认订单号，例如：查询订单 ORD-20260801-0001。"
+            )
+
         status_map = {
             "shipped": "已发货",
             "delivered": "已送达",
             "pending": "待处理",
             "processing": "处理中",
+            "unavailable": "公开数据未提供",
         }
-        status = status_map.get(order.get("status", ""), order.get("status", "未知"))
+        status = order.get("status_label") or status_map.get(
+            order.get("status", ""),
+            order.get("status", "未知"),
+        )
         return (
-            f"订单查询结果：\n\n"
+            f"订单查询结果（{order.get('data_source', '未知数据源')}）：\n\n"
             f"📦 订单号: {order.get('order_id', order_id)}\n"
             f"📊 状态: {status}\n"
-            f"💰 金额: {order.get('amount', '—')}\n"
+            f"💳 支付: {order.get('payment_status_label', '—')}\n"
+            f"💰 实付金额: {order.get('amount', '—')} 元\n"
             f"🛍️ 商品: {order.get('product', '—')}\n"
-            f"🕐 下单时间: {order.get('created_at', '—')}"
+            f"🚚 物流: {order.get('courier_company') or '暂未发货'}"
+            f"{('，运单号 ' + order['tracking_number']) if order.get('tracking_number') else ''}\n"
+            f"🛠️ 售后: {order.get('after_sale_status_label', '无')}\n"
+            f"🕐 下单时间: {order.get('created_at', '—')}\n"
+            "ℹ️ 说明: 本地国内电商演示数据，不代表真实平台订单。"
         )
 
     @trace_agent_call("ticket_query")

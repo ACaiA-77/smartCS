@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -44,6 +45,15 @@ class KnowledgeRAGAgent:
     def __init__(self, llm: ChatOpenAI, long_term_memory: LongTermMemory | None = None):
         self.llm = llm
         self.long_term_memory = long_term_memory or LongTermMemory()
+        self.enable_query_rewrite = self._env_flag("RAG_ENABLE_QUERY_REWRITE", default=True)
+        self.enable_rerank = self._env_flag("RAG_ENABLE_RERANK", default=True)
+
+    @staticmethod
+    def _env_flag(name: str, default: bool) -> bool:
+        value = os.getenv(name)
+        if value is None:
+            return default
+        return value.strip().lower() in {"1", "true", "yes", "on"}
 
     @trace_agent_call("rag_query_rewrite")
     async def rewrite_query(self, original_query: str) -> str:
@@ -146,11 +156,19 @@ class KnowledgeRAGAgent:
         elif secondary in ("product_inquiry", "policy_inquiry", "rate_inquiry"):
             rewrite_input = f"[{secondary}] {original_query}"
 
-        rewritten_query = await self.rewrite_query(rewrite_input)
+        rewritten_query = rewrite_input
+        if self.enable_query_rewrite:
+            rewritten_query = await self.rewrite_query(rewrite_input)
 
-        raw_docs = await self.retrieve_documents(rewritten_query, top_k=5)
+        raw_docs = await self.retrieve_documents(
+            rewritten_query,
+            top_k=5 if self.enable_rerank else 3,
+        )
 
-        reranked_docs = await self.rerank_documents(rewritten_query, raw_docs, top_k=3)
+        if self.enable_rerank:
+            reranked_docs = await self.rerank_documents(rewritten_query, raw_docs, top_k=3)
+        else:
+            reranked_docs = raw_docs[:3]
 
         answer = await self.generate_answer(original_query, reranked_docs)
 

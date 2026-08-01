@@ -81,6 +81,8 @@ python-impl/
 ├── tui/                        # 轻量终端聊天入口
 ├── requirements.txt
 ├── Dockerfile
+├── compose.yaml                # API、Redis 与自动更新服务编排
+├── .github/workflows/build-image.yml # 合并 main 后构建并发布镜像
 ├── .env.example                 # 本机运行环境变量示例
 └── .env.docker.example          # Docker 运行环境变量示例
 ```
@@ -231,11 +233,62 @@ SentenceTransformerEmbeddingBackend 512 512 95
 
 ### MCP工具
 
-4个已注册工具（业务调用见 `ticket_handler` / 合规转人工；RAG 走 FAISS）：
-- `order_query` — 订单查询（ticket_handler）
+4个已注册工具（业务调用见 `ticket_handler` / 合规转人工）：
+- `order_query` — 查询本地 SQLite 国内电商演示订单（`ticket_handler`）
 - `ticket_create` — 工单创建
-- `knowledge_search` — HTTP 调试
+- `knowledge_search` — 基于 `LongTermMemory.search()` 查询与主 RAG 共用的 FAISS 索引
 - `risk_check` — 已注册，合规接入规划中
+
+`knowledge_search` 不再返回固定 mock 数据。它会在启动时复用 `FAISS_INDEX_PATH`
+对应的 `LongTermMemory`，返回最多 10 个真实命中文档片段，以及来源、相似度分数和 metadata。
+可通过 HTTP 直接验证：
+
+```powershell
+$body = @{
+  name = "knowledge_search"
+  arguments = @{ query = "Apple 账户密码恢复"; top_k = 3 }
+} | ConvertTo-Json -Depth 3
+
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:8000/api/tools/call" `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+### RAG 延迟与降级
+
+知识问答默认保留完整链路：查询改写 -> FAISS 检索 -> LLM 重排 -> 回答生成 -> 合规审查。
+`RAG_ENABLE_QUERY_REWRITE=true` 与 `RAG_ENABLE_RERANK=true` 是默认配置，不应仅为了压缩延迟而关闭。
+
+FAISS 检索通常是毫秒级；模型调用和 Redis 不可用时的重复连接更可能造成长延迟。
+当 `REDIS_URL` 不可用时，系统会在 `REDIS_CONNECT_TIMEOUT_SECONDS` 内快速回退到进程内短期记忆，
+并在 `REDIS_RETRY_COOLDOWN_SECONDS` 冷却期内不重复阻塞请求。生产环境仍应部署 Redis。
+
+### SQLite 国内电商演示订单
+
+`order_query` 使用本地 SQLite 文件 `data/orders.db`。首次启动 API 或运行下面的初始化命令时，
+系统会确定性地生成 100 笔国内电商风格的演示订单及商品明细，覆盖待付款、待发货、运输中、已签收、退款审核中、已退款和已取消等状态。
+数据包含支付状态、实付金额、脱敏收货信息、快递公司、运单号、售后状态和创建时间，但不代表任何真实平台或用户数据。
+
+手动初始化或修复本地数据库：
+
+```powershell
+python -m scripts.init_demo_orders
+```
+
+可直接验证：
+
+```powershell
+$body = @{
+  name = "order_query"
+  arguments = @{ order_id = "ORD-20260801-0001"; user_id = "terminal_user" }
+} | ConvertTo-Json -Depth 3
+
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:8000/api/tools/call" `
+  -ContentType "application/json" `
+  -Body $body
+```
 
 ## API接口
 
@@ -243,6 +296,7 @@ SentenceTransformerEmbeddingBackend 512 512 95
 |------|------|------|
 | `/api/chat` | POST | 聊天 |
 | `/api/history/{session_id}` | GET | 对话历史 |
+| `/api/demo/orders` | GET | Web 工作台的演示订单快捷列表 |
 | `/api/tools` | GET | MCP工具列表 |
 | `/api/tools/call` | POST | MCP工具调用 |
 | `/api/metrics` | GET | 系统指标 |
@@ -279,6 +333,12 @@ TUI 内置命令：
 | `/history` | 查看当前会话历史 |
 | `/session` | 查看当前会话 ID |
 | `/exit` 或 `/quit` | 退出 TUI |
+
+## Web 客服工作台
+
+启动 API 后访问 [http://localhost:8000](http://localhost:8000)，可使用浏览器中的聊天工作台。
+页面支持发送客服问题、查看路由/合规状态，并点击右侧订单列表直接调用 `order_query`。
+通过聊天流程查询时，使用完整订单号，例如：`查询订单 ORD-20260801-0001`。
 
 ### 测试
 
@@ -336,6 +396,7 @@ docker build -t smart-cs-python .
 docker run --rm `
   -p 8000:8000 `
   --env-file .env.docker `
+  -v "${PWD}\data:/app/data" `
   -v "${PWD}\vector_store:/app/vector_store" `
   -v smartcs-hf-cache:/home/app/.cache/huggingface `
   -v smartcs-st-cache:/home/app/.cache/sentence-transformers `
@@ -348,6 +409,7 @@ docker run --rm `
 docker run -d --name smartcs-api `
   -p 8000:8000 `
   --env-file .env.docker `
+  -v "${PWD}\data:/app/data" `
   -v "${PWD}\vector_store:/app/vector_store" `
   -v smartcs-hf-cache:/home/app/.cache/huggingface `
   -v smartcs-st-cache:/home/app/.cache/sentence-transformers `
@@ -360,6 +422,7 @@ docker run -d --name smartcs-api `
 |------|------|
 | `-d --name smartcs-api` | 后台运行容器，并使用固定名称便于 start/stop/logs |
 | `--env-file .env.docker` | 注入模型服务、embedding、FAISS路径等环境变量 |
+| `-v "${PWD}\data:/app/data"` | 挂载本地 SQLite 演示订单，避免容器重建后重新生成 |
 | `-v "${PWD}\vector_store:/app/vector_store"` | 挂载宿主机已构建好的 FAISS 索引 |
 | `smartcs-hf-cache` | 缓存 HuggingFace 模型文件，避免每次容器启动都重新下载 |
 | `smartcs-st-cache` | 缓存 sentence-transformers 模型文件 |
@@ -399,3 +462,78 @@ docker stop lucid_johnson
 ```
 
 日志中如果出现 `localhost:4317` / `OTLP` / `Failed to export traces`，通常只是 OpenTelemetry 追踪收集器未启动，不影响 `/health`、`/docs` 和 `/api/chat` 使用。需要追踪时再单独启动 Jaeger 或 OTLP collector。
+
+### GitHub Actions 自动发布镜像
+
+仓库包含 `.github/workflows/build-image.yml`。当 Pull Request 合并到 `main` 后，GitHub Actions 会先运行测试，再构建并发布 GHCR 镜像：
+
+```text
+ghcr.io/acaia-77/smartcs:latest
+```
+
+Pull Request 只执行测试和镜像构建，不发布镜像；合并到 `main` 后才会推送 `latest` 和 commit SHA 标签。workflow 使用 GitHub 自动提供的 `GITHUB_TOKEN`，不需要把 Docker Hub 或 GHCR 密钥写进仓库。
+
+首次使用 GHCR 时，需要在 GitHub Packages 中将该镜像设置为 Public，或者在本机先执行 `docker login ghcr.io`。不要把个人访问令牌写入 `.env.docker` 或提交到 Git。
+
+### 使用 Compose 更新 Docker 部署
+
+`compose.yaml` 会统一管理 SmartCS API、Redis 和可选的 Watchtower。API 默认使用宿主机 `8001` 端口，避免与其他占用 `8000` 的服务冲突：
+
+```powershell
+# 首次使用：准备 Docker 配置
+Copy-Item .env.docker.example .env.docker
+
+# 如果旧 API 容器仍然占用相同名称，只删除旧 API 容器。
+# 不要直接删除已有 smartcs-redis，先确认是否需要保留其中的会话数据。
+docker rm -f smartcs-api 2>$null
+
+# 拉取 GHCR 镜像并启动 API 与 Redis
+docker compose pull smartcs-api smartcs-redis
+docker compose up -d smartcs-redis smartcs-api
+```
+
+启动后访问：
+
+```text
+http://localhost:8001/
+http://localhost:8001/docs
+```
+
+如果要继续使用宿主机 `8000`，在当前 PowerShell 会话中设置：
+
+```powershell
+$env:SMARTCS_HOST_PORT = "8000"
+docker compose up -d smartcs-redis smartcs-api
+```
+
+如果要让本机 Docker 自动检查 GHCR 新镜像，每 5 分钟拉取一次并重建 API 容器：
+
+```powershell
+docker compose --profile auto-update up -d
+```
+
+Watchtower 只监控 `smartcs-api`，不会自动更新 Redis。它需要访问 Docker Socket；这是自动重建容器所必需的权限，因此只建议在个人开发机或受控测试环境启用。更新链路如下：
+
+```text
+PR 合并到 main
+    -> GitHub Actions 运行测试
+    -> 构建并推送 GHCR 镜像
+    -> Watchtower 检测到 latest 变化
+    -> 拉取新镜像并重建 smartcs-api
+```
+
+重新创建 API 容器不会删除宿主机挂载的 `vector_store/`、`data/`，也不会删除 Redis volume 中的会话数据。若 GHCR 镜像为 Private，需要先完成 Docker 登录：
+
+```powershell
+docker login ghcr.io
+```
+
+如果当前已经存在手动创建的 `smartcs-redis`，并且希望先只更新 API，可以保留旧 Redis，跳过 Compose 的 Redis 依赖：
+
+```powershell
+docker rm -f smartcs-api 2>$null
+docker compose pull smartcs-api
+docker compose up -d --no-deps smartcs-api
+```
+
+该方式要求旧 `smartcs-redis` 已经加入 `smartcs-net`，并且容器内地址仍为 `smartcs-redis:6379`。如果要让 Compose 接管 Redis，先确认不需要旧会话，或先使用 `docker exec smartcs-redis redis-cli BGSAVE` 和 `docker cp` 做备份，再删除旧 Redis 容器；不要使用 `docker compose down -v`，因为 `-v` 会删除 Compose 管理的持久化卷。

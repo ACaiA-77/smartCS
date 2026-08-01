@@ -12,7 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN adduser --disabled-password --gecos "" app \
-    && mkdir -p /app/vector_store /app/knowledge_base /app/knowledge_sources "$HF_HOME" "$SENTENCE_TRANSFORMERS_HOME" \
+    && mkdir -p /app/data /app/vector_store /app/knowledge_base /app/knowledge_sources "$HF_HOME" "$SENTENCE_TRANSFORMERS_HOME" \
     && chown -R app:app /app /home/app
 
 COPY requirements.txt .

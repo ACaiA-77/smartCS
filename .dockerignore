@@ -22,5 +22,6 @@ knowledge_sources/manifest.json
 knowledge_sources/review_samples.md
 
 vector_store/
+data/*.db
 
 *.log

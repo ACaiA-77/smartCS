@@ -57,3 +57,13 @@ async def test_process_uses_product_entity_in_rewrite():
 
     assert llm.rewrite_inputs
     assert "理财产品A" in llm.rewrite_inputs[0]
+
+
+def test_full_rag_pipeline_is_enabled_by_default(monkeypatch):
+    monkeypatch.delenv("RAG_ENABLE_QUERY_REWRITE", raising=False)
+    monkeypatch.delenv("RAG_ENABLE_RERANK", raising=False)
+
+    agent = KnowledgeRAGAgent(MockLLM(), LongTermMemory())
+
+    assert agent.enable_query_rewrite is True
+    assert agent.enable_rerank is True

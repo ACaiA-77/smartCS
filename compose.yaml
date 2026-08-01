@@ -1,0 +1,70 @@
+services:
+  smartcs-api:
+    image: ${SMARTCS_IMAGE:-ghcr.io/acaia-77/smartcs:latest}
+    container_name: smartcs-api
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    ports:
+      - "${SMARTCS_HOST_PORT:-8001}:8000"
+    volumes:
+      - ./data:/app/data
+      - ./vector_store:/app/vector_store
+      - smartcs-hf-cache:/home/app/.cache/huggingface
+      - smartcs-st-cache:/home/app/.cache/sentence-transformers
+    depends_on:
+      smartcs-redis:
+        condition: service_healthy
+    networks:
+      - smartcs-net
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import os, urllib.request;
+          urllib.request.urlopen(
+          'http://127.0.0.1:' + os.getenv('PORT', '8000') + '/health',
+          timeout=5
+          )
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  smartcs-redis:
+    image: redis:7-alpine
+    container_name: smartcs-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - smartcs-redis-data:/data
+    networks:
+      - smartcs-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: smartcs-watchtower
+    restart: unless-stopped
+    profiles:
+      - auto-update
+    command: --interval 300 --cleanup smartcs-api
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+networks:
+  smartcs-net:
+    name: smartcs-net
+
+volumes:
+  smartcs-hf-cache:
+  smartcs-st-cache:
+  smartcs-redis-data:

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 from typing import Any
 
@@ -32,23 +33,43 @@ class ShortTermMemory:
         redis_url: str = "redis://localhost:6379/0",
         max_turns: int = 20,
         ttl_seconds: int = 1800,
+        redis_connect_timeout: float = 0.5,
+        redis_retry_cooldown: float = 30.0,
     ):
         self.max_turns = max_turns
         self.ttl_seconds = ttl_seconds
         self._redis_url = redis_url
+        self.redis_connect_timeout = redis_connect_timeout
+        self.redis_retry_cooldown = redis_retry_cooldown
         self._redis: Any = None
+        self._redis_disabled_until = 0.0
         self._fallback_store: dict[str, list] = {}
 
     async def _get_redis(self):
         """懒加载Redis连接"""
+        if self._redis_disabled_until > time.monotonic():
+            return None
+
         if self._redis is None:
             if aioredis is None:
                 return None
             try:
-                self._redis = aioredis.from_url(self._redis_url, decode_responses=True)
+                self._redis = aioredis.from_url(
+                    self._redis_url,
+                    decode_responses=True,
+                    socket_connect_timeout=self.redis_connect_timeout,
+                    socket_timeout=self.redis_connect_timeout,
+                    retry_on_timeout=False,
+                )
                 await self._redis.ping()
             except Exception:
+                if self._redis is not None:
+                    try:
+                        await self._redis.aclose()
+                    except Exception:
+                        pass
                 self._redis = None
+                self._redis_disabled_until = time.monotonic() + self.redis_retry_cooldown
         return self._redis
 
     def _session_key(self, session_id: str) -> str:

@@ -6,6 +6,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from agents.ticket_handler import TicketHandlerAgent, TicketStore
+from mcp.mcp_server import ToolCallResult
 from tests.conftest import MockLLM
 
 
@@ -103,3 +104,37 @@ async def test_complaint_does_not_reuse_stale_order_id_from_working_memory():
     assert "ORD-20260401-001" not in out["sub_results"]["ticket_handler"]
     assert len(store.query_by_user("u1")) == 1
     assert store.query_by_user("u1")[0]["type"] == "complaint"
+
+class DemoOrderMcpServer:
+    async def call_tool(self, name: str, arguments: dict) -> ToolCallResult:
+        assert name == "order_query"
+        assert arguments["order_id"] == "ORD-20260801-0001"
+        return ToolCallResult(
+            tool_name=name,
+            success=True,
+            result={
+                "found": True,
+                "data_source": "SQLite 本地国内电商演示数据",
+                "order_id": "ORD-20260801-0001",
+                "status": "in_transit",
+                "status_label": "运输中",
+                "payment_status_label": "已支付",
+                "amount": 300.0,
+                "product": "iPhone 16 256GB 黑色",
+                "courier_company": "顺丰速运",
+                "tracking_number": "SF202608010001",
+                "after_sale_status_label": "无",
+                "created_at": "2026-08-01T09:00:00",
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_query_order_labels_public_demo_data_without_shipping_status():
+    agent = TicketHandlerAgent(MockLLM(), mcp_server=DemoOrderMcpServer())
+
+    response = await agent.query_order("ORD-20260801-0001", "user_001")
+
+    assert "SQLite 本地国内电商演示数据" in response
+    assert "运输中" in response
+    assert "顺丰速运" in response

@@ -7,9 +7,12 @@ from __future__ import annotations
 import os
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from agents.supervisor import create_supervisor_graph
@@ -17,17 +20,28 @@ from memory.working_memory import WorkingMemory
 from memory.short_term import ShortTermMemory
 from memory.long_term import LongTermMemory
 from mcp.mcp_server import MCPToolServer, create_default_tools
+from mcp.order_repository import OrderRepository
 from tracing.otel_config import init_tracer, AgentMetrics, set_agent_metrics
 
 load_dotenv()
 
 
 working_memory = WorkingMemory()
-short_term_memory = ShortTermMemory(redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+short_term_memory = ShortTermMemory(
+    redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
+    redis_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT_SECONDS", "0.5")),
+    redis_retry_cooldown=float(os.getenv("REDIS_RETRY_COOLDOWN_SECONDS", "30")),
+)
 long_term_memory = LongTermMemory(index_path=os.getenv("FAISS_INDEX_PATH", "./vector_store/faiss_index"))
-mcp_server = create_default_tools(MCPToolServer())
+order_repository = OrderRepository(os.getenv("ORDER_DB_PATH", "./data/orders.db"))
+mcp_server = create_default_tools(
+    MCPToolServer(),
+    long_term_memory=long_term_memory,
+    order_repository=order_repository,
+)
 metrics = AgentMetrics()
 graph = None
+WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 
 
 @asynccontextmanager
@@ -74,6 +88,15 @@ app.add_middleware(
 
 if _HAS_FASTAPI_OTEL:
     FastAPIInstrumentor.instrument_app(app)
+
+
+@app.get("/", include_in_schema=False)
+async def web_workbench() -> FileResponse:
+    """Serve the interactive customer-service workbench."""
+    return FileResponse(WEB_DIR / "index.html")
+
+
+app.mount("/ui", StaticFiles(directory=WEB_DIR), name="web-ui")
 
 
 class ChatRequest(BaseModel):
@@ -164,6 +187,15 @@ async def get_history(session_id: str):
     """获取对话历史"""
     history = await short_term_memory.get_history(session_id)
     return {"session_id": session_id, "messages": history}
+
+
+@app.get("/api/demo/orders")
+async def list_demo_orders(limit: int = Query(default=6, ge=1, le=20)):
+    """Expose recent local demo orders for the web workbench quick actions."""
+    return {
+        "data_source": order_repository.DEMO_DATA_SOURCE,
+        "orders": order_repository.list_orders(limit),
+    }
 
 
 @app.get("/api/tools")
