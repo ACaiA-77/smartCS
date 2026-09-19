@@ -24,6 +24,7 @@ except ImportError:
 
 _tracer = None
 _metrics = None
+_otel_disabled = False
 
 
 def init_tracer(
@@ -37,7 +38,17 @@ def init_tracer(
         service_name: 服务名称
         otlp_endpoint: OTLP收集器地址，None则输出到控制台
     """
-    global _tracer
+    global _tracer, _otel_disabled
+
+    _otel_disabled = os.getenv("OTEL_SDK_DISABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if _otel_disabled:
+        _tracer = None
+        return
 
     if not _HAS_OTEL:
         return
@@ -62,6 +73,13 @@ def init_tracer(
 def get_tracer():
     """获取全局Tracer实例"""
     global _tracer
+    if _otel_disabled or os.getenv("OTEL_SDK_DISABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return None
     if _tracer is None:
         if _HAS_OTEL:
             _tracer = trace.get_tracer("smart-cs-multi-agent")

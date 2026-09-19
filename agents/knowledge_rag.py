@@ -128,7 +128,7 @@ class KnowledgeRAGAgent:
     async def process(self, state: dict[str, Any]) -> dict[str, Any]:
         """
         完整RAG流程（作为Graph节点）：
-        1. 从 _wm_context 读取累积实体补全 query
+        1. 从 _session_context 读取累积实体补全 query
         2. Query改写
         3. 向量检索
         4. 重排序
@@ -144,8 +144,8 @@ class KnowledgeRAGAgent:
         entities = intent_info.get("entities", {}) or {}
 
         # 从工作记忆累积实体中补全（当本轮 intent_router 未提取到实体时）
-        wm = state.get("sub_results", {}).get("_wm_context", {})
-        accumulated = wm.get("accumulated_entities", {}) or {}
+        context = state.get("sub_results", {}).get("_session_context", {})
+        accumulated = context.get("accumulated_entities", {}) or {}
         for key, val in accumulated.items():
             if key not in entities or not entities[key]:
                 entities[key] = val

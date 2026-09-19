@@ -44,6 +44,7 @@ class ShortTermMemory:
         self._redis: Any = None
         self._redis_disabled_until = 0.0
         self._fallback_store: dict[str, list] = {}
+        self._fallback_json_store: dict[str, str] = {}
 
     async def _get_redis(self):
         """懒加载Redis连接"""
@@ -74,6 +75,29 @@ class ShortTermMemory:
 
     def _session_key(self, session_id: str) -> str:
         return f"smartcs:short_term:{session_id}"
+
+    async def get_value(self, key: str) -> str | None:
+        """Read a JSON string from the same Redis/fallback backend as messages."""
+        r = await self._get_redis()
+        if r is not None:
+            return await r.get(key)
+        return self._fallback_json_store.get(key)
+
+    async def set_value(self, key: str, value: str) -> None:
+        """Store a JSON string with the short-term memory TTL."""
+        r = await self._get_redis()
+        if r is not None:
+            await r.set(key, value, ex=self.ttl_seconds)
+            return
+        self._fallback_json_store[key] = value
+
+    async def delete_value(self, key: str) -> None:
+        """Delete a value stored through :meth:`set_value`."""
+        r = await self._get_redis()
+        if r is not None:
+            await r.delete(key)
+            return
+        self._fallback_json_store.pop(key, None)
 
     async def add_message(self, session_id: str, role: str, content: str) -> None:
         """添加一条对话消息"""

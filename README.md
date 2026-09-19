@@ -1,18 +1,117 @@
-# Python 实现 — LangGraph + FastAPI
+# SmartCS Python 实现
 
-基于 LangGraph StateGraph 的多Agent智能客服系统，Python原生实现。
+SmartCS 是一个本地多 Agent 客服后端，基于显式 async `ChatOrchestrator` 和策略约束的 `ToolExecutor`。项目用于展示确定性路由、会话状态归属、持久化业务写入、确认与审批、幂等、崩溃恢复、离线 Agent 评估、故障注入和运行时可观测性。
+
+这是一个面向工程实践的本地业务 Sandbox、简历和演示项目，不代表真实生产部署。
+
+## Verified Local Status（Checkpoint 历史基线）
+
+| 项目 | 当前记录 |
+|------|---------|
+| 全量 `pytest`（显式启用真实 MySQL） | 284 passed in 58.14s |
+| checkpoint 目标测试（显式启用真实 MySQL） | 14 passed；隔离会话和业务 SQLite |
+| 离线 Agent Eval | 14 / 14 scenarios passed |
+| Node 重连回归 | 3 passed |
+| 路由准确率 | 1.0 |
+| 副作用安全率 | 1.0 |
+| 故障收敛率 | 1.0 |
+| 仓库就绪状态 | PASS / READY_TO_COMMIT |
+
+以上是 2026-09-18 checkpoint 范围的历史结果，不代表后续 Auth 改造已通过。Auth 本轮结果与原始输出见 `artifacts/auth_20260919/`。本地确定性验证使用 Mock / Deterministic LLM 和隔离业务 Sandbox，不代表在线模型质量、真实流量、生产 SLA 或远程 CI。
+
+## 用户登录与访问控制
+
+本轮本地验收：全量 `351 passed in 71.72s`，Auth 专项 `63 passed in 28.67s`，checkpoint 专项 `14 passed in 21.34s`，Node 15 / 15，原有离线 Eval 14 / 14。真实 MySQL、JWT、HTTP 进程重启和 Chrome 双账号验收通过。完整口径见 [执行回报](artifacts/auth_20260919/execution_report.md)；专项测试已包含在全量数量内，不重复累计。
+
+浏览器通过 `POST /api/auth/login` 登录，服务端验证 Argon2 密码哈希并设置 HttpOnly JWT cookie。每次客户请求都校验签名、期限和发行者，再从 MySQL 读取账号状态及业务身份。前端不能指定 `user_id` 或 `business_user_id`。
+
+MySQL 新增 `platform_user` 和 `conversation_session`，与已有 checkpoint 表使用同一实例。平台账号 ID 用于认证，会话按账号归属；业务身份映射到 SQLite 已存在的用户。订单、退款、工单和执行账本不迁移。
+
+首次配置需设置随机的 `AUTH_JWT_SECRET`，不要使用示例值或提交密钥。HTTPS 部署设置 `AUTH_COOKIE_SECURE=true`；本地 HTTP 使用 false。默认同源，跨源开发仅接受 `CORS_ALLOWED_ORIGINS` 精确白名单。Cookie 写请求还校验 Origin。
+
+本地账号通过受控脚本创建，不提供公开注册，也不允许网页任意关联业务用户：
+
+```text
+niu -c 'python -m scripts.init_demo_auth_user --username alice --business-user-id user_001'
+```
+
+密码通过安全交互提示输入；自动化可使用 `SMARTCS_DEMO_PASSWORD`，用后清除环境变量，不打印或提交。脚本核实 SQLite 业务用户存在后，才保存密码哈希。没有默认明文密码。
+
+登录后，左侧是自己的会话，右侧是自己的订单。`POST /api/chat` 不带 session_id 时由服务端创建会话；网页先调用 `POST /api/sessions` 获得服务端 ID，再发送消息，便于断网后用原请求 ID 继续。未认证返回 401，非本人会话与订单不返回内容。
+
+`/api/tools/call` 和 `/api/tools/execute` 仅向客户开放指定 READ 工具。WRITE 必须经聊天和原 `ToolExecutor` 策略；客户不能自行审批高风险操作。审批 HTTP 接口和含全局工具明细的 `/api/metrics` 不对客户开放。
+
+JWT 有效期 30 分钟。登出清除浏览器 cookie，不提供 refresh-token rotation 或单个已复制 JWT 的撤销列表；令牌到期或禁用账号后不能继续使用。公开部署前还需登录限流、HTTPS 与独立的安全运维验收。本轮不声称企业 IAM、SSO、完整 RBAC 或生产零信任。
+
+CLI 登录和 cookie 写请求需显式发送与服务地址一致的 `Origin`，并在同一个 HTTP 会话保留登录 cookie；不要把密码、JWT 放进命令行参数、示例脚本或日志。浏览器会自动携带同源 Origin。
+
+## Architecture at a glance
+
+```text
+Customer Browser / authenticated API client
+        ↓
+JWT Authentication → current platform account → UserContext
+        ↓
+Request Observability，外层 ASGI
+        ↓
+FastAPI handler
+        ↓
+ChatOrchestrator
+        ↓
+IntentRouter
+        ↓
+最多一个响应分支：自然对话或业务 Handler；低置信度时直接澄清
+        ↓
+Compliance
+        ↓
+Response
+
+TicketHandler / RefundHandler
+        ↓
+ToolExecutor
+  ├─ confirmation
+  ├─ approval，仅 high-risk
+  ├─ timeout / READ retry
+  └─ idempotency
+        ↓
+MCP Tool
+        ↓
+Business Domain
+        ↓
+SQLite
+
+KnowledgeRAG
+        ↓
+LongTermMemory
+        ↓
+FAISS
+```
+
+详细组件、状态边界和时序见 [docs/architecture.md](docs/architecture.md)。简历表达、面试问答和演示脚本见 [docs/resume_interview.md](docs/resume_interview.md)。
+
+## Architecture summary
+
+- `ChatOrchestrator` 是显式 async 编排层，当前没有采用 LangGraph 的图运行时。
+- Agent 负责意图和交互，不负责决定权威业务状态。Agent output is not authoritative business state。
+- 聊天链路中的副作用写入统一经过 `ToolExecutor`。`/api/tools/call` 只允许 READ；CLI business simulator 是独立的业务状态模拟路径。
+- 退款和工单效果由业务域写入 SQLite，`ExecutionLedger` 记录执行幂等和 replay。
+- 工单使用 `client_request_id` 加 canonical payload hash 表示业务请求身份，跨用户或 payload 冲突不会返回旧工单信息。
+- 启动时的 crash recovery 只根据权威域状态协调 `refund_create` 和 `ticket_create` 的 stale ledger claim。
+- API 聊天使用 MySQL `CheckpointStore` 保存节点进度、待确认状态和消息；恢复时固化工具计划并复用原 `ExecutionLedger`。
+- Eval 检查路由、无副作用、安全边界和故障收敛等不变量，不使用 LLM-as-judge。
 
 ## 技术栈
 
 | 组件 | 技术 |
 |------|------|
-| Agent编排 | LangGraph StateGraph + MemorySaver |
-| HTTP框架 | FastAPI + Uvicorn |
-| LLM调用 | LangChain ChatOpenAI |
+| Agent 编排 | 显式 async `ChatOrchestrator` |
+| HTTP 框架 | FastAPI + Uvicorn |
+| LLM 调用 | LangChain `ChatOpenAI` |
 | 向量检索 | FAISS |
-| 短期记忆 | Redis (aioredis) |
-| 追踪 | OpenTelemetry + Jaeger |
-| 协议 | MCP 工具语义（HTTP `/api/tools`；内部 JSON-RPC 处理函数） |
+| 短期记忆 | Redis async client + in-process fallback，Redis 状态带 TTL |
+| 聊天断点 | MySQL + PyMySQL，节点快照、乐观版本检查、会话连接锁 |
+| 追踪 | OpenTelemetry，可选 OTLP-compatible collector |
+| 协议 | MCP 工具语义，HTTP `/api/tools`，内部 JSON-RPC 处理函数 |
 
 ## 快速开始
 
@@ -51,22 +150,24 @@ python -m api.main
 
 ```
 python-impl/
-├── agents/                     # Agent实现
-│   ├── supervisor.py           # Supervisor编排Agent（StateGraph核心）
-│   ├── intent_router.py        # 意图路由Agent
-│   ├── knowledge_rag.py        # RAG知识检索Agent
-│   ├── ticket_handler.py       # 工单处理Agent
-│   └── compliance_checker.py   # 合规审查Agent
-├── memory/                     # 三层记忆系统
-│   ├── working_memory.py       # 工作记忆（进程内存）
-│   ├── short_term.py           # 短期记忆（Redis，30min TTL）
-│   └── long_term.py            # 长期记忆（FAISS向量库）
-├── mcp/                        # MCP工具协议
-│   └── mcp_server.py           # 工具注册与调用（REST 暴露见 api/main.py）
-├── tracing/                    # OpenTelemetry追踪
-│   └── otel_config.py          # 追踪配置 + Agent装饰器
-├── api/                        # FastAPI接口层
-│   └── main.py                 # REST API入口
+├── agents/                     # Agent 实现
+│   ├── orchestrator.py         # 显式请求编排
+│   ├── intent_router.py        # 意图路由 Agent
+│   ├── knowledge_rag.py        # RAG 知识检索 Agent
+│   ├── ticket_handler.py       # 工单处理 Agent
+│   └── compliance_checker.py   # 合规审查 Agent
+├── memory/                     # 会话与长期记忆
+│   ├── session_store.py        # 会话状态与消息边界
+│   ├── short_term.py           # Redis / fallback 消息与状态后端，30 min TTL
+│   └── long_term.py            # 长期记忆，FAISS 向量库
+├── mcp/                        # MCP 工具协议
+│   └── mcp_server.py           # 工具注册与调用，REST 暴露见 api/main.py
+├── tickets/                    # 持久化客服工单业务域
+│   └── service.py              # support_tickets 与客户端请求幂等
+├── tracing/                    # OpenTelemetry 追踪
+│   └── otel_config.py          # 追踪配置与 Agent 装饰器
+├── api/                        # FastAPI 接口层
+│   └── main.py                 # REST API 入口
 ├── knowledge_sources/           # 网页采集源、raw HTML、metadata、抽样审查
 │   ├── urls.yml                 # 官方网页 URL 清单
 │   ├── raw_html/                # 原始 HTML
@@ -82,73 +183,82 @@ python-impl/
 ├── requirements.txt
 ├── Dockerfile
 ├── compose.yaml                # API、Redis 与自动更新服务编排
-├── .github/workflows/build-image.yml # 合并 main 后构建并发布镜像
+├── .github/workflows/build-image.yml # PR 质量门禁，main push / dispatch 构建发布
 ├── .env.example                 # 本机运行环境变量示例
 └── .env.docker.example          # Docker 运行环境变量示例
 ```
 
 ## 核心特性
 
-### Supervisor编排
+### 显式请求编排
 
-LangGraph StateGraph构建有向图，编排顺序与 Java/Go 一致：
+`ChatOrchestrator` 先恢复会话上下文，再调用 `IntentRouter`。置信度足够时，它最多选择一个响应分支，随后统一进行合规检查和响应合成；低置信度或未知路由直接返回澄清。问候、自我介绍、能力说明、致谢等进入 `ConversationAgent`，基于近期对话直接回复，不检索知识库或调用业务工具。具体产品知识和政策问题仍走 RAG；混合了寒暄的业务请求优先走业务分支。订单、退款和工单 Handler 通过 `ToolExecutor` 进入 MCP 和业务域，RAG Agent 则直接访问 `LongTermMemory`。完整入口和分支见 [docs/architecture.md](docs/architecture.md)。
 
-```python
-graph.add_edge("supervisor_route", "intent_router")
-graph.add_conditional_edges(
-    "intent_router",
-    route_after_intent,
-    {
-        "knowledge_rag": "knowledge_rag",
-        "ticket_handler": "ticket_handler",
-        "compliance_check": "compliance_check",
-    },
-)
-graph.add_edge("knowledge_rag", "compliance_check")
-graph.add_edge("compliance_check", "synthesize")
-```
+工单写入同时使用执行层 `idempotency_key` 和业务域 `client_request_id`，分别覆盖执行回放与客户端请求幂等。`refund_create` 和 `ticket_create` 当前都是 medium risk 写操作，需要确认、幂等键和 ledger，但不因 medium risk 自动要求人工审批。
 
-`supervisor_route` 读工作记忆并注入 `sub_results["_wm_context"]`；`intent_router` 负责 LLM 意图分类并写入 `state.intent`，完成后将本轮实体合并到工作记忆的 `accumulated_entities`。
+### 会话状态
 
-### 工作记忆激活
-
-工作记忆在单次请求内维护跨轮状态，通过 `sub_results["_wm_context"]` 通道注入 AgentState：
+`SessionStore` 维护跨轮结构化状态，并通过 `sub_results["_session_context"]` 注入当前请求：
 
 | 字段 | 写入时机 | 消费者 |
 |------|---------|--------|
-| `last_intent` | `intent_router_node` 完成后 | `intent_router.classify` 跨轮意图消歧 |
+| `last_intent` | `IntentRouter` 完成后 | `intent_router.classify` 跨轮意图消歧 |
 | `accumulated_entities` | 每轮实体合并（新覆盖旧） | `knowledge_rag` / `ticket_handler` 实体补全 |
-| `turn_count` | 每轮递增 | 监控/调试 |
+| `turn_count` | 每轮递增 | 会话状态与调试 |
 
-请求结束时 `api/main.py` 调用 `export_for_persistence` 将工作记忆快照持久化到短期记忆；服务重启后，`SupervisorNode` 会从最近的 `[wm_snapshot]` 恢复 `last_intent`、`accumulated_entities` 和 `turn_count`。
+API checkpoint 路径以 MySQL 快照为权威来源：`SessionStore` 在请求内使用独立上下文，节点成功后把结构化状态与最近 20 条消息（不是 20 轮）一起持久化。Redis 不可用、过期或含有旧 `pending_action` 都不会覆盖 MySQL；第一次使用新 checkpoint 时不会自动迁移旧 Redis 会话。
 
-### RAG管线
+不传 `checkpoint_store` 的离线编排器仍保留原 Redis / 进程内存兼容路径，包括旧 `[wm_snapshot]` 的一次性读取。该兼容路径没有工作流断点恢复能力。详见下节。
 
-完整5步RAG流程：Query改写 → 向量检索(Top-5) → LLM重排序(Top-3) → 上下文注入 → 生成回答。
+### MySQL 节点级断点恢复
 
-### RAG向量库配置
+API 启动要求可连接 MySQL，缺少密码、连接失败或保存失败会停止推进，不静默降级。配置 `MYSQL_HOST`（默认 `127.0.0.1`）、`MYSQL_PORT`（默认 `3307`）、`MYSQL_DATABASE`（默认 `smartcs_checkpoint`）、`MYSQL_USER`（默认 `smartcs`）和必填 `MYSQL_PASSWORD`。本地独立依赖见 `compose.checkpoint.yaml`；容器访问宿主 MySQL 时必须配置可达地址，不能使用容器自身的 `127.0.0.1`。
 
-长期记忆实现位于 `memory/long_term.py`，当前使用 FAISS 做本地向量索引，并把原文 chunk、来源文件、`doc_id`、`chunk_index` 等 metadata 一起保存，方便回答后追溯来源。
+`agent_checkpoint` 包含 `id`、唯一 `session_id`、`user_id`、`state_json`、`status`、`version`、`created_at`、`updated_at`；`agent_checkpoint_request` 保存已完成请求回执，使旧请求在后续轮次之后仍可去重。快照只保存白名单文本消息和 JSON，不保存模型隐藏思考、API 凭据或可执行对象。
+
+```text
+PREPARED → ROUTED → EXECUTING → GENERATED → REVIEWED → FINISHED / WAIT_CONFIRM
+```
+
+`FINISHED` 对应设计方案的 `COMPLETED` 节点；状态使用 `running` / `finished` / `waiting`，其中 `waiting` 是已返回本轮回答、等待用户确认。恢复 `WAIT_CONFIRM` 只回放提示，必须通过新的聊天轮次明确确认或取消，不能代用户确认。
+
+- `POST /api/chat` 可带 `client_request_id`。同一会话、同一 ID 和相同内容回放；相同 ID 不同内容返回 409；不同 ID 正常开始下一轮。有未完成请求时拒绝新消息，不能吞掉新消息恢复旧请求。
+- `GET /api/checkpoints/{session_id}` 查询进度；`POST /api/checkpoints/{session_id}/resume` 只传可选 `client_request_id`，显式继续。身份来自登录状态。
+- GET / DELETE history 先检查认证账号的会话归属，再由 checkpoint 检查业务身份。清理会话同时清理回执；正在执行或尚未完成的请求不能删除。
+- 每会话使用 MySQL 连接持有的 `GET_LOCK`，每次更新使用版本 CAS。锁连接丢失后不能继续保存或执行新的写操作；不会按超时抢走仍在运行的请求。
+- 工单分析结果、WRITE 参数、幂等键与确认依据先落盘，再调用工具；退款、工单和合规转人工都复用同一防重入口。恢复时针对当前键检查 stale ledger，默认仍需 60 秒；结果不明时返回冲突并保留断点，不盲目重写。
+
+服务重启不会批量自动执行业务。未完成的模型生成步骤需要重新生成，不是逐 token 或模型内部状态恢复。MySQL 与业务 SQLite 之间没有分布式事务，恢复依赖已有权威业务查询，只覆盖当前退款/工单；不承诺任意外部工具 exactly-once。
+
+前端按认证账号保存当前标签页的会话和请求 ID，刷新后恢复历史，未完成请求提供“继续处理”。JWT 仅在 HttpOnly cookie 中，不存入 JavaScript 存储。切换账号时清空页面数据。请求未到达服务时，以原消息和原请求 ID 重发，不覆盖另一个运行中请求。MySQL 会话和回执无自动过期；最近 20 条消息不是永久完整聊天档案。旧匿名 checkpoint 不自动关联到新账号，避免认领他人历史。
+
+### RAG 管线
+
+完整 5 步 RAG 流程：Query 改写 → 向量检索（Top-5）→ LLM 重排序（Top-3）→ 上下文注入 → 生成回答。
+
+### RAG 向量库配置
+
+长期记忆实现位于 `memory/long_term.py`，使用 FAISS 做本地向量索引，并把原文 chunk、来源文件、`doc_id`、`chunk_index` 等 metadata 一起保存，方便回答后追溯来源。
 
 可选环境变量：
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `FAISS_INDEX_PATH` | `./vector_store/faiss_index` | FAISS索引与metadata保存位置 |
-| `EMBEDDING_BACKEND` | `hash` | `hash`离线兜底；`local`/`sentence_transformers`走本地模型；`openai`/`remote`走远程API |
-| `EMBEDDING_MODEL` | `BAAI/bge-small-zh-v1.5` | 本地embedding模型名；远程模式下可设为供应商支持的embedding模型 |
-| `EMBEDDING_DIM` | `1536` | 远程embedding维度提示，本地模型会自动读取维度 |
+| `FAISS_INDEX_PATH` | `./vector_store/faiss_index` | FAISS 索引与 metadata 保存位置 |
+| `EMBEDDING_BACKEND` | `hash` | `hash` 离线兜底；`local` / `sentence_transformers` 使用本地模型；`openai` / `remote` 使用远程 API |
+| `EMBEDDING_MODEL` | `BAAI/bge-small-zh-v1.5` | 本地 embedding 模型名；远程模式下可设为供应商支持的 embedding 模型 |
+| `EMBEDDING_DIM` | `1536` | 远程 embedding 维度提示，本地模型会自动读取维度 |
 
-工程建议：开发和测试可以用默认 `hash` 跑通流程；正式知识库优先使用本地 embedding 模型。当前 Apple RAG 知识库建议配置：
+工程建议：开发和测试可以用默认 `hash` 跑通流程；需要更强检索时可使用本地 embedding 模型。Apple RAG 知识库可使用以下配置：
 
 ```env
 EMBEDDING_BACKEND=local
 EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 ```
 
-切换 embedding 模型后必须重新入库，因为旧 FAISS 向量的维度和语义空间不能复用。生产检索建议显式设置 `min_score`，避免弱相关 chunk 被送进大模型。
+切换 embedding 模型后必须重新入库，因为旧 FAISS 向量的维度和语义空间不能复用。面向生产检索时，建议显式设置 `min_score`，避免弱相关 chunk 被送进大模型。
 
-### RAG知识库入库流程
+### RAG 知识库入库流程
 
 服务启动时不再写入演示知识。工程化流程是先构建向量索引，再启动 API 服务：
 
@@ -197,7 +307,7 @@ python -m scripts.ingest_knowledge_base --kb-dir ./knowledge_base/generated --in
 
 如果要同时入库人工整理文档和网页清洗文档，可继续使用 `--kb-dir ./knowledge_base`。
 
-当前 Apple 网页知识库最近一次采集结果为：18 个 URL 中 13 个页面生成可入库 Markdown，5 个正文过短页面被过滤。用 `BAAI/bge-small-zh-v1.5` 入库后，FAISS 索引为 512 维、95 个 chunk。
+此前 Apple 网页知识库的 URL 数量、过滤数量和 chunk 数量属于历史采集快照，不作为当前状态或验证结果。需要更新知识库时，请重新执行采集、抽样检查和入库流程。
 
 入库脚本会读取 `--kb-dir` 下的 `.md` 和 `.txt` 文件，切分 chunk，写入 FAISS 索引和同名 `.meta.json`。metadata 至少包含：
 
@@ -227,20 +337,22 @@ SentenceTransformerEmbeddingBackend 512 512 95
 
 ### 两阶段合规审查
 
-1. **规则引擎**（<2ms）：敏感词匹配 + PII检测
-2. **LLM深度审查**（~600ms）：处理越权承诺、隐晦违规等规则无法覆盖的场景
-3. 高风险直接拦截不走LLM，LLM失败安全降级为通过
+1. 规则引擎做本地、确定性的敏感词匹配和 PII 检测。
+2. LLM 合规检查处理规则未覆盖的越权承诺、隐晦违规等场景。
+3. 高风险规则命中时直接拦截，不进入 LLM 检查。当前 LLM JSON 解码失败的 fallback 是通过，不能表述为安全 fail-closed。
 
-### MCP工具
+### MCP 工具
 
-4个已注册工具（业务调用见 `ticket_handler` / 合规转人工）：
-- `order_query` — 查询本地 SQLite 国内电商演示订单（`ticket_handler`）
-- `ticket_create` — 工单创建
-- `knowledge_search` — 基于 `LongTermMemory.search()` 查询与主 RAG 共用的 FAISS 索引
-- `risk_check` — 已注册，合规接入规划中
+默认工具集（业务调用见 `ticket_handler`、`refund_handler` 或合规转人工）：
+- `order_query`：查询本地 SQLite 国内电商演示订单（`ticket_handler`）
+- `refund_evaluate`：先检查订单归属和退款条件
+- `refund_create`：经确认后创建退款申请，使用 `ExecutionLedger` 做执行幂等
+- `ticket_create`：通过 `TicketService` 持久化创建工单，使用 `client_request_id` 和 payload hash 做业务幂等
+- `ticket_query`：按工单号和用户归属查询持久化工单
+- `knowledge_search`：基于 `LongTermMemory.search()` 查询与主 RAG 共用的 FAISS 索引
+- `risk_check`：已注册的风险查询工具
 
-`knowledge_search` 不再返回固定 mock 数据。它会在启动时复用 `FAISS_INDEX_PATH`
-对应的 `LongTermMemory`，返回最多 10 个真实命中文档片段，以及来源、相似度分数和 metadata。
+应用启动时，`knowledge_search` 复用 `FAISS_INDEX_PATH` 对应的 `LongTermMemory`，返回命中文档片段、来源、相似度分数和 metadata。
 可通过 HTTP 直接验证：
 
 ```powershell
@@ -255,20 +367,30 @@ Invoke-RestMethod -Method Post `
   -Body $body
 ```
 
-### RAG 延迟与降级
+### RAG 降级
 
 知识问答默认保留完整链路：查询改写 -> FAISS 检索 -> LLM 重排 -> 回答生成 -> 合规审查。
 `RAG_ENABLE_QUERY_REWRITE=true` 与 `RAG_ENABLE_RERANK=true` 是默认配置，不应仅为了压缩延迟而关闭。
 
-FAISS 检索通常是毫秒级；模型调用和 Redis 不可用时的重复连接更可能造成长延迟。
-当 `REDIS_URL` 不可用时，系统会在 `REDIS_CONNECT_TIMEOUT_SECONDS` 内快速回退到进程内短期记忆，
-并在 `REDIS_RETRY_COOLDOWN_SECONDS` 冷却期内不重复阻塞请求。生产环境仍应部署 Redis。
+`REDIS_URL` 不可用时，短期记忆回退到进程内存，并在 `REDIS_RETRY_COOLDOWN_SECONDS` 冷却期内不重复尝试连接。该 fallback 不具备进程重启后的持久性；API checkpoint 路径改为读取 MySQL 恢复，不依赖 Redis。当前 RAG 的 LLM provider 异常会向上层传播，本文不宣称存在自动的 LLM failover。
 
-### SQLite 国内电商演示订单
+### SQLite 电商业务 Sandbox
 
 `order_query` 使用本地 SQLite 文件 `data/orders.db`。首次启动 API 或运行下面的初始化命令时，
 系统会确定性地生成 100 笔国内电商风格的演示订单及商品明细，覆盖待付款、待发货、运输中、已签收、退款审核中、已退款和已取消等状态。
 数据包含支付状态、实付金额、脱敏收货信息、快递公司、运单号、售后状态和创建时间，但不代表任何真实平台或用户数据。
+业务数据分为 `users`、`orders`、`order_items`、`payments`、`shipments`、`refunds` 和 `support_tickets` 表。
+`OrderRepository.get_order()` 保留原有字段，并附带 `payment`、`shipment` 和 `refunds` 详情；未发生支付或发货时对应值为 `None`，无退款时为 `[]`。
+初始化会为旧版数据库补齐关联数据，重复运行不会重复造数。初始化脚本会输出各表的记录数。
+本阶段只提供合成业务数据及本地 Sandbox 工具执行，不执行真实退款；审批接口仅用于本地运维演示。`refund_create` 和 `ticket_create` 是 medium risk 写操作，当前需要确认和幂等，不会因为 medium risk 自动进入人工审批。
+
+运行确定性的业务状态模拟器（只在 CLI 层等待）：
+
+```powershell
+python -m scripts.run_business_simulator --db-path ./data/orders.db --ticks 10 --interval 1 --max-transitions 20 --create-orders 2
+```
+
+每次 tick 最多推进每笔订单一次；退款只完成已有 `refund_pending` 记录，不会从已签收订单自动发起退款。
 
 手动初始化或修复本地数据库：
 
@@ -281,7 +403,7 @@ python -m scripts.init_demo_orders
 ```powershell
 $body = @{
   name = "order_query"
-  arguments = @{ order_id = "ORD-20260801-0001"; user_id = "terminal_user" }
+  arguments = @{ order_id = "ORD-20260801-0001" }
 } | ConvertTo-Json -Depth 3
 
 Invoke-RestMethod -Method Post `
@@ -290,21 +412,91 @@ Invoke-RestMethod -Method Post `
   -Body $body
 ```
 
-## API接口
+## API 接口
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/api/chat` | POST | 聊天 |
-| `/api/history/{session_id}` | GET | 对话历史 |
-| `/api/demo/orders` | GET | Web 工作台的演示订单快捷列表 |
-| `/api/tools` | GET | MCP工具列表 |
-| `/api/tools/call` | POST | MCP工具调用 |
+| `/api/auth/login`、`/api/auth/logout` | POST | 登录、退出；cookie 与来源检查 |
+| `/api/auth/me` | GET | 当前认证账号 |
+| `/api/sessions` | GET / POST | 自己的会话列表、服务端创建会话 |
+| `/api/sessions/{session_id}` | GET / DELETE | 本人会话详情、删除 |
+| `/api/history/{session_id}` | GET | 本人对话历史 |
+| `/api/history/{session_id}` | DELETE | 清除本人非运行中会话快照与回执 |
+| `/api/checkpoints/{session_id}` | GET | 本人节点状态；不暴露内部草稿或工具参数 |
+| `/api/checkpoints/{session_id}/resume` | POST | 显式恢复；仅可选 client_request_id |
+| `/api/demo/orders` | GET | 当前认证用户的订单 |
+| `/api/tools` | GET | MCP 工具列表 |
+| `/api/tools/call` | POST | 兼容调用入口；仅允许 READ 工具 |
+| `/api/tools/execute` | POST | 客户允许的 READ 工具；WRITE 仅聊天入口 |
+| `/api/approvals` | POST | 创建本地 Sandbox 审批记录 |
+| `/api/approvals/{approval_id}` | GET | 查询本地 Sandbox 审批记录 |
+| `/api/approvals/{approval_id}/approve` | POST | 批准本地 Sandbox 审批记录 |
+| `/api/approvals/{approval_id}/reject` | POST | 拒绝本地 Sandbox 审批记录 |
 | `/api/metrics` | GET | 系统指标 |
+| `/api/metrics/runtime` | GET | 请求、工具和恢复的聚合运行时指标 |
 | `/health` | GET | 健康检查 |
+
+表中的审批接口及 `/api/metrics` 为兼容旧路径保留，但拒绝客户访问；内部审批服务仍供执行策略与离线测试使用。其他客户接口需要登录，健康检查与登录页面可匿名访问。CLI 调用需先登录并保留 cookie，不能直接照搬旧匿名请求示例。
+
+## Runtime observability
+
+- 外层 ASGI 请求包装器读取或生成 `X-Request-ID`，并把同一个 ID 返回到响应头。
+- `/api/metrics/runtime` 返回 requests、tools、recovery 三类聚合指标。
+- 本轮实现的运行时操作日志只记录经过清洗的请求、工具和恢复字段，不记录 arguments、result 或自由文本业务内容。该说明不覆盖项目中的所有日志。
+- OpenTelemetry 可发送到可选的 OTLP-compatible collector；本地没有 collector 时可设置 `OTEL_SDK_DISABLED=true`。
+
+## Verification
+
+```powershell
+python -m scripts.check_repository_readiness
+python -m pytest -q
+python -m evals.runner
+python -m evals.runner --json
+```
+
+`pytest` 覆盖代码和集成回归，Eval runner 检查场景级 Agent 与业务不变量。2026-09-18 checkpoint 阶段的历史全量复验为 `284 passed in 58.14s`，验收报告见 [checkpoint_test_report.md](artifacts/checkpoint_20260918/checkpoint_test_report.md)，原始输出见 [full_suite.txt](artifacts/checkpoint_20260918/full_suite.txt)；同阶段原有 Eval 14 / 14 和 3 项 Node 测试的验收记录见同目录 `round1_acceptance.md`。复现全量测试需设置 `OTEL_SDK_DISABLED=true`、`EMBEDDING_BACKEND=hash` 和 `SMARTCS_CHECKPOINT_MYSQL_TEST=1`，并提供可用 MySQL。14 项 checkpoint pytest 已包含在历史 284 项内；Node 另计。本轮认证全量为 351 项通过，详见文首及本轮执行回报。原有 Eval 没有扩展为 checkpoint 场景集，不能用 14 / 14 代替恢复验收，也不代表在线模型质量、真实流量、生产 SLA 或远程 CI 结果。
+
+真实 MySQL 定向验证必须显式开启，不会因本机存在 `.env` 自动运行外部集成测试：
+
+```text
+niu -c 'env OTEL_SDK_DISABLED=true EMBEDDING_BACKEND=hash SMARTCS_CHECKPOINT_MYSQL_TEST=1 python -m pytest -q'
+niu -c 'env OTEL_SDK_DISABLED=true EMBEDDING_BACKEND=hash SMARTCS_CHECKPOINT_MYSQL_TEST=1 python -m pytest -q tests/test_checkpoint.py'
+niu -c 'node --test tests/test_checkpoint_ui.cjs'
+```
+
+不开启该测试开关时，13 项 MySQL 用例明确 skip；默认离线 pytest 的生命周期测试使用 fake store。每次真实测试使用随机 session 和隔离临时 SQLite，结束只删除测试会话，不操作真实订单库。253 项早期验收与 270 项增量前测试均保留为历史基线，不作为当前数量；旧证据入口见 [简历与面试说明](docs/resume_interview.md#主张来源和边界)。
+
+## Suggested Demo
+
+1. 启动配置好 LLM provider 和认证密钥的 API，创建本地账号，在浏览器登录并新建会话。
+2. 查询该用户名下的本地演示订单，展示路由和订单归属检查。
+3. 使用同一用户、同一会话和一笔符合条件的订单发起退款请求，展示 `refund_evaluate` 的评估结果和会话中的待确认状态。
+4. 回复确认，展示 `refund_create`、待确认状态清除和 SQLite 中恰好一个持久化退款效果。
+5. 创建并查询一个持久化支持工单，展示业务请求幂等。
+6. 查看 `/api/metrics/runtime`，再运行离线 Eval 输出。
+
+不依赖 API 的确定性证据演示：
+
+```powershell
+python -m evals.runner
+```
+
+交互式 API 演示仍需要配置 LLM provider。
+
+## Current Boundaries
+
+- 业务数据使用本地 SQLite Sandbox，不代表真实平台或用户数据。
+- 客户 API 已接入认证；无生产 RBAC，内部审批接口不向客户开放。
+- checkpoint 有 MySQL 会话锁和 CAS，但本地业务 SQLite 不构成跨主机共享业务存储；不宣称完整多实例生产部署或分布式事务。
+- 离线确定性 Eval 不测量在线 LLM 回答质量。
+- 本次工作会话没有验证远程 GitHub Actions。
+- 项目不声明生产流量、生产 SLA 或已部署状态。
+- SSE 和更丰富的 UI 属于可选扩展，不是本地目标的必需条件。
 
 ## Terminal TUI
 
-TUI 是一个 PowerShell 友好的轻量终端入口，只调用现有 FastAPI 接口，不改变后端 Agent 编排。
+旧 TUI 仍保留在仓库，但其匿名 user_id 协议已被客户 API 拒绝，本轮不将 TUI 标为可用验收入口。请使用已登录的 Web UI 或保存登录 cookie 的 HTTP 客户端；以下 TUI 启动说明仅为旧客户端参考，不提供绕过认证的兼容开关。
 
 先启动后端服务：
 
@@ -337,7 +529,7 @@ TUI 内置命令：
 ## Web 客服工作台
 
 启动 API 后访问 [http://localhost:8000](http://localhost:8000)，可使用浏览器中的聊天工作台。
-页面支持发送客服问题、查看路由/合规状态，并点击右侧订单列表直接调用 `order_query`。
+页面先要求登录，登录后支持历史会话、客服问题和自己的订单查询。
 通过聊天流程查询时，使用完整订单号，例如：`查询订单 ORD-20260801-0001`。
 
 ### 测试
@@ -345,7 +537,9 @@ TUI 内置命令：
 ```bash
 curl -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
-  -d '{"user_id": "user_001", "message": "理财产品A的收益率是多少？"}'
+  -H "Origin: http://localhost:8000" \
+  -b cookies.txt \
+  -d '{"message": "我能咨询哪些问题？"}'
 ```
 
 ## Docker
@@ -429,7 +623,7 @@ docker run -d --name smartcs-api `
 | 配置 | 作用 |
 |------|------|
 | `-d --name smartcs-api` | 后台运行容器，并使用固定名称便于 start/stop/logs |
-| `--env-file .env.docker` | 注入模型服务、embedding、FAISS路径等环境变量 |
+| `--env-file .env.docker` | 注入模型服务、embedding、FAISS 路径等环境变量 |
 | `-v "${PWD}\data:/app/data"` | 挂载本地 SQLite 演示订单，避免容器重建后重新生成 |
 | `-v "${PWD}\vector_store:/app/vector_store"` | 挂载宿主机已构建好的 FAISS 索引 |
 | `smartcs-hf-cache` | 缓存 HuggingFace 模型文件，避免每次容器启动都重新下载 |
@@ -471,15 +665,29 @@ docker stop lucid_johnson
 
 日志中如果出现 `localhost:4317` / `OTLP` / `Failed to export traces`，通常只是 OpenTelemetry 追踪收集器未启动，不影响 `/health`、`/docs` 和 `/api/chat` 使用。需要追踪时再单独启动 Jaeger 或 OTLP collector。
 
-### GitHub Actions 自动发布镜像
+### GitHub Actions 工作流配置
 
-仓库包含 `.github/workflows/build-image.yml`。当 Pull Request 合并到 `main` 后，GitHub Actions 会先运行测试，再构建并发布 GHCR 镜像：
+仓库包含 `.github/workflows/build-image.yml`。工作流配置为：
 
 ```text
-ghcr.io/acaia-77/smartcs:latest
+Pull Request
+    -> repository readiness
+    -> pytest
+    -> offline Eval
+    -> 不构建和发布镜像
+
+main push / workflow_dispatch
+    -> 同一质量门禁
+    -> image build / publish
 ```
 
-Pull Request 只执行测试和镜像构建，不发布镜像；合并到 `main` 后才会推送 `latest` 和 commit SHA 标签。workflow 使用 GitHub 自动提供的 `GITHUB_TOKEN`，不需要把 Docker Hub 或 GHCR 密钥写进仓库。
+镜像仓库名为：
+
+```text
+ghcr.io/acaia-77/smartcs:<tag>
+```
+
+Pull Request 只执行仓库就绪检查、测试和离线 Eval，不发布镜像。`main` push 和 `workflow_dispatch` 在同一质量门禁通过后，按 workflow 的标签规则构建并发布镜像，默认分支规则可能产生 `latest`，同时可以产生 commit SHA 等标签。workflow 使用 GitHub 自动提供的 `GITHUB_TOKEN`，不需要把 Docker Hub 或 GHCR 密钥写进仓库。本次工作会话没有执行或验证远程 GitHub Actions。
 
 首次使用 GHCR 时，需要在 GitHub Packages 中将该镜像设置为 Public，或者在本机先执行 `docker login ghcr.io`。不要把个人访问令牌写入 `.env.docker` 或提交到 Git。
 
@@ -526,8 +734,8 @@ docker compose --profile auto-update up -d
 Watchtower 只监控 `smartcs-api`，不会自动更新 Redis。它需要访问 Docker Socket；这是自动重建容器所必需的权限，因此只建议在个人开发机或受控测试环境启用。更新链路如下：
 
 ```text
-PR 合并到 main
-    -> GitHub Actions 运行测试
+main push / workflow_dispatch
+    -> GitHub Actions 运行质量门禁
     -> 构建并推送 GHCR 镜像
     -> Watchtower 检测到 latest 变化
     -> 拉取新镜像并重建 smartcs-api

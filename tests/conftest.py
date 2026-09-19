@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
-from memory.working_memory import WorkingMemory
 from memory.long_term import LongTermMemory
 
 
@@ -79,11 +78,6 @@ class MockLLM:
             return AIMessage(content=self.overrides.get("rag_rewrite", "订单物流查询"))
 
         return AIMessage(content=self.overrides.get("default", "ok"))
-
-
-@pytest.fixture
-def working_memory() -> WorkingMemory:
-    return WorkingMemory()
 
 
 @pytest.fixture

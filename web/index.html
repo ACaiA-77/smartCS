@@ -4,12 +4,28 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0b5f55" />
-    <title>SmartCS 客服工作台</title>
+    <title>SmartCS 智能客服</title>
     <link rel="stylesheet" href="/ui/styles.css" />
   </head>
   <body>
-    <main class="app-shell">
-      <aside class="sidebar" aria-label="工作台导航">
+    <a class="skip-link" href="#message-input">跳到对话输入</a>
+    <section class="login-page" id="login-page" aria-labelledby="login-title">
+      <div class="login-brand brand"><span class="brand-mark">S</span><span>SmartCS</span></div>
+      <form class="login-form" id="login-form">
+        <p class="topbar-kicker">你的智能客服</p>
+        <h1 id="login-title">登录后，继续你的咨询</h1>
+        <p class="panel-copy">查询自己的订单、处理售后，也可以接着上次的对话聊。</p>
+        <label for="username">用户名</label>
+        <input id="username" name="username" autocomplete="username" required maxlength="128" />
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required />
+        <p class="auth-message" id="auth-message" role="status">正在检查登录状态…</p>
+        <button class="send-button" id="login-button" type="submit" disabled>登录</button>
+        <p class="panel-copy">请使用已开通的账户，本页面暂不提供注册。</p>
+      </form>
+    </section>
+    <main class="app-shell" id="app-shell" hidden>
+      <aside class="sidebar" aria-label="客服导航">
         <div class="brand">
           <span class="brand-mark">S</span>
           <span>SmartCS</span>
@@ -21,26 +37,15 @@
         </button>
 
         <nav class="primary-nav" aria-label="主导航">
-          <button class="nav-item is-active" type="button" aria-current="page">
-            <i data-lucide="messages-square"></i>
-            <span>智能客服</span>
-          </button>
           <button class="nav-item" type="button" id="history-button">
             <i data-lucide="history"></i>
-            <span>当前会话</span>
+            <span>刷新历史会话</span>
           </button>
-          <a class="nav-item" href="/docs" target="_blank" rel="noreferrer">
-            <i data-lucide="braces"></i>
-            <span>接口文档</span>
-          </a>
         </nav>
 
         <section class="sidebar-section">
-          <p class="section-label">本次会话</p>
-          <div class="session-row is-selected">
-            <span class="session-dot"></span>
-            <span id="session-name">新客服咨询</span>
-          </div>
+          <p class="section-label">历史会话</p>
+          <div class="session-list" id="session-list" aria-label="历史会话列表"></div>
         </section>
 
         <div class="sidebar-footer">
@@ -52,12 +57,13 @@
       <section class="conversation-area" aria-label="客服对话">
         <header class="topbar">
           <div>
-            <p class="topbar-kicker">智能客服工作台</p>
-            <h1>面向订单、知识与售后的统一对话入口</h1>
+            <p class="topbar-kicker">SmartCS 智能客服</p>
+            <h1 id="session-name">新客服咨询</h1>
           </div>
           <div class="topbar-actions">
-            <span class="session-id" id="session-id"></span>
-            <button class="icon-button" id="refresh-orders" type="button" title="刷新演示订单" aria-label="刷新演示订单">
+            <span class="account-name" id="account-name"></span>
+            <button class="text-button" id="logout-button" type="button">退出登录</button>
+            <button class="icon-button" id="refresh-orders" type="button" title="刷新我的订单" aria-label="刷新我的订单">
               <i data-lucide="refresh-cw"></i>
             </button>
           </div>
@@ -68,7 +74,7 @@
             <div class="welcome-symbol"><i data-lucide="sparkles"></i></div>
             <div>
               <h2>今天想处理什么问题？</h2>
-              <p>可以咨询 Apple 支持知识、创建售后工单，或查询本地国内电商演示订单。</p>
+              <p>可以咨询 Apple 支持知识、查询自己的订单，或创建售后工单。</p>
             </div>
           </section>
 
@@ -76,7 +82,6 @@
             <button type="button" data-prompt="Apple 账户忘记密码怎么恢复？">恢复 Apple 账户</button>
             <button type="button" data-prompt="从 Apple 购买的 App 或内容怎么申请退款？">申请 Apple 购买项目退款</button>
             <button type="button" data-prompt="我要投诉服务问题，请帮我创建工单">创建投诉工单</button>
-            <button type="button" data-order-id="ORD-20260801-0095">查询演示订单</button>
           </div>
 
           <div class="message-list" id="message-list" aria-live="polite"></div>
@@ -90,19 +95,19 @@
             <i data-lucide="arrow-up"></i>
           </button>
         </form>
-        <p class="composer-hint">订单、知识库与工单处理均通过当前会话追踪。演示订单不代表真实平台数据。</p>
+        <p class="composer-hint">会话会自动保存到当前账户。演示订单不代表真实平台数据。</p>
       </section>
 
-      <aside class="context-panel" aria-label="会话上下文与订单工具">
+      <aside class="context-panel" aria-label="我的订单">
         <section class="context-section">
           <div class="section-heading">
             <div>
-              <p class="section-label">订单工具</p>
-              <h2>演示订单</h2>
+              <p class="section-label">当前账户</p>
+              <h2>我的订单</h2>
             </div>
-            <span class="count-badge" id="order-count">100 笔</span>
+            <span class="count-badge" id="order-count"></span>
           </div>
-          <p class="panel-copy">点击订单号可直接调用 MCP 订单工具，无需等待大模型路由。</p>
+          <p class="panel-copy">选择订单，查看物流、支付与售后进度。</p>
           <div class="order-list" id="order-list">
             <p class="loading-row">正在载入订单...</p>
           </div>
@@ -118,22 +123,10 @@
           </div>
           <div class="empty-detail" id="order-detail">
             <i data-lucide="mouse-pointer-click"></i>
-            <p>选择一笔演示订单后，物流、支付与售后信息会显示在这里。</p>
+            <p>选择你的订单后，详细信息会显示在这里。</p>
           </div>
         </section>
 
-        <section class="tool-status" aria-label="当前处理状态">
-          <div class="tool-status-row">
-            <i data-lucide="route"></i>
-            <span>最近路由</span>
-            <strong id="intent-value">等待输入</strong>
-          </div>
-          <div class="tool-status-row">
-            <i data-lucide="shield-check"></i>
-            <span>合规检查</span>
-            <strong id="compliance-value">未执行</strong>
-          </div>
-        </section>
       </aside>
     </main>
 

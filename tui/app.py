@@ -123,7 +123,7 @@ def run_repl(client: AgentApiClient, user_id: str, session_id: str) -> None:
                 print(client.health())
                 continue
             if parsed.name == "history":
-                print(format_history(client.history(session_id)))
+                print(format_history(client.history(session_id, user_id=user_id)))
                 continue
 
             result = client.chat(parsed.value, user_id=user_id, session_id=session_id)

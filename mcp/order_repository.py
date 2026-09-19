@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
+from collections.abc import Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -22,8 +24,9 @@ class OrderRepository:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             self._create_schema(connection)
+            self._seed_demo_users(connection)
             self._seed_demo_orders(connection)
-            self._repair_demo_tracking_numbers(connection)
+            self._seed_order_details(connection)
             return int(connection.execute("SELECT COUNT(*) FROM orders").fetchone()[0])
 
     def count_orders(self) -> int:
@@ -49,11 +52,31 @@ class OrderRepository:
                 """,
                 (order_id,),
             ).fetchall()
+            payment = connection.execute(
+                "SELECT * FROM payments WHERE order_id = ? ORDER BY created_at DESC, payment_id DESC LIMIT 1",
+                (order_id,),
+            ).fetchone()
+            shipment = connection.execute(
+                "SELECT * FROM shipments WHERE order_id = ? ORDER BY updated_at DESC, shipment_id DESC LIMIT 1",
+                (order_id,),
+            ).fetchone()
+            refunds = connection.execute(
+                "SELECT * FROM refunds WHERE order_id = ? ORDER BY requested_at, refund_id",
+                (order_id,),
+            ).fetchall()
 
         result = dict(row)
         result["items"] = [dict(item) for item in items]
         result["product"] = self._product_summary(result["items"])
+        result["payment"] = dict(payment) if payment is not None else None
+        result["shipment"] = dict(shipment) if shipment is not None else None
+        result["refunds"] = [dict(refund) for refund in refunds]
         return result
+
+    def get_order_for_user(self, order_id: str, user_id: str) -> dict[str, Any] | None:
+        """Treat an order belonging to another user exactly like a missing order."""
+        order = self.get_order(order_id)
+        return order if order is not None and order["user_id"] == user_id else None
 
     def list_orders(self, limit: int = 6) -> list[dict[str, Any]]:
         """List recent demo orders for the web workbench quick-action panel."""
@@ -70,14 +93,55 @@ class OrderRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def _connect(self) -> sqlite3.Connection:
+    def list_orders_for_user(self, user_id: str, limit: int = 6) -> list[dict[str, Any]]:
+        """List only the authenticated customer's recent sandbox orders."""
+        safe_limit = max(1, min(limit, 20))
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT order_id, status, status_label, pay_amount, created_at
+                FROM orders
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (user_id, safe_limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.db_path)
-        connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("BEGIN")
+            yield connection
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """Expose one repository-owned transaction for business mutations."""
+        with self._connect() as connection:
+            yield connection
 
     @staticmethod
     def _create_schema(connection: sqlite3.Connection) -> None:
-        connection.executescript(
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
             """
             CREATE TABLE IF NOT EXISTS orders (
                 order_id TEXT PRIMARY KEY,
@@ -99,9 +163,13 @@ class OrderRepository:
                 after_sale_status TEXT NOT NULL,
                 after_sale_status_label TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(user_id)
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS order_items (
                 item_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 order_id TEXT NOT NULL,
@@ -111,9 +179,86 @@ class OrderRepository:
                 quantity INTEGER NOT NULL,
                 item_total REAL NOT NULL,
                 FOREIGN KEY(order_id) REFERENCES orders(order_id)
-            );
+            )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS payments (
+                payment_id TEXT PRIMARY KEY,
+                order_id TEXT NOT NULL,
+                amount REAL NOT NULL CHECK(amount >= 0),
+                status TEXT NOT NULL,
+                paid_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(order_id) REFERENCES orders(order_id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS shipments (
+                shipment_id TEXT PRIMARY KEY,
+                order_id TEXT NOT NULL,
+                carrier TEXT NOT NULL,
+                tracking_number TEXT NOT NULL,
+                status TEXT NOT NULL,
+                shipped_at TEXT,
+                delivered_at TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(order_id) REFERENCES orders(order_id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS refunds (
+                refund_id TEXT PRIMARY KEY,
+                order_id TEXT NOT NULL,
+                payment_id TEXT NOT NULL,
+                amount REAL NOT NULL CHECK(amount >= 0),
+                reason TEXT NOT NULL,
+                status TEXT NOT NULL,
+                requested_at TEXT NOT NULL,
+                completed_at TEXT,
+                FOREIGN KEY(order_id) REFERENCES orders(order_id) ON DELETE CASCADE,
+                FOREIGN KEY(payment_id) REFERENCES payments(payment_id),
+                FOREIGN KEY(payment_id, order_id) REFERENCES payments(payment_id, order_id)
+            )
+            """
+        )
+
+        # The composite FK above needs a matching unique key on the parent.
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_payments_payment_order ON payments(payment_id, order_id)"
+        )
+
+    @staticmethod
+    def _seed_demo_users(connection: sqlite3.Connection) -> None:
+        """Add users needed by demo orders without changing existing user rows."""
+        base_time = datetime(2026, 7, 1, 9, 0, 0)
+        user_ids = {
+            f"user_{index:03d}" for index in range(1, 21)
+        }
+        user_ids.update(
+            row[0]
+            for row in connection.execute(
+                "SELECT DISTINCT user_id FROM orders WHERE user_id IS NOT NULL"
+            ).fetchall()
+        )
+        for index, user_id in enumerate(sorted(user_ids)):
+            connection.execute(
+                """
+                INSERT INTO users (user_id, display_name, created_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO NOTHING
+                """,
+                (
+                    user_id,
+                    f"演示用户 {user_id.removeprefix('user_')}",
+                    (base_time + timedelta(minutes=17 * index)).isoformat(timespec="seconds"),
+                ),
+            )
 
     @staticmethod
     def _seed_demo_orders(connection: sqlite3.Connection) -> None:
@@ -228,31 +373,114 @@ class OrderRepository:
             )
 
     @staticmethod
-    def _repair_demo_tracking_numbers(connection: sqlite3.Connection) -> None:
-        """Keep the generated demo database aligned after deterministic seed changes."""
-        prefixes = {
-            "顺丰速运": "SF",
-            "京东物流": "JD",
-            "中通快递": "ZT",
-            "圆通速递": "YT",
-        }
-        rows = connection.execute(
-            """
-            SELECT order_id, courier_company
-            FROM orders
-            WHERE order_id LIKE 'ORD-20260801-%'
-              AND courier_company IS NOT NULL
-            """
-        ).fetchall()
+    def _seed_order_details(connection: sqlite3.Connection) -> None:
+        """Fill missing detail rows from legacy order columns, preserving edits."""
+        rows = connection.execute("SELECT * FROM orders ORDER BY order_id").fetchall()
         for row in rows:
-            prefix = prefixes.get(row["courier_company"])
-            if prefix is None:
-                continue
-            suffix = row["order_id"].rsplit("-", 1)[-1]
-            connection.execute(
-                "UPDATE orders SET tracking_number = ? WHERE order_id = ?",
-                (f"{prefix}20260801{int(suffix):04d}", row["order_id"]),
-            )
+            order_id = row["order_id"]
+            status = row["status"]
+            paid = status in {
+                "paid",
+                "processing",
+                "shipped",
+                "in_transit",
+                "delivered",
+                "refund_pending",
+                "refunded",
+            }
+            payment_id = f"PAY-{order_id.removeprefix('ORD-')}"
+            any_payment = connection.execute(
+                "SELECT payment_id FROM payments WHERE order_id = ? "
+                "ORDER BY created_at DESC, payment_id DESC LIMIT 1",
+                (order_id,),
+            ).fetchone()
+            existing_payment = connection.execute(
+                "SELECT payment_id FROM payments WHERE order_id = ? AND status = 'paid' "
+                "ORDER BY created_at DESC, payment_id DESC LIMIT 1",
+                (order_id,),
+            ).fetchone()
+            payment_created_at = _add_minutes(row["created_at"], 5)
+            paid_at = _add_minutes(row["created_at"], 10) if paid else None
+            if paid and any_payment is None:
+                connection.execute(
+                    """
+                    INSERT INTO payments (payment_id, order_id, amount, status, paid_at, created_at)
+                    VALUES (?, ?, ?, 'paid', ?, ?)
+                    ON CONFLICT(payment_id) DO NOTHING
+                    """,
+                    (payment_id, order_id, row["pay_amount"], paid_at, payment_created_at),
+                )
+                existing_payment = connection.execute(
+                    "SELECT payment_id FROM payments WHERE payment_id = ? AND order_id = ?",
+                    (payment_id, order_id),
+                ).fetchone()
+            if existing_payment is not None:
+                payment_id = existing_payment["payment_id"]
+
+            if status in {"shipped", "in_transit", "delivered"}:
+                existing_shipment = connection.execute(
+                    "SELECT 1 FROM shipments WHERE order_id = ? LIMIT 1",
+                    (order_id,),
+                ).fetchone()
+                if existing_shipment is not None:
+                    continue
+                shipped_at = row["shipped_at"] or _add_minutes(row["created_at"], 18 * 60)
+                delivered_at = row["delivered_at"]
+                if status == "delivered" and not delivered_at:
+                    delivered_at = _add_minutes(row["created_at"], 3 * 24 * 60)
+                shipment_updated_at = delivered_at or shipped_at or row["updated_at"]
+                connection.execute(
+                    """
+                    INSERT INTO shipments (
+                        shipment_id, order_id, carrier, tracking_number, status,
+                        shipped_at, delivered_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(shipment_id) DO NOTHING
+                    """,
+                    (
+                        f"SHP-{order_id.removeprefix('ORD-')}",
+                        order_id,
+                        row["courier_company"] or "演示物流",
+                        row["tracking_number"] or f"DEMO{order_id.rsplit('-', 1)[-1]}",
+                        status,
+                        shipped_at,
+                        delivered_at,
+                        shipment_updated_at,
+                    ),
+                )
+
+            if status in {"refund_pending", "refunded"}:
+                existing_refund = connection.execute(
+                    "SELECT 1 FROM refunds WHERE order_id = ? LIMIT 1",
+                    (order_id,),
+                ).fetchone()
+                if existing_refund is not None or existing_payment is None:
+                    continue
+                refund_status = "completed" if status == "refunded" else "pending"
+                requested_at = _add_minutes(row["created_at"], 60)
+                completed_at = _add_minutes(row["created_at"], 90) if status == "refunded" else None
+                connection.execute(
+                    """
+                    INSERT INTO refunds (
+                        refund_id, order_id, payment_id, amount, reason, status,
+                        requested_at, completed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(refund_id) DO NOTHING
+                    """,
+                    (
+                        f"REF-{order_id.removeprefix('ORD-')}",
+                        order_id,
+                        payment_id,
+                        connection.execute(
+                            "SELECT amount FROM payments WHERE payment_id = ?",
+                            (payment_id,),
+                        ).fetchone()[0],
+                        "用户申请退款",
+                        refund_status,
+                        requested_at,
+                        completed_at,
+                    ),
+                )
 
     @staticmethod
     def _product_summary(items: list[dict[str, Any]]) -> str:
@@ -264,3 +492,10 @@ class OrderRepository:
             return title
         total_quantity = sum(int(item["quantity"]) for item in items)
         return f"{title} 等 {total_quantity} 件商品"
+
+
+def _add_minutes(value: str, minutes: int) -> str:
+    try:
+        return (datetime.fromisoformat(value) + timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    except (TypeError, ValueError):
+        return value

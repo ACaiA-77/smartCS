@@ -4,65 +4,137 @@ FastAPI入口 — REST API（/api/chat 等）；SSE 流式为规划项
 
 from __future__ import annotations
 
+import logging
+import asyncio
 import os
-import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
-from agents.supervisor import create_supervisor_graph
-from memory.working_memory import WorkingMemory
+from auth.context import UserContext
+from auth.dependency import get_current_user, check_request_origin, cors_allowed_origins
+from auth.jwt import issue_token, cookie_options, COOKIE_NAME, TOKEN_TTL_SECONDS
+from auth.password import verify_password
+from platform_db.database import PlatformDatabase, PlatformUnavailable, PlatformConflict
+from platform_db.users import Users
+from platform_db.sessions import Sessions
+
+from agents.orchestrator import create_chat_orchestrator
+from checkpoint.models import AgentCheckpoint, CheckpointError, CheckpointConflict, CheckpointOwnershipError
+from checkpoint.store import CheckpointStore
 from memory.short_term import ShortTermMemory
+from memory.session_store import ConversationState, SessionStore
 from memory.long_term import LongTermMemory
 from mcp.mcp_server import MCPToolServer, create_default_tools
 from mcp.order_repository import OrderRepository
+from mcp.approval_store import ApprovalNotFoundError, ApprovalService, ApprovalStateError
+from mcp.execution_ledger import ExecutionLedger
+from mcp.tool_execution import ToolExecutionContext
+from refunds.service import RefundService
+from tickets.service import TicketService
 from tracing.otel_config import init_tracer, AgentMetrics, set_agent_metrics
+from tracing.observability import (
+    InstrumentedExecutionReconciler,
+    InstrumentedToolExecutor,
+    RuntimeMetrics,
+    install_request_observability,
+)
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
 
-working_memory = WorkingMemory()
+
 short_term_memory = ShortTermMemory(
     redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
     redis_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT_SECONDS", "0.5")),
     redis_retry_cooldown=float(os.getenv("REDIS_RETRY_COOLDOWN_SECONDS", "30")),
 )
+session_store = SessionStore(short_term_memory)
 long_term_memory = LongTermMemory(index_path=os.getenv("FAISS_INDEX_PATH", "./vector_store/faiss_index"))
 order_repository = OrderRepository(os.getenv("ORDER_DB_PATH", "./data/orders.db"))
+refund_service = RefundService(order_repository)
+ticket_service = TicketService(order_repository)
 mcp_server = create_default_tools(
     MCPToolServer(),
     long_term_memory=long_term_memory,
     order_repository=order_repository,
+    refund_service=refund_service,
+    ticket_service=ticket_service,
+)
+execution_ledger = ExecutionLedger(order_repository.db_path)
+approval_service = ApprovalService(order_repository.db_path)
+runtime_metrics = RuntimeMetrics()
+execution_reconciler = InstrumentedExecutionReconciler(
+    execution_ledger,
+    refund_service,
+    ticket_service=ticket_service,
+    runtime_metrics=runtime_metrics,
+)
+tool_executor = InstrumentedToolExecutor(
+    mcp_server,
+    ledger=execution_ledger,
+    approval_service=approval_service,
+    runtime_metrics=runtime_metrics,
 )
 metrics = AgentMetrics()
-graph = None
+chat_orchestrator = None
+checkpoint_store = None
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    global graph
+    global chat_orchestrator, checkpoint_store
 
     init_tracer(
         service_name=os.getenv("OTEL_SERVICE_NAME", "smart-cs-multi-agent"),
         otlp_endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
     )
     set_agent_metrics(metrics)
+    checkpoint_store = CheckpointStore.from_env()
+    await checkpoint_store.initialize()
+    platform = PlatformDatabase.from_env()
+    await platform.initialize()
+    app.state.platform_users = Users(platform)
+    app.state.platform_sessions = Sessions(platform)
+    # Validate JWT configuration at startup; never fall back to a built-in secret.
+    issue_token(1)
 
-    graph = create_supervisor_graph(
-        working_memory=working_memory,
-        short_term_memory=short_term_memory,
-        long_term_memory=long_term_memory,
-        mcp_server=mcp_server,
+    summary = execution_reconciler.reconcile_stale()
+    logger.info(
+        "startup execution recovery: scanned=%d recovered_completed=%d "
+        "released_for_retry=%d manual_required=%d skipped=%d",
+        summary.get("scanned", 0),
+        summary.get("recovered_completed", 0),
+        summary.get("released_for_retry", 0),
+        summary.get("manual_required", 0),
+        summary.get("skipped", 0),
     )
 
-    yield
+    chat_orchestrator = create_chat_orchestrator(
+        session_store=session_store,
+        long_term_memory=long_term_memory,
+        mcp_server=mcp_server,
+        tool_executor=tool_executor,
+        checkpoint_store=checkpoint_store,
+        execution_reconciler=execution_reconciler,
+    )
+
+    try:
+        yield
+    finally:
+        chat_orchestrator = None
+        checkpoint_store = None
+        app.state.platform_users = None
+        app.state.platform_sessions = None
 
 
 try:
@@ -73,21 +145,54 @@ except ImportError:
 
 app = FastAPI(
     title="智能客服多Agent系统",
-    description="基于LangGraph的Supervisor编排多Agent智能客服系统",
+    description="基于显式 Orchestrator 与 Safe Tool Execution 的智能客服系统",
     version="1.0.0",
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+cors_origins = cors_allowed_origins()
+if cors_origins:
+    app.add_middleware(CORSMiddleware, allow_origins=cors_origins, allow_credentials=True,
+                       allow_methods=["GET", "POST", "DELETE"], allow_headers=["Content-Type", "Authorization"])
+
+
+@app.middleware("http")
+async def private_api_responses(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 if _HAS_FASTAPI_OTEL:
     FastAPIInstrumentor.instrument_app(app)
+
+@app.exception_handler(CheckpointError)
+async def checkpoint_error(_request: Request, exc: CheckpointError):
+    code = 403 if isinstance(exc, CheckpointOwnershipError) else 409 if isinstance(exc, CheckpointConflict) else 503
+    # These domain exceptions contain no SQL, driver errors or credentials.
+    return JSONResponse(status_code=code, content={"detail": str(exc)})
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(_request: Request, exc: RequestValidationError):
+    # Pydantic's default error includes raw input, potentially a login password.
+    return JSONResponse(status_code=422, content={"detail": [
+        {"loc": error["loc"], "type": error["type"], "msg": error["msg"]} for error in exc.errors()
+    ]})
+
+
+@app.exception_handler(PlatformUnavailable)
+async def platform_unavailable(_request: Request, _exc: PlatformUnavailable):
+    return JSONResponse(status_code=503, content={"detail": "platform database unavailable"})
+
+
+@app.exception_handler(PlatformConflict)
+async def platform_conflict(_request: Request, _exc: PlatformConflict):
+    return JSONResponse(status_code=409, content={"detail": "platform identity or ownership conflict"})
+
+
+# This builds the middleware stack, so register exception handlers first.
+install_request_observability(app, runtime_metrics)
 
 
 @app.get("/", include_in_schema=False)
@@ -100,9 +205,10 @@ app.mount("/ui", StaticFiles(directory=WEB_DIR), name="web-ui")
 
 
 class ChatRequest(BaseModel):
-    message: str
-    user_id: str = "anonymous"
-    session_id: str | None = None
+    model_config = ConfigDict(extra="forbid")
+    message: str = Field(min_length=1, max_length=20000)
+    session_id: str | None = Field(default=None, min_length=1, max_length=128)
+    client_request_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class ChatResponse(BaseModel):
@@ -110,21 +216,212 @@ class ChatResponse(BaseModel):
     session_id: str
     intent: str
     compliance_passed: bool
+    client_request_id: str | None = None
+
+
+class ResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    client_request_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class ToolExecuteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    arguments: dict = Field(default_factory=dict)
+    confirmed: bool = False
+    idempotency_key: str | None = None
+    approval_id: str | None = None
+    session_id: str | None = None
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=1024, repr=False)
+
+
+def _public_user(user):
+    return {"account_id": int(user["id"]), "username": user["username"]}
+
+
+@app.post("/api/auth/login")
+async def login(body: LoginRequest, request: Request, response: Response):
+    check_request_origin(request)
+    users = getattr(app.state, "platform_users", None)
+    if users is None:
+        raise HTTPException(503, "authentication unavailable")
+    user = await users.by_username(body.username)
+    # The shared verifier does equal password work for unknown accounts.
+    valid = await asyncio.to_thread(verify_password, body.password, user["password_hash"] if user else None)
+    if not valid or user is None or user["status"] != "active":
+        raise HTTPException(401, "invalid credentials")
+    response.set_cookie(COOKIE_NAME, issue_token(user["id"]), max_age=TOKEN_TTL_SECONDS, **cookie_options())
+    response.headers["Cache-Control"] = "no-store"
+    return {"user": _public_user(user)}
+
+
+@app.post("/api/auth/logout")
+async def logout(request: Request, response: Response):
+    check_request_origin(request)
+    response.delete_cookie(COOKIE_NAME, **cookie_options())
+    response.headers["Cache-Control"] = "no-store"
+    return {"logged_out": True}
+
+
+@app.get("/api/auth/me")
+async def me(response: Response, user: UserContext = Depends(get_current_user)):
+    response.headers["Cache-Control"] = "no-store"
+    return {"account_id": user.account_id, "username": user.username}
+
+
+async def _owned_session(session_id: str, user: UserContext):
+    sessions = getattr(app.state, "platform_sessions", None)
+    if sessions is None:
+        raise HTTPException(503, "session database unavailable")
+    session = await sessions.get_owned(session_id, user.account_id)
+    if session is None:
+        raise HTTPException(404, "session not found")
+    return session
+
+
+@app.get("/api/sessions")
+async def list_sessions(user: UserContext = Depends(get_current_user)):
+    return {"sessions": await app.state.platform_sessions.list_owned(user.account_id)}
+
+
+@app.post("/api/sessions")
+async def create_session(user: UserContext = Depends(get_current_user)):
+    return await app.state.platform_sessions.create(user.account_id)
+
+
+@app.get("/api/sessions/{session_id}")
+async def session_detail(session_id: str, user: UserContext = Depends(get_current_user)):
+    session = await _owned_session(session_id, user)
+    history = await get_history(session_id, user)
+    return {**session, "messages": history["messages"]}
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str, user: UserContext = Depends(get_current_user)):
+    await clear_history(session_id, user)
+    await app.state.platform_sessions.delete(session_id, user.account_id)
+    return {"session_id": session_id, "deleted": True}
+
+
+class ApprovalCreateRequest(BaseModel):
+    tool_name: str
+    arguments: dict = Field(default_factory=dict)
+    requested_by: str | None = None
+
+
+class ApprovalDecisionRequest(BaseModel):
+    decided_by: str
+    reason: str = ""
+
+
+def _customer_arguments(name, arguments, user):
+    # Customers cannot invoke arbitrary registered tools or self-authorize writes.
+    if name not in {"order_query", "refund_evaluate", "ticket_query", "knowledge_search"}:
+        raise HTTPException(403, "use customer chat for this operation")
+    if "user_id" in arguments and arguments["user_id"] != user.business_user_id:
+        raise HTTPException(403, "tool identity mismatch")
+    if "business_user_id" in arguments:
+        raise HTTPException(403, "tool identity must come from authentication")
+    result = dict(arguments)
+    if name != "knowledge_search":
+        result["user_id"] = user.business_user_id
+    else:
+        result.pop("user_id", None)
+    return result
+
+
+async def _internal_only(user: UserContext = Depends(get_current_user)):
+    # No admin role exists in this round. Internal Python services remain available.
+    raise HTTPException(403, "internal operation is not exposed to customers")
+
+
+async def _persist_order_query_context(
+    session_id: str | None,
+    user_id: str,
+    order: dict,
+) -> None:
+    """把网页端直接调用订单工具的结果接入同一会话记忆。"""
+    if not session_id or not order.get("found") or not order.get("order_id"):
+        return
+
+    order_id = str(order["order_id"])
+    if checkpoint_store is not None:
+        async with checkpoint_store.session_lock(session_id):
+            cp = await checkpoint_store.load(session_id, user_id)
+            if cp is not None and cp.status == "running":
+                raise CheckpointConflict("unfinished chat request owns this session")
+            context = dict(cp.context) if cp else {"workflow_version": 1, "state": {}}
+            current = ConversationState.from_dict(context.get("session_state", {}))
+            current.last_intent = "order_query"
+            current.accumulated_entities["order_id"] = order_id
+            context["session_state"] = current.to_dict()
+            history = [m.model_dump() for m in cp.messages] if cp else []
+            history.extend([{"role": "user", "content": f"查询订单 {order_id}"},
+                            {"role": "assistant", "content": f"已查询订单 {order_id}，状态：{order.get('status_label', '未知')}。"}])
+            value = AgentCheckpoint(session_id=session_id, user_id=user_id, intent="order_query",
+                current_stage="WAIT_CONFIRM" if current.pending_action else "FINISHED",
+                status="waiting" if current.pending_action else "finished", pending_action=current.pending_action,
+                messages=history[-20:], context=context, version=cp.version if cp else 0)
+            await (checkpoint_store.update(value) if cp else checkpoint_store.save(value))
+        return
+    current = await session_store.get_state(session_id)
+    entities = dict(current.accumulated_entities or {})
+    entities["order_id"] = order_id
+    await session_store.update_state(
+        session_id,
+        last_intent="order_query",
+        accumulated_entities=entities,
+    )
+
+    context_message = (
+        f"上一轮已查询订单 {order_id}，状态：{order.get('status_label', order.get('status', '未知'))}，"
+        f"商品：{order.get('product', '未知')}。"
+    )
+    await session_store.add_message(session_id, "user", f"查询订单 {order_id}")
+    await session_store.add_message(session_id, "assistant", context_message)
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, user: UserContext = Depends(get_current_user)):
     """主聊天接口"""
-    if graph is None:
+    if chat_orchestrator is None:
         raise HTTPException(status_code=503, detail="系统初始化中")
 
-    session_id = request.session_id or str(uuid.uuid4())
+    if request.session_id:
+        session_id = request.session_id
+        await _owned_session(session_id, user)
+    else:
+        session = await app.state.platform_sessions.create(user.account_id, title=request.message[:100],
+                                                          client_request_id=request.client_request_id)
+        session_id = session["session_id"]
+    await app.state.platform_sessions.touch(session_id, user.account_id, title=request.message[:100])
 
-    await short_term_memory.add_message(session_id, "user", request.message)
+    if checkpoint_store is not None:
+        from langchain_core.messages import HumanMessage
+        try:
+            result = await chat_orchestrator.ainvoke({
+                "session_id": session_id, "user_id": user.business_user_id,
+                "client_request_id": request.client_request_id,
+                "messages": [HumanMessage(content=request.message)],
+            })
+        except CheckpointError:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid checkpoint request") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="请求中断，可查询 checkpoint 后显式恢复") from exc
+        return _chat_response(session_id, result)
+
+    await session_store.add_message(session_id, "user", request.message)
 
     from langchain_core.messages import HumanMessage, AIMessage
 
-    history = await short_term_memory.get_history(session_id)
+    history = await session_store.get_history(session_id)
     messages: list = []
     for msg in history:
         if msg["role"] == "user":
@@ -137,7 +434,7 @@ async def chat(request: ChatRequest):
 
     initial_state = {
         "messages": messages,
-        "user_id": request.user_id,
+        "user_id": user.business_user_id,
         "session_id": session_id,
         "intent": "",
         "sub_results": {},
@@ -148,31 +445,14 @@ async def chat(request: ChatRequest):
         "needs_clarification": False,
     }
 
-    config = {"configurable": {"thread_id": session_id}}
-
     try:
-        result = await graph.ainvoke(initial_state, config=config)
+        result = await chat_orchestrator.ainvoke(initial_state)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
 
     final_response = result.get("final_response", "系统处理异常，请稍后重试")
 
-    # 请求结束：将工作记忆关键内容持久化到短期记忆
-    wm_export = working_memory.export_for_persistence(session_id)
-    wm_ctx = wm_export.get("context", {})
-    if wm_ctx:
-        import json as _json
-        persist_data = {
-            "last_intent": wm_ctx.get("last_intent"),
-            "accumulated_entities": wm_ctx.get("accumulated_entities", {}),
-            "turn_count": wm_ctx.get("turn_count", 0),
-        }
-        await short_term_memory.add_message(
-            session_id, "system",
-            f"[wm_snapshot]{_json.dumps(persist_data, ensure_ascii=False)}"
-        )
-
-    await short_term_memory.add_message(session_id, "assistant", final_response)
+    await session_store.add_message(session_id, "assistant", final_response)
 
     return ChatResponse(
         response=final_response,
@@ -182,35 +462,107 @@ async def chat(request: ChatRequest):
     )
 
 
+def _chat_response(session_id, result):
+    return ChatResponse(response=result["final_response"], session_id=session_id,
+                        intent=result.get("intent", "unknown"), compliance_passed=result.get("compliance_passed", True),
+                        client_request_id=result.get("client_request_id"))
+
+
+@app.get("/api/checkpoints/{session_id}")
+async def get_checkpoint(session_id: str, user: UserContext = Depends(get_current_user)):
+    await _owned_session(session_id, user)
+    if checkpoint_store is None:
+        raise HTTPException(status_code=503, detail="checkpoint unavailable")
+    cp = await checkpoint_store.load(session_id, user.business_user_id)
+    if cp is None:
+        raise HTTPException(status_code=404, detail="checkpoint not found")
+    return {"session_id": session_id, "client_request_id": cp.context.get("request_id"),
+            "current_stage": cp.current_stage, "status": cp.status, "version": cp.version,
+            "response": cp.context.get("state", {}).get("final_response") if cp.status != "running" else None}
+
+
+@app.post("/api/checkpoints/{session_id}/resume", response_model=ChatResponse)
+async def resume_checkpoint(session_id: str, request: ResumeRequest, user: UserContext = Depends(get_current_user)):
+    await _owned_session(session_id, user)
+    if checkpoint_store is None or chat_orchestrator is None:
+        raise HTTPException(status_code=503, detail="checkpoint unavailable")
+    try:
+        result = await chat_orchestrator.resume(session_id, user.business_user_id, request.client_request_id)
+    except CheckpointError:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="恢复未完成，已保存断点；请检查服务或业务执行账本") from exc
+    return _chat_response(session_id, result)
+
+
 @app.get("/api/history/{session_id}")
-async def get_history(session_id: str):
+async def get_history(session_id: str, user: UserContext = Depends(get_current_user)):
     """获取对话历史"""
-    history = await short_term_memory.get_history(session_id)
+    await _owned_session(session_id, user)
+    if checkpoint_store is not None:
+        cp = await checkpoint_store.load(session_id, user.business_user_id)
+        history = [m.model_dump() for m in cp.messages] if cp else []
+    else:
+        history = await session_store.get_history(session_id)
     return {"session_id": session_id, "messages": history}
 
 
+@app.delete("/api/history/{session_id}")
+async def clear_history(session_id: str, user: UserContext = Depends(get_current_user)):
+    """清除会话消息和结构化状态。"""
+    await _owned_session(session_id, user)
+    user_id = user.business_user_id
+    if checkpoint_store is not None:
+        async with checkpoint_store.session_lock(session_id):
+            cp = await checkpoint_store.load(session_id, user_id)
+            if cp is not None and cp.status == "running":
+                raise CheckpointConflict("unfinished request cannot be deleted")
+            await session_store.clear(session_id)
+            if cp is not None:
+                await checkpoint_store.delete(session_id, user_id, cp.version)
+    else:
+        await session_store.clear(session_id)
+    return {"session_id": session_id, "cleared": True}
+
+
 @app.get("/api/demo/orders")
-async def list_demo_orders(limit: int = Query(default=6, ge=1, le=20)):
+async def list_demo_orders(limit: int = Query(default=6, ge=1, le=20), user: UserContext = Depends(get_current_user)):
     """Expose recent local demo orders for the web workbench quick actions."""
     return {
         "data_source": order_repository.DEMO_DATA_SOURCE,
-        "orders": order_repository.list_orders(limit),
+        "orders": order_repository.list_orders_for_user(user.business_user_id, limit),
     }
 
 
 @app.get("/api/tools")
-async def list_tools():
+async def list_tools(user: UserContext = Depends(get_current_user)):
     """MCP工具发现接口"""
     return {"tools": mcp_server.list_tools()}
 
 
 @app.post("/api/tools/call")
-async def call_tool(request: dict):
+async def call_tool(request: ToolExecuteRequest, user: UserContext = Depends(get_current_user)):
     """MCP工具调用接口"""
+    name = request.name
+    arguments = _customer_arguments(name, request.arguments, user)
+    if request.session_id:
+        await _owned_session(request.session_id, user)
+    tool = mcp_server.get_tool(name)
+    if tool is not None and str(tool.operation_type or "read").lower() == "write":
+        raise HTTPException(
+            status_code=409,
+            detail="write tools must use /api/tools/execute",
+        )
     result = await mcp_server.call_tool(
-        name=request.get("name", ""),
-        arguments=request.get("arguments", {}),
+        name=name,
+        arguments=arguments,
     )
+    if name == "order_query" and result.success and isinstance(result.result, dict):
+        await _persist_order_query_context(
+            session_id=request.session_id,
+            user_id=user.business_user_id,
+            order=result.result,
+        )
     return {
         "success": result.success,
         "result": result.result,
@@ -219,13 +571,105 @@ async def call_tool(request: dict):
     }
 
 
-@app.get("/api/metrics")
+@app.post("/api/tools/execute")
+async def execute_tool(request: ToolExecuteRequest, user: UserContext = Depends(get_current_user)):
+    """通过统一执行层调用 MCP 工具。"""
+    arguments = _customer_arguments(request.name, request.arguments, user)
+    if request.session_id:
+        await _owned_session(request.session_id, user)
+    try:
+        result = await tool_executor.execute(
+            request.name,
+            arguments,
+            ToolExecutionContext(
+                confirmed=request.confirmed,
+                idempotency_key=request.idempotency_key,
+                approval_id=request.approval_id,
+            ),
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    if (
+        request.name == "order_query"
+        and result.success
+        and isinstance(result.result, dict)
+    ):
+        await _persist_order_query_context(
+            session_id=request.session_id,
+            user_id=user.business_user_id,
+            order=result.result,
+        )
+    return result.as_dict()
+
+
+@app.post("/api/approvals", dependencies=[Depends(_internal_only)])
+async def create_approval(request: ApprovalCreateRequest):
+    """创建本地 Sandbox 人工审批记录。"""
+    try:
+        record = approval_service.create_request(
+            request.tool_name,
+            request.arguments,
+            request.requested_by,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return record.as_dict()
+
+
+@app.get("/api/approvals/{approval_id}", dependencies=[Depends(_internal_only)])
+async def get_approval(approval_id: str):
+    record = approval_service.get(approval_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"approval not found: {approval_id}")
+    return record.as_dict()
+
+
+@app.post("/api/approvals/{approval_id}/approve", dependencies=[Depends(_internal_only)])
+async def approve_approval(approval_id: str, request: ApprovalDecisionRequest):
+    try:
+        record = approval_service.approve(
+            approval_id,
+            request.decided_by,
+            request.reason,
+        )
+    except ApprovalNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ApprovalStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return record.as_dict()
+
+
+@app.post("/api/approvals/{approval_id}/reject", dependencies=[Depends(_internal_only)])
+async def reject_approval(approval_id: str, request: ApprovalDecisionRequest):
+    try:
+        record = approval_service.reject(
+            approval_id,
+            request.decided_by,
+            request.reason,
+        )
+    except ApprovalNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ApprovalStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return record.as_dict()
+
+
+@app.get("/api/metrics", dependencies=[Depends(_internal_only)])
 async def get_metrics():
     """获取系统指标"""
     return {
         "agent_metrics": metrics.get_summary(),
         "tool_call_log": mcp_server.get_call_log(last_n=20),
     }
+
+
+@app.get("/api/metrics/runtime")
+async def get_runtime_metrics(user: UserContext = Depends(get_current_user)):
+    """获取进程内运行时聚合指标。"""
+    return runtime_metrics.snapshot()
 
 
 @app.get("/health")

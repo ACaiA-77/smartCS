@@ -8,12 +8,22 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from typing import Any, Callable, Awaitable
 from datetime import datetime
 
-if TYPE_CHECKING:
-    from memory.long_term import LongTermMemory
-    from mcp.order_repository import OrderRepository
+from auth.context import current_user
+
+
+def customer_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Bind customer tools to request authentication, not model-supplied identity."""
+    user = current_user.get()
+    if user is None or name not in {
+        "order_query", "refund_evaluate", "refund_create", "ticket_create", "ticket_query",
+    }:
+        return arguments
+    if "user_id" in arguments and arguments["user_id"] != user.business_user_id:
+        raise PermissionError("tool user_id does not match authenticated user")
+    return {**arguments, "user_id": user.business_user_id}
 
 
 @dataclass
@@ -25,6 +35,11 @@ class ToolDefinition:
     handler: Callable[..., Awaitable[Any]]
     category: str = "general"
     requires_auth: bool = False
+    operation_type: str = "read"
+    risk_level: str = "low"
+    requires_confirmation: bool = False
+    retryable: bool = True
+    recovery_fields: tuple[str, ...] = ()
 
 
 @dataclass
@@ -45,7 +60,7 @@ class MCPToolServer:
     实现 Model Context Protocol 的核心功能：
     1. 工具注册 (Tool Registration)
     2. 工具发现 (Tool Discovery) - Agent可查询可用工具列表
-    3. 工具调用 (Tool Invocation) - 通过JSON-RPC 2.0协议调用
+    3. 工具调用 (Tool Invocation) -  通过JSON-RPC 2.0协议调用
     4. 结果返回 (Result Delivery)
 
     遵循MCP规范：
@@ -62,6 +77,14 @@ class MCPToolServer:
         """注册一个MCP工具"""
         self._tools[tool.name] = tool
 
+    def get_tool(self, name: str) -> ToolDefinition | None:
+        """按名称返回工具定义，供执行层使用。"""
+        return self._tools.get(name)
+
+    def get_tool_definition(self, name: str) -> ToolDefinition | None:
+        """get_tool 的语义化别名。"""
+        return self.get_tool(name)
+
     def register(
         self,
         name: str,
@@ -69,6 +92,11 @@ class MCPToolServer:
         input_schema: dict[str, Any],
         category: str = "general",
         requires_auth: bool = False,
+        operation_type: str = "read",
+        risk_level: str = "low",
+        requires_confirmation: bool = False,
+        retryable: bool = True,
+        recovery_fields: tuple[str, ...] = (),
     ) -> Callable:
         """工具注册装饰器"""
         def decorator(func: Callable[..., Awaitable[Any]]) -> Callable:
@@ -79,6 +107,11 @@ class MCPToolServer:
                 handler=func,
                 category=category,
                 requires_auth=requires_auth,
+                operation_type=operation_type,
+                risk_level=risk_level,
+                requires_confirmation=requires_confirmation,
+                retryable=retryable,
+                recovery_fields=recovery_fields,
             )
             self._tools[name] = tool
             return func
@@ -98,6 +131,10 @@ class MCPToolServer:
                 "description": tool.description,
                 "inputSchema": tool.input_schema,
                 "category": tool.category,
+                "operationType": tool.operation_type,
+                "riskLevel": tool.risk_level,
+                "requiresConfirmation": tool.requires_confirmation,
+                "retryable": tool.retryable,
             })
         return tools
 
@@ -120,6 +157,7 @@ class MCPToolServer:
 
         start = time.time()
         try:
+            arguments = customer_tool_arguments(name, arguments)
             output = await tool.handler(**arguments)
             duration_ms = (time.time() - start) * 1000
 
@@ -196,34 +234,30 @@ class MCPToolServer:
 
 def create_default_tools(
     server: MCPToolServer,
-    long_term_memory: LongTermMemory | None = None,
-    order_repository: OrderRepository | None = None,
+    long_term_memory=None,
+    order_repository=None,
+    refund_service=None,
+    ticket_service=None,
 ) -> MCPToolServer:
-    """注册默认的 MCP 工具集，并复用应用级依赖实例。"""
+    """注册默认的MCP工具集"""
 
-    if long_term_memory is None:
-        from memory.long_term import LongTermMemory
+    if refund_service is None and order_repository is not None:
+        from refunds.service import RefundService
 
-        long_term_memory = LongTermMemory()
-    if order_repository is None:
-        from mcp.order_repository import OrderRepository
+        refund_service = RefundService(order_repository)
+    if ticket_service is None and order_repository is not None:
+        from tickets.service import TicketService
 
-        order_repository = OrderRepository()
+        ticket_service = TicketService(order_repository)
 
     @server.register(
         name="order_query",
-        description="按订单号查询本地 SQLite 国内电商演示订单",
+        description="查询订单信息，支持按订单号或用户ID查询",
         input_schema={
             "type": "object",
             "properties": {
-                "order_id": {
-                    "type": "string",
-                    "description": "订单号，例如 ORD-20260801-0001",
-                },
-                "user_id": {
-                    "type": "string",
-                    "description": "应用用户 ID，仅用于调用上下文",
-                },
+                "order_id": {"type": "string", "description": "订单号"},
+                "user_id": {"type": "string", "description": "用户ID"},
             },
             "required": ["order_id"],
         },
@@ -234,40 +268,113 @@ def create_default_tools(
         if not normalized_order_id:
             raise ValueError("order_id must not be empty")
 
-        del user_id  # Demo data has no authentication layer; ownership checks require a real account system.
-        order = order_repository.get_order(normalized_order_id)
-        if order is None:
-            return {
-                "found": False,
-                "order_id": normalized_order_id,
-                "data_source": order_repository.DEMO_DATA_SOURCE,
-                "message": "本地演示订单不存在",
-            }
-
+        data_source = getattr(order_repository, "DEMO_DATA_SOURCE", "SQLite 本地国内电商演示数据")
+        if order_repository is not None:
+            normalized_user_id = "" if user_id is None else str(user_id).strip()
+            order = (
+                order_repository.get_order_for_user(normalized_order_id, normalized_user_id)
+                if normalized_user_id
+                else order_repository.get_order(normalized_order_id)
+            )
+            if order is not None:
+                return {
+                    "found": True,
+                    "data_source": data_source,
+                    "order_id": normalized_order_id,
+                    "status": order["status"],
+                    "status_label": order["status_label"],
+                    "payment_status": order["payment_status"],
+                    "payment_status_label": order["payment_status_label"],
+                    "amount": order["pay_amount"],
+                    "original_amount": order["original_amount"],
+                    "discount_amount": order["discount_amount"],
+                    "product": order["product"],
+                    "products": order["items"],
+                    "recipient_name_masked": order["recipient_name_masked"],
+                    "recipient_phone_masked": order["recipient_phone_masked"],
+                    "city": order["city"],
+                    "courier_company": order["courier_company"],
+                    "tracking_number": order["tracking_number"],
+                    "shipped_at": order["shipped_at"],
+                    "delivered_at": order["delivered_at"],
+                    "after_sale_status": order["after_sale_status"],
+                    "after_sale_status_label": order["after_sale_status_label"],
+                    "created_at": order["created_at"],
+                    "payment": order["payment"],
+                    "shipment": order["shipment"],
+                    "refunds": order["refunds"],
+                }
         return {
-            "found": True,
-            "data_source": order_repository.DEMO_DATA_SOURCE,
-            "order_id": order["order_id"],
-            "status": order["status"],
-            "status_label": order["status_label"],
-            "payment_status": order["payment_status"],
-            "payment_status_label": order["payment_status_label"],
-            "amount": order["pay_amount"],
-            "original_amount": order["original_amount"],
-            "discount_amount": order["discount_amount"],
-            "product": order["product"],
-            "products": order["items"],
-            "recipient_name_masked": order["recipient_name_masked"],
-            "recipient_phone_masked": order["recipient_phone_masked"],
-            "city": order["city"],
-            "courier_company": order["courier_company"],
-            "tracking_number": order["tracking_number"],
-            "shipped_at": order["shipped_at"],
-            "delivered_at": order["delivered_at"],
-            "after_sale_status": order["after_sale_status"],
-            "after_sale_status_label": order["after_sale_status_label"],
-            "created_at": order["created_at"],
+            "found": False,
+            "order_id": normalized_order_id,
+            "data_source": data_source,
+            "message": "本地演示订单不存在",
         }
+
+    @server.register(
+        name="refund_evaluate",
+        description="评估订单是否符合退款条件",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "string", "description": "订单号"},
+                "user_id": {"type": "string", "description": "用户ID"},
+            },
+            "required": ["order_id", "user_id"],
+        },
+        category="refund",
+        operation_type="read",
+        risk_level="low",
+        requires_confirmation=False,
+        retryable=True,
+    )
+    async def refund_evaluate(order_id: str, user_id: str) -> dict:
+        normalized_order_id = "" if order_id is None else str(order_id).strip()
+        if not normalized_order_id:
+            raise ValueError("order_id must not be empty")
+        normalized_user_id = "" if user_id is None else str(user_id).strip()
+        if not normalized_user_id:
+            raise ValueError("user_id must not be empty")
+        if refund_service is None:
+            raise RuntimeError("refund service unavailable")
+        return refund_service.evaluate(normalized_order_id, normalized_user_id).as_dict()
+
+    @server.register(
+        name="refund_create",
+        description="创建订单退款申请",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "string", "description": "订单号"},
+                "user_id": {"type": "string", "description": "用户ID"},
+                "reason": {"type": "string", "description": "退款原因"},
+            },
+            "required": ["order_id", "user_id", "reason"],
+        },
+        category="refund",
+        operation_type="write",
+        risk_level="medium",
+        requires_confirmation=True,
+        retryable=False,
+        recovery_fields=("order_id", "user_id"),
+    )
+    async def refund_create(order_id: str, user_id: str, reason: str) -> dict:
+        normalized_order_id = "" if order_id is None else str(order_id).strip()
+        if not normalized_order_id:
+            raise ValueError("order_id must not be empty")
+        normalized_user_id = "" if user_id is None else str(user_id).strip()
+        if not normalized_user_id:
+            raise ValueError("user_id must not be empty")
+        normalized_reason = "" if reason is None else str(reason).strip()
+        if not normalized_reason:
+            raise ValueError("reason must not be empty")
+        if refund_service is None:
+            raise RuntimeError("refund service unavailable")
+        return refund_service.create_refund(
+            normalized_order_id,
+            normalized_user_id,
+            normalized_reason,
+        ).as_dict()
 
     @server.register(
         name="knowledge_search",
@@ -276,37 +383,21 @@ def create_default_tools(
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "搜索查询"},
-                "top_k": {
-                    "type": "integer",
-                    "description": "返回数量，范围为 1 到 10",
-                    "default": 3,
-                    "minimum": 1,
-                    "maximum": 10,
-                },
+                "top_k": {"type": "integer", "description": "返回数量", "default": 3},
             },
             "required": ["query"],
         },
         category="knowledge",
     )
     async def knowledge_search(query: str, top_k: int = 3) -> list[dict]:
-        normalized_query = query.strip()
-        if not normalized_query:
+        query = str(query).strip()
+        if not query:
             raise ValueError("query must not be empty")
-        if isinstance(top_k, bool) or not isinstance(top_k, int):
-            raise ValueError("top_k must be an integer")
-
-        retrieved_docs = long_term_memory.search(
-            normalized_query,
-            top_k=max(1, min(top_k, 10)),
-        )
+        if long_term_memory:
+            results = long_term_memory.search(query, top_k)
+            return results
         return [
-            {
-                "content": doc.get("content", ""),
-                "source": doc.get("source", ""),
-                "score": doc.get("score", 0.0),
-                "metadata": doc.get("metadata", {}),
-            }
-            for doc in retrieved_docs
+            {"content": f"关于'{query}'的知识库文档片段", "source": "FAQ.md", "score": 0.95},
         ]
 
     @server.register(
@@ -315,23 +406,99 @@ def create_default_tools(
         input_schema={
             "type": "object",
             "properties": {
+                "client_request_id": {"type": "string"},
+                "request_payload_hash": {"type": "string"},
+                "user_id": {"type": "string"},
                 "title": {"type": "string"},
                 "description": {"type": "string"},
                 "priority": {"type": "string", "enum": ["low", "medium", "high", "urgent"]},
                 "category": {"type": "string"},
             },
-            "required": ["title", "description"],
+            "required": [
+                "client_request_id",
+                "request_payload_hash",
+                "user_id",
+                "title",
+                "description",
+            ],
         },
         category="ticket",
+        operation_type="write",
+        risk_level="medium",
+        requires_confirmation=True,
+        retryable=False,
+        recovery_fields=("client_request_id", "user_id", "request_payload_hash"),
     )
-    async def ticket_create(title: str, description: str, priority: str = "medium", category: str = "general") -> dict:
-        import uuid
-        return {
-            "ticket_id": f"TK-{uuid.uuid4().hex[:8].upper()}",
-            "title": title,
-            "status": "created",
-            "priority": priority,
-        }
+    async def ticket_create(
+        title: str,
+        description: str,
+        priority: str = "medium",
+        category: str = "general",
+        client_request_id: str = "",
+        request_payload_hash: str = "",
+        user_id: str = "anonymous",
+    ) -> dict:
+        if ticket_service is None:
+            return {"success": False, "reason_code": "ticket_service_unavailable"}
+        if not client_request_id:
+            return {"success": False, "reason_code": "invalid_client_request_id"}
+        return ticket_service.create_ticket(
+            client_request_id=client_request_id,
+            user_id=user_id,
+            title=title,
+            description=description,
+            priority=priority,
+            ticket_type=category,
+            request_payload_hash=request_payload_hash,
+        )
+
+    @server.register(
+        name="ticket_query",
+        description="按工单号查询本人客服工单",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "ticket_id": {"type": "string"},
+                "user_id": {"type": "string"},
+            },
+            "required": ["ticket_id", "user_id"],
+        },
+        category="ticket",
+        operation_type="read",
+        risk_level="low",
+        requires_confirmation=False,
+        retryable=True,
+    )
+    async def ticket_query(ticket_id: str, user_id: str = "anonymous") -> dict:
+        if ticket_service is None:
+            return {"success": False, "reason_code": "ticket_service_unavailable"}
+        ticket = ticket_service.query_ticket(ticket_id, user_id)
+        if ticket is None:
+            return {
+                "success": False,
+                "reason_code": "ticket_not_found",
+                "ticket_id": str(ticket_id or "").strip(),
+            }
+        visible_fields = (
+            "ticket_id",
+            "status",
+            "category",
+            "priority",
+            "title",
+            "created_at",
+            "updated_at",
+        )
+        visible = {field: ticket[field] for field in visible_fields}
+        visible.update(
+            {
+                "type": ticket.get("type", ticket.get("category", "general")),
+                "ticket_type": ticket.get("ticket_type", ticket.get("category", "general")),
+                "summary": ticket.get("summary", ticket.get("title", "")),
+                "success": True,
+                "reason_code": "found",
+            }
+        )
+        return visible
 
     @server.register(
         name="risk_check",

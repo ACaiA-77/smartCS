@@ -49,8 +49,8 @@ class AgentApiClient:
             compliance_passed=bool(data.get("compliance_passed", False)),
         )
 
-    def history(self, session_id: str) -> dict[str, Any]:
-        response = self._client.get(f"{self.base_url}/api/history/{session_id}")
+    def history(self, session_id: str, user_id: str = "anonymous") -> dict[str, Any]:
+        response = self._client.get(f"{self.base_url}/api/history/{session_id}", params={"user_id": user_id})
         return self._json_or_raise(response)
 
     def close(self) -> None:

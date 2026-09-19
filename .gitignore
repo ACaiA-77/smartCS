@@ -17,6 +17,8 @@ env/
 
 # Generated vector indexes and retrieval artifacts
 vector_store/
+/artifacts/
+/nul
 
 # Reproducible webpage fetch outputs
 knowledge_sources/raw_html/

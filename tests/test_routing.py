@@ -1,32 +1,35 @@
-"""路由函数单元测试。"""
+"""显式 ChatOrchestrator 路由契约测试。"""
 
 from __future__ import annotations
 
-from agents.supervisor import route_after_intent, route_to_agent
+from agents.orchestrator import ChatOrchestrator
 
 
 def test_route_to_agent_knowledge_rag():
-    assert route_to_agent({"intent": "knowledge_rag"}) == "knowledge_rag"
+    assert ChatOrchestrator._route_name("knowledge_rag") == "knowledge_rag"
 
 
 def test_route_to_agent_ticket_handler():
-    assert route_to_agent({"intent": "ticket_handler"}) == "ticket_handler"
+    assert ChatOrchestrator._route_name("ticket_handler") == "ticket_handler"
+
+
+def test_route_to_agent_order_query_uses_order_query_handler():
+    assert ChatOrchestrator._route_name("order_query") == "ticket_handler"
 
 
 def test_route_to_agent_compliance_checker():
-    assert route_to_agent({"intent": "compliance_checker"}) == "compliance_check"
+    assert ChatOrchestrator._route_name("compliance_checker") == "compliance_check"
 
 
 def test_route_to_agent_default_fallback():
-    assert route_to_agent({"intent": "unknown"}) == "knowledge_rag"
-    assert route_to_agent({}) == "knowledge_rag"
+    assert ChatOrchestrator._route_name("unknown") == "clarification"
+    assert ChatOrchestrator._route_name("") == "clarification"
 
 
-def test_route_after_intent_low_confidence_goes_compliance():
-    state = {"needs_clarification": True, "intent": "knowledge_rag"}
-    assert route_after_intent(state) == "compliance_check"
+def test_route_to_conversation():
+    assert ChatOrchestrator._route_name("conversation") == "conversation"
 
 
-def test_route_after_intent_normal_dispatches_by_intent():
-    state = {"needs_clarification": False, "intent": "ticket_handler"}
-    assert route_after_intent(state) == "ticket_handler"
+def test_explicit_orchestrator_maps_refund_variants_to_one_handler():
+    for intent in ("refund_handler", "refund_request", "refund_confirm", "refund_cancel"):
+        assert ChatOrchestrator._route_name(intent) == "refund_handler"

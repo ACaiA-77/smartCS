@@ -1,0 +1,23 @@
+# Local checkpoint database; independent of the API/Redis deployment.
+services:
+  smartcs-checkpoint-mysql:
+    image: mysql:8.0
+    container_name: smartcs-checkpoint-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-smartcs_checkpoint}
+      MYSQL_USER: ${MYSQL_USER:-smartcs}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-3307}:3306"
+    volumes:
+      - smartcs-checkpoint-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "--host=127.0.0.1", "--silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  smartcs-checkpoint-mysql-data:
