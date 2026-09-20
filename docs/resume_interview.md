@@ -171,7 +171,7 @@ python -m pytest tests/test_business_sandbox.py tests/test_refund_service.py tes
 | Authentication / customer isolation | 专项 `63 passed in 28.67s`，已包含在最终全量 367 项内 |
 | Node / HTTP / browser | Node 15 / 15；真实 JWT / MySQL 的独立 HTTP / Chrome 本地验收 PASS |
 | Runtime observability | 保留聚合指标；原始明细和审批接口拒绝客户访问 |
-| Repository / CI configuration | 当前稳定节点：`36cbf97`；未 push，未验证 remote CI，未 deploy |
+| Repository / CI configuration | 当前稳定节点为 Git `HEAD`（已本地提交）；未 push，未验证 remote CI，未 deploy |
 | Documentation / presentation | 已统一最终回归、RAG benchmark 指标、历史证据和非生产边界 |
 
-本轮最终结论以 [执行报告](../artifacts/auth_20260919/execution_report.md) 和同目录原始输出为准。当前稳定节点为 `36cbf97`；未 push、未验证 remote CI、未 deploy，也没有据此证明真实生产运行。公共注册、密码找回、OAuth、SSO、RBAC、管理后台、SSE、分布式协调和更大的 live-model Eval 数据集均未纳入本轮。
+本轮最终结论以 [执行报告](../artifacts/auth_20260919/execution_report.md) 和同目录原始输出为准。当前稳定节点为 Git `HEAD`（已本地提交）；未 push、未验证 remote CI、未 deploy，也没有据此证明真实生产运行。公共注册、密码找回、OAuth、SSO、RBAC、管理后台、SSE、分布式协调和更大的 live-model Eval 数据集均未纳入本轮。
