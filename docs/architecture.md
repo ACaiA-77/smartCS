@@ -2,7 +2,7 @@
 
 这份文档面向代码评审、项目演示和面试沟通。它只解释当前本地实现，不把可选的生产扩展写成已经存在的能力。
 
-2026-09-19 认证与客户隔离已通过本地验收：全量 pytest 351 项，认证专项 63 项、checkpoint 专项 14 项分别复验通过，另有 Node 15 / 15、两个真实进程崩溃窗口及独立 HTTP / Chrome 验收。完整结论见 [执行报告](../artifacts/auth_20260919/execution_report.md)。下文 284 项 pytest、Eval 14 / 14 和 3 项 Node 测试均为 2026-09-18 checkpoint 阶段的历史基线，不与本轮数量相加。
+2026-09-19 认证与客户隔离已通过本地验收：认证阶段全量 pytest 351 项，认证专项 63 项、checkpoint 专项 14 项分别复验通过，另有 Node 15 / 15、两个真实进程崩溃窗口及独立 HTTP / Chrome 验收。2026-09-20 RAG runtime isolation 收尾后，最终默认回归为 `367 passed, 18 skipped`，RAG runtime closure 已通过并冻结。完整认证结论见 [执行报告](../artifacts/auth_20260919/execution_report.md)；下文 284 项 pytest、Eval 14 / 14 和 3 项 Node 测试均为 2026-09-18 checkpoint 阶段的历史基线，不与后续数量相加。
 
 ## 1. 组件边界
 
@@ -88,6 +88,20 @@ MySQL 的 `agent_checkpoint` 表使用自增 `id` 和唯一 `session_id`，保�
 - Domain 决定权威的业务有效性和业务状态。
 - `ExecutionLedger` 决定一次执行的 replay、冲突或进行中状态。
 - `SessionStore` 只拥有对话状态，不拥有退款或工单的最终业务结果。
+
+### Round 1 离线 RAG 索引边界
+
+`rag/` 与 `scripts/build_rag_indexes.py` 负责把 `apple_support` 和 `agent_engineering` 分域构建为可复现的离线材料：源文件经结构感知分块和确定性上下文前缀后，分别写出 FAISS dense artifact、BM25 corpus/index preparation 及 manifest。每个 chunk 同时保留原始 `content` 和用于检索的 `retrieval_text`；Markdown front matter 只作为来源元数据，PDF 使用嵌入文本提取，URL-only 文本只记录 unresolved 状态。
+
+Round 1 配置目标为 `BAAI/bge-m3`、1024 维，并提供不下载模型的确定性测试 backend。该轮不实现在线 RRF、Cross-Encoder、混合检索或 benchmark；`agents/knowledge_rag.py` 现有的 Query rewrite、FAISS 检索和重排链路保持兼容，后续轮次再单独改变在线检索行为。
+
+### Round 2 在线混合检索边界
+
+Round 2 在 `rag/` 提供统一的在线 `HybridRetriever`：保留原始问题用于回答，使用 Query rewrite 结果进行 Dense 与真实 BM25 检索，再按 RRF 融合并交给可注入的 Cross-Encoder reranker。`KnowledgeRAGAgent` 与 MCP `knowledge_search` 共享该层；两个 domain 的 artifact 会校验 manifest、chunk 顺序、FAISS ntotal/dimension、BM25 chunk IDs 以及实际 embedding backend/model，校验失败直接拒绝服务。测试可显式允许 `dry_run` artifact，生产默认拒绝；检索 refinement 最多两轮。
+
+Round 3 已在 `rag/evaluation/` 与 `benchmarks/rag/` 落地固定 query/qrels 的双域 Retrieval Benchmark：同一组 global Top-20 候选依次评估 Dense、BM25、RRF 与真实 BGE Cross-Encoder，计算 Recall@K、MRR、nDCG 并记录 `wrong_domain_rate@K` 与失败案例。评测开始前会校验 benchmark manifest 的 production chunk hash；真实模型不可执行或 hash 不匹配时 fail closed。最终机器可读产物写入 `artifacts/rag_round3/`。
+
+生产和测试的 retriever 依赖边界已固定：`api/main.py` 默认 `get_retriever()` 读取生产环境配置；显式传入 `LongTermMemory` 的 Orchestrator、MCP 和 Eval 使用 `get_retriever(use_env=False)`，只访问该内存，不读取 `RAG_INDEX_ROOT`。这条隔离规则由 MCP 与 Orchestrator 回归测试覆盖。
 
 ## 3. ToolExecutor 的写入边界
 
@@ -272,14 +286,16 @@ sanitized operational log + RuntimeMetrics
 
 2026-09-18 checkpoint 阶段的历史全量复验为 `284 passed in 58.14s`，验收报告见 [checkpoint_test_report.md](../artifacts/checkpoint_20260918/checkpoint_test_report.md)，原始输出见 [full_suite.txt](../artifacts/checkpoint_20260918/full_suite.txt)；同阶段另有原有 Eval 14 / 14 和 3 项 Node 测试。284 项中包含 14 项 checkpoint 测试，真实 MySQL 测试需显式开启；另有真实进程终止、重启和浏览器验收。原有 Eval 的 pass rate、routing accuracy、side-effect safety rate 和 failure containment rate 均为 1.0，但这 14 个场景未新增 checkpoint 场景，不能用其数字代替恢复验收。其他验收证据见同目录 `round1_acceptance.md`；更早的 253 项和增量前的 270 项仅为历史基线。这些结果不说明在线 LLM 回答质量、生产流量、生产 SLA 或远程 CI 已执行。这里不使用 LLM-as-judge，因为目标是检查可重复的业务不变量与副作用边界。
 
-2026-09-19 本轮已验证结果如下，认证与 checkpoint 专项均包含在全量 pytest 内，不重复计数：
+2026-09-20 最终本地验证结果如下；认证、checkpoint 和 RAG isolation 专项均包含在全量 pytest 内，不重复计数：
 
 | 验证范围 | 结果 | 原始证据 |
 | --- | --- | --- |
-| 全量 pytest | `351 passed in 71.72s` | [full_suite.txt](../artifacts/auth_20260919/full_suite.txt) |
+| 认证阶段全量 pytest | `351 passed in 71.72s` | [full_suite.txt](../artifacts/auth_20260919/full_suite.txt) |
 | 认证、会话权限、业务隔离专项 | `63 passed in 28.67s`；对应 `tests/test_auth.py`、`tests/test_user_sessions.py`、`tests/test_user_business_isolation.py` | [auth_tests.txt](../artifacts/auth_20260919/auth_tests.txt) |
 | Checkpoint 专项 | `14 passed in 21.34s` | [checkpoint_tests.txt](../artifacts/auth_20260919/checkpoint_tests.txt) |
 | Node 回归 | 15 / 15 | 主 Agent 已完成验证，汇总见 [执行报告](../artifacts/auth_20260919/execution_report.md) |
+| RAG runtime isolation 收尾 | `367 passed, 18 skipped`；两种顺序回归、Eval 14 / 14、Node UI 15 / 15 | [`artifacts/smartcs_final_20260920/`](../artifacts/smartcs_final_20260920/)；无算法或索引改动 |
+| 双域 Retrieval Benchmark | `hybrid_rerank` global Top-10：Recall 0.825、MRR 0.800、nDCG 0.749、wrong-domain rate 0.063 | [`artifacts/rag_round3/metrics.json`](../artifacts/rag_round3/metrics.json)；固定 60 条 query/qrels |
 | 两个真实进程崩溃窗口 | 业务已提交/账本未完成、账本已完成/checkpoint 未推进均通过；各场景退款始终 1 条，最终 replay 的 LLM 调用为 0 | [checkpoint_process.json](../artifacts/auth_20260919/checkpoint_process.json) |
 | 独立 HTTP / Chrome | PASS；真实 JWT / MySQL、后端重启、待确认恢复、登录和账号隔离均通过 | [browser_restart.json](../artifacts/auth_20260919/browser_restart.json) |
 

@@ -13,6 +13,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from memory.long_term import LongTermMemory
+from rag.models import RetrievalHit
+from rag.runtime import RetrievalRuntime, RetrievalTrace
 from tracing.otel_config import trace_agent_call
 
 
@@ -42,11 +44,29 @@ QUERY_REWRITE_PROMPT = """请将用户的口语化问题改写为更适合向量
 class KnowledgeRAGAgent:
     """知识检索Agent - 实现完整RAG流程"""
 
-    def __init__(self, llm: ChatOpenAI, long_term_memory: LongTermMemory | None = None):
+    def __init__(
+        self,
+        llm: ChatOpenAI,
+        long_term_memory: LongTermMemory | None = None,
+        retriever=None,
+        *,
+        max_retrieval_rounds: int = 2,
+        domains: list[str] | tuple[str, ...] | None = None,
+    ):
         self.llm = llm
         self.long_term_memory = long_term_memory or LongTermMemory()
+        self.retriever = retriever or self.long_term_memory.get_retriever(use_env=False)
+        self.runtime = RetrievalRuntime(
+            self.retriever, max_retrieval_rounds=max_retrieval_rounds
+        )
+        configured_domains = domains
+        if configured_domains is None:
+            value = os.getenv("RAG_DOMAINS", "")
+            configured_domains = [item.strip() for item in value.split(",") if item.strip()]
+        self.domains = tuple(configured_domains or ())
         self.enable_query_rewrite = self._env_flag("RAG_ENABLE_QUERY_REWRITE", default=True)
         self.enable_rerank = self._env_flag("RAG_ENABLE_RERANK", default=True)
+        self._last_trace: RetrievalTrace | None = None
 
     @staticmethod
     def _env_flag(name: str, default: bool) -> bool:
@@ -66,41 +86,43 @@ class KnowledgeRAGAgent:
 
     @trace_agent_call("rag_retrieve")
     async def retrieve_documents(self, query: str, top_k: int = 5) -> list[dict]:
-        """从向量数据库检索相关文档"""
-        docs = self.long_term_memory.search(query, top_k=top_k)
-        return docs
+        """通过统一 HybridRetriever 检索相关文档。"""
+        trace = self.runtime.retrieve(
+            query,
+            query,
+            domains=self.domains,
+            top_k=top_k,
+            rerank=self.enable_rerank,
+        )
+        self._last_trace = trace
+        return trace.hits
 
     @trace_agent_call("rag_rerank")
     async def rerank_documents(
         self, query: str, documents: list[dict], top_k: int = 3
     ) -> list[dict]:
-        """对检索结果重排序，提升相关性"""
+        """兼容旧调用点，但排序统一交给注入的 Cross-Encoder。"""
         if not documents:
             return []
+        candidates = [RetrievalHit.from_value(document) for document in documents]
+        return self.retriever.rerank(query, candidates, top_k=top_k)
 
-        doc_summaries = "\n".join(
-            f"[{i}] {doc.get('content', '')[:200]}"
-            for i, doc in enumerate(documents)
+    async def retrieve_with_trace(
+        self,
+        original_query: str,
+        rewritten_query: str,
+        *,
+        top_k: int = 3,
+    ) -> RetrievalTrace:
+        trace = self.runtime.retrieve(
+            original_query,
+            rewritten_query,
+            domains=self.domains,
+            top_k=top_k,
+            rerank=self.enable_rerank,
         )
-
-        messages = [
-            SystemMessage(content="你是一个文档相关性排序专家。"),
-            HumanMessage(content=(
-                f"用户查询: {query}\n\n"
-                f"候选文档:\n{doc_summaries}\n\n"
-                f"请返回最相关的{top_k}个文档的索引号，用逗号分隔，如: 0,2,4"
-            )),
-        ]
-
-        response = await self.llm.ainvoke(messages)
-
-        try:
-            indices = [int(i.strip()) for i in response.content.split(",")]
-            reranked = [documents[i] for i in indices if i < len(documents)]
-        except (ValueError, IndexError):
-            reranked = documents[:top_k]
-
-        return reranked
+        self._last_trace = trace
+        return trace
 
     @trace_agent_call("rag_generate")
     async def generate_answer(self, query: str, context_docs: list[dict]) -> str:
@@ -160,15 +182,12 @@ class KnowledgeRAGAgent:
         if self.enable_query_rewrite:
             rewritten_query = await self.rewrite_query(rewrite_input)
 
-        raw_docs = await self.retrieve_documents(
+        trace = await self.retrieve_with_trace(
+            original_query,
             rewritten_query,
-            top_k=5 if self.enable_rerank else 3,
+            top_k=3,
         )
-
-        if self.enable_rerank:
-            reranked_docs = await self.rerank_documents(rewritten_query, raw_docs, top_k=3)
-        else:
-            reranked_docs = raw_docs[:3]
+        reranked_docs = trace.hits
 
         answer = await self.generate_answer(original_query, reranked_docs)
 
@@ -177,5 +196,6 @@ class KnowledgeRAGAgent:
             "sub_results": {
                 **state.get("sub_results", {}),
                 "knowledge_rag": answer,
+                "knowledge_rag_retrieval": trace.to_dict(),
             },
         }

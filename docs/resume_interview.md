@@ -2,7 +2,7 @@
 
 这是一份内部项目介绍材料，不是虚构的求职申请。下面的表述只覆盖当前源码和本地确定性验证，候选人应根据自己的实际参与范围选择动词，不把团队成果改写成个人独立完成。
 
-2026-09-19 已通过本地验收：全量 pytest 351 项，认证专项 63 项、checkpoint 专项 14 项分别复验通过，另有 Node 15 / 15、两个真实进程崩溃窗口及独立 HTTP / Chrome 验收。完整结论见 [执行报告](../artifacts/auth_20260919/execution_report.md)。284 项 pytest、Eval 14 / 14 和 3 项 Node 测试仍保留为 2026-09-18 checkpoint 阶段的历史基线，不与本轮数量相加。
+2026-09-20 已完成本地收口：认证阶段全量 pytest 351 项，认证专项 63 项、checkpoint 专项 14 项分别复验通过；RAG runtime isolation 收尾后最终默认回归为 `367 passed, 18 skipped`，另有 Eval 14 / 14、Node 15 / 15、两个真实进程崩溃窗口及独立 HTTP / Chrome 验收。RAG runtime closure 已通过并冻结。完整认证结论见 [执行报告](../artifacts/auth_20260919/execution_report.md)。284 项 pytest、Eval 14 / 14 和 3 项 Node 测试仍保留为 2026-09-18 checkpoint 阶段的历史基线，不与后续数量相加。
 
 ## 简历要点候选
 
@@ -11,12 +11,13 @@
 1. **受控编排：** 基于 FastAPI 和显式异步编排拆分意图路由、响应分支和业务执行，让客服请求最多进入一个自然对话或业务处理分支，业务写入仍需通过统一执行策略。
 2. **业务幂等：** 针对退款和工单重复提交、提交结果不明的问题，结合执行账本、固定幂等键和 SQLite 权威业务查询，实现受限的执行回放与崩溃恢复，验证已有业务效果不会再次创建。
 3. **状态恢复：** 针对短期会话缓存无法保存工作流进度的问题，以 MySQL 持久化节点快照和请求回执，通过版本比较及会话连接锁控制更新；进程重启后可恢复待确认退款和未完成节点，不能代替用户确认或保证任意外部写入 exactly-once。
-4. **验证与观测：** 以离线确定性 Eval、故障注入和请求、工具、恢复指标检查路由及副作用边界；2026-09-19 全量 `pytest` 为 351 项通过，另有 Node 15 / 15，真实进程回归覆盖两个写入崩溃窗口；不代表线上模型质量或生产 SLA。
-5. **身份与数据隔离：** 针对客户端可伪造用户 ID 的问题，基于 JWT 与数据库账号状态建立可信身份，将认证上下文注入 Agent 工作流，在会话、checkpoint、订单、退款和工单链路再次核对归属；不允许模型参数改写业务身份，认证、会话权限和业务隔离专项 63 项通过，不扩大为 RBAC 或企业 IAM。
+4. **验证与观测：** 以离线确定性 Eval、故障注入和请求、工具、恢复指标检查路由及副作用边界；认证阶段全量 `pytest` 为 351 项通过，RAG isolation 收尾后最终为 `367 passed, 18 skipped`，另有 Eval 14 / 14、Node 15 / 15，真实进程回归覆盖两个写入崩溃窗口；不代表线上模型质量或生产 SLA。
+5. **双域 RAG：** 以 Apple 支持和 Agent 工程双域 corpus 构建 Dense + BM25 + RRF + Cross-Encoder 检索，固定 60 条 query/qrels 的 global Top-10 `hybrid_rerank` 达到 Recall 0.825、MRR 0.800、nDCG 0.749；生产 runtime 与测试/Eval 依赖隔离已冻结，不把本地 benchmark 当作线上质量。
+6. **身份与数据隔离：** 针对客户端可伪造用户 ID 的问题，基于 JWT 与数据库账号状态建立可信身份，将认证上下文注入 Agent 工作流，在会话、checkpoint、订单、退款和工单链路再次核对归属；不允许模型参数改写业务身份，认证、会话权限和业务隔离专项 63 项通过，不扩大为 RBAC 或企业 IAM。
 
 ## 30 秒项目介绍
 
-这是一个本地多 Agent 客服项目，Agent 负责理解意图，退款和工单仍由业务域校验并写入 SQLite。项目通过 MySQL 保存节点进度和待确认状态，结合执行账本处理重启恢复。本轮新增 JWT 登录和账号所属会话，工具按后端认证身份检查业务归属。全量 `pytest` 351 项通过，其中认证专项 63 项；真实进程恢复和 HTTP / Chrome 登录、刷新及账号隔离也通过了本地验收。
+这是一个本地多 Agent 客服项目，Agent 负责理解意图，退款和工单仍由业务域校验并写入 SQLite。项目通过 MySQL 保存节点进度和待确认状态，结合执行账本处理重启恢复；RAG 使用 Apple 支持和 Agent 工程双域检索。JWT 登录和账号所属会话由后端认证身份约束。认证阶段全量 `pytest` 351 项通过，RAG runtime isolation 收尾后最终为 `367 passed, 18 skipped`；真实进程恢复和 HTTP / Chrome 登录、刷新及账号隔离也通过了本地验收。
 
 ## 主张、来源和边界
 
@@ -26,8 +27,9 @@
 | 工具执行确认、幂等、READ 重试和写入不自动重试 | `mcp/tool_execution.py`、`mcp/execution_ledger.py` | 说明已实现的执行策略，不声称覆盖任意外部系统 |
 | 退款、工单持久化和受限恢复 | `refunds/service.py`、`tickets/service.py`、`mcp/execution_recovery.py` | 只覆盖当前两个支持恢复的写工具 |
 | MySQL 节点持久化、请求回放与并发保护 | `checkpoint/models.py`、`checkpoint/store.py`、`agents/orchestrator.py`；`tests/test_checkpoint.py` | 不等同于跨库事务、多实例生产部署或任意工具 exactly-once |
-| 本轮全量 pytest 351 项、认证专项 63 项、Node 15 / 15 | [full_suite.txt](../artifacts/auth_20260919/full_suite.txt)：`351 passed in 71.72s`；[auth_tests.txt](../artifacts/auth_20260919/auth_tests.txt)：`63 passed in 28.67s`；Node 结果由主 Agent 验证并汇总至 [执行报告](../artifacts/auth_20260919/execution_report.md) | 63 项包含在 351 项内；Node 另计，真实浏览器验收另有独立证据 |
-| 本轮 checkpoint 专项 14 项 | [checkpoint_tests.txt](../artifacts/auth_20260919/checkpoint_tests.txt)：`14 passed in 21.34s` | 已包含在全量 351 项内，不额外累加 |
+| 认证阶段全量 pytest 351 项、最终全量 367 项、认证专项 63 项、Node 15 / 15 | [full_suite.txt](../artifacts/auth_20260919/full_suite.txt)：`351 passed in 71.72s`；最终 RAG isolation 回归：`367 passed, 18 skipped`；[auth_tests.txt](../artifacts/auth_20260919/auth_tests.txt)：`63 passed in 28.67s`；Node 结果由主 Agent 验证并汇总至 [执行报告](../artifacts/auth_20260919/execution_report.md) | 63 项包含在最终 367 项内；Node 另计，真实浏览器验收另有独立证据 |
+| 本轮 checkpoint 专项 14 项 | [checkpoint_tests.txt](../artifacts/auth_20260919/checkpoint_tests.txt)：`14 passed in 21.34s` | 已包含在最终全量 367 项内，不额外累加 |
+| RAG runtime isolation 与双域 benchmark | `367 passed, 18 skipped`；Eval 14 / 14；`hybrid_rerank` global Top-10 Recall 0.825、MRR 0.800、nDCG 0.749、wrong-domain rate 0.063 | `artifacts/smartcs_final_20260920/`、`artifacts/rag_round3/metrics.json`；固定 60 条 query/qrels，本地结果不代表线上质量 |
 | 本轮两个真实进程崩溃窗口恢复通过 | [checkpoint_process.json](../artifacts/auth_20260919/checkpoint_process.json) | 两个场景各保留 1 条退款，最终 replay 的 LLM 调用为 0；不表示恢复全过程不调用模型 |
 | 本轮独立 HTTP / Chrome 本地验收通过 | [browser_restart.json](../artifacts/auth_20260919/browser_restart.json)；真实 JWT / MySQL，进程 26244 重启为 4240 | 账号 B 读取、恢复、删除 A 的会话均为 404；本人订单、刷新、丢失 POST 后继续、logout 清空和账号切换隔离均通过，使用确定性模型及隔离 SQLite，不是生产验证 |
 | 2026-09-18 历史基线：284 项全量 pytest、原有 Eval 14 / 14、3 项 Node 测试 | 验收报告：[checkpoint_test_report.md](../artifacts/checkpoint_20260918/checkpoint_test_report.md)；最终全量原始输出：[full_suite.txt](../artifacts/checkpoint_20260918/full_suite.txt)，结果为 `284 passed in 58.14s`；其他验收记录见同目录 `round1_acceptance.md`、`baseline.md` | 14 项 checkpoint pytest 已包含在 284 项内；3 项 Node 另计，不代表本轮认证验收通过，原有 Eval 没有扩展成 checkpoint 场景集 |
@@ -157,19 +159,19 @@ python -m pytest tests/test_business_sandbox.py tests/test_refund_service.py tes
 
 ## Final Project Readiness
 
-以下区分 2026-09-18 的 checkpoint 结项历史与 2026-09-19 本轮本地验收结果；本地通过不代表生产部署完成：
+以下区分 2026-09-18 的 checkpoint 结项历史、2026-09-19 的认证验收和 2026-09-20 的 RAG runtime 收口；本地通过不代表生产部署完成：
 
 | 范围 | 状态 |
 | --- | --- |
-| Backend architecture | 原显式编排保留；认证与会话归属层已纳入本轮全量 351 项通过的测试 |
+| Backend architecture | 原显式编排保留；认证与会话归属层已纳入认证阶段全量 351 项和最终全量 367 项测试 |
 | Business sandbox | SQLite 业务表保留；认证、会话权限和业务隔离专项 63 项通过 |
 | Write safety / idempotency | 重放前身份检查通过专项回归，两个真实进程崩溃场景未产生重复退款 |
 | Checkpoint / crash recovery | 本轮专项 `14 passed in 21.34s`；两个真实进程窗口再次通过，各 1 条退款，最终 replay 的 LLM 调用为 0 |
-| Agent Eval / failure injection | 9 月 18 日历史 Eval 14 / 14，本轮结果见认证验收目录 |
-| Authentication / customer isolation | 专项 `63 passed in 28.67s`，已包含在全量 351 项内 |
+| Agent Eval / failure injection | Eval 14 / 14；RAG runtime isolation 与认证边界分别由最终全量回归覆盖 |
+| Authentication / customer isolation | 专项 `63 passed in 28.67s`，已包含在最终全量 367 项内 |
 | Node / HTTP / browser | Node 15 / 15；真实 JWT / MySQL 的独立 HTTP / Chrome 本地验收 PASS |
 | Runtime observability | 保留聚合指标；原始明细和审批接口拒绝客户访问 |
 | Repository / CI configuration | 未提交、未推送，不据本地文档宣称远程 CI 已通过 |
-| Documentation / presentation | 已更新本轮已验证结果与原始证据，保留 checkpoint 历史成绩及非生产边界 |
+| Documentation / presentation | 已统一最终回归、RAG benchmark 指标、历史证据和非生产边界 |
 
 本轮最终结论以 [执行报告](../artifacts/auth_20260919/execution_report.md) 和同目录原始输出为准。这不表示已经 committed、pushed、完成 remote CI 验证、deployed 或证明了真实生产运行。公共注册、密码找回、OAuth、SSO、RBAC、管理后台、SSE、分布式协调和更大的 live-model Eval 数据集均未纳入本轮。

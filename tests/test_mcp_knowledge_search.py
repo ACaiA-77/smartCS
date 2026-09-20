@@ -30,6 +30,24 @@ async def test_knowledge_search_returns_real_long_term_memory_documents() -> Non
 
 
 @pytest.mark.asyncio
+async def test_explicit_memory_ignores_production_rag_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RAG_INDEX_ROOT", "./missing-production-index")
+    memory = LongTermMemory(embedding_dim=64)
+    memory.add_document("隔离知识库中的账户恢复说明。", "isolated.md")
+    server = create_default_tools(MCPToolServer(), long_term_memory=memory)
+
+    result = await server.call_tool(
+        "knowledge_search",
+        {"query": "账户恢复说明", "top_k": 1},
+    )
+
+    assert result.success is True
+    assert result.result[0]["source"] == "isolated.md"
+
+
+@pytest.mark.asyncio
 async def test_knowledge_search_rejects_empty_query() -> None:
     server = create_default_tools(MCPToolServer(), long_term_memory=LongTermMemory(embedding_dim=64))
 

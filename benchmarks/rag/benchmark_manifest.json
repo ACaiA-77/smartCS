@@ -1,0 +1,37 @@
+{
+  "authoring": "manual-curated; query text is maintained in queries.jsonl",
+  "benchmark_version": "rag-round3-v3-curated",
+  "chunking_version": "rag-round1",
+  "domains": {
+    "agent_engineering": 30,
+    "apple_support": 30
+  },
+  "index_root": "artifacts\\rag_round3\\production_indexes",
+  "qrel_count": 110,
+  "query_count": 60,
+  "query_kinds": {
+    "agent_engineering": {
+      "confusing": 10,
+      "lexical": 10,
+      "semantic": 10
+    },
+    "apple_support": {
+      "confusing": 10,
+      "lexical": 10,
+      "semantic": 10
+    }
+  },
+  "relevance_distribution": {
+    "1": 50,
+    "2": 60
+  },
+  "relevance_scale": {
+    "0": "not included",
+    "1": "supporting material",
+    "2": "direct answer"
+  },
+  "source_sha256": {
+    "agent_engineering": "d4b73fa26871ccf46077e91ac5363ce83fd922ba9c95232719dff1061568bd75",
+    "apple_support": "bf0ce82c6414dee55bd6a7b69365b37d4322d89407dea48e66c3662b378b455d"
+  }
+}

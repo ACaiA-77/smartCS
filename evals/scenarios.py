@@ -99,11 +99,13 @@ def build_runtime(
         "投诉流程：说明服务问题后可以申请人工客服处理。",
         "complaint_policy.md",
     )
+    isolated_retriever = long_term_memory.get_retriever(use_env=False)
     short_term_memory = OfflineShortTermMemory(max_turns=50)
     session_store = SessionStore(short_term_memory)
     server = create_default_tools(
         MCPToolServer(),
         long_term_memory=long_term_memory,
+        retriever=isolated_retriever,
         order_repository=repository,
     )
     ledger = ExecutionLedger(repository.db_path)
@@ -122,6 +124,7 @@ def build_runtime(
         long_term_memory=long_term_memory,
         mcp_server=server,
         tool_executor=executor,
+        retriever=isolated_retriever,
     )
     return EvalRuntime(
         tempdir,

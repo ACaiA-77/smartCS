@@ -64,6 +64,16 @@ function clearConversation() {
   elements.orderDetail.innerHTML = "<p>选择你的订单后，详细信息会显示在这里。</p>";
 }
 
+function setAuthView(authenticated) {
+  if (document.body) document.body.dataset.authState = authenticated ? "authenticated" : "unauthenticated";
+  elements.loginPage.hidden = authenticated;
+  elements.appShell.hidden = !authenticated;
+  if (elements.loginPage.style) elements.loginPage.style.display = authenticated ? "none" : "";
+  if (elements.appShell.style) elements.appShell.style.display = authenticated ? "" : "none";
+  elements.loginPage.setAttribute("aria-hidden", authenticated ? "true" : "false");
+  elements.appShell.setAttribute("aria-hidden", authenticated ? "false" : "true");
+}
+
 function clearIdentity(message = "请登录后继续。", purgeSaved = true) {
   state.epoch += 1;
   state.user = null;
@@ -75,8 +85,7 @@ function clearIdentity(message = "请登录后继续。", purgeSaved = true) {
   elements.accountName.textContent = "";
   elements.password.value = "";
   elements.username.value = "";
-  elements.appShell.hidden = true;
-  elements.loginPage.hidden = false;
+  setAuthView(false);
   elements.authMessage.textContent = message;
   setSending(false);
 }
@@ -124,8 +133,7 @@ async function activateUser(user) {
   state.pending = state.sessionId && typeof saved?.pending?.client_request_id === "string" ? saved.pending : null;
   elements.accountName.textContent = user.username;
   elements.password.value = "";
-  elements.loginPage.hidden = true;
-  elements.appShell.hidden = false;
+  setAuthView(true);
   const epoch = state.epoch;
   setSending(true);
   await Promise.all([loadSessions(), loadDemoOrders(), restoreSession()]);

@@ -238,6 +238,7 @@ def create_default_tools(
     order_repository=None,
     refund_service=None,
     ticket_service=None,
+    retriever=None,
 ) -> MCPToolServer:
     """注册默认的MCP工具集"""
 
@@ -384,21 +385,35 @@ def create_default_tools(
             "properties": {
                 "query": {"type": "string", "description": "搜索查询"},
                 "top_k": {"type": "integer", "description": "返回数量", "default": 3},
+                "domain": {"type": "string", "description": "可选知识域"},
+                "domains": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["query"],
         },
         category="knowledge",
     )
-    async def knowledge_search(query: str, top_k: int = 3) -> list[dict]:
+    async def knowledge_search(
+        query: str,
+        top_k: int = 3,
+        domain: str | None = None,
+        domains: list[str] | None = None,
+    ) -> list[dict]:
         query = str(query).strip()
         if not query:
             raise ValueError("query must not be empty")
-        if long_term_memory:
-            results = long_term_memory.search(query, top_k)
-            return results
-        return [
-            {"content": f"关于'{query}'的知识库文档片段", "source": "FAQ.md", "score": 0.95},
-        ]
+        shared_retriever = retriever
+        if shared_retriever is None and long_term_memory is not None:
+            shared_retriever = long_term_memory.get_retriever(use_env=False)
+        if shared_retriever is None:
+            return []
+        selected_domains = domains or ([domain] if domain else None)
+        results = shared_retriever.retrieve(
+            query,
+            domains=selected_domains,
+            top_k=max(1, int(top_k)),
+            rerank=True,
+        )
+        return [item.to_dict() if hasattr(item, "to_dict") else dict(item) for item in results]
 
     @server.register(
         name="ticket_create",

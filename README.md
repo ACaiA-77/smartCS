@@ -19,9 +19,13 @@ SmartCS 是一个本地多 Agent 客服后端，基于显式 async `ChatOrchestr
 
 以上是 2026-09-18 checkpoint 范围的历史结果，不代表后续 Auth 改造已通过。Auth 本轮结果与原始输出见 `artifacts/auth_20260919/`。本地确定性验证使用 Mock / Deterministic LLM 和隔离业务 Sandbox，不代表在线模型质量、真实流量、生产 SLA 或远程 CI。
 
+## Final RAG Runtime Closure（2026-09-20）
+
+RAG runtime isolation 已通过独立验收并冻结：生产 composition root 继续从环境加载双领域 artifact retriever；显式注入的 `LongTermMemory`、MCP 和 Eval 使用 `get_retriever(use_env=False)`，不受 `RAG_INDEX_ROOT` 污染。最终回归为 `367 passed, 18 skipped`，离线 Eval `14 / 14`，Node UI `15 / 15`；两种测试顺序和 API smoke 均通过，原始输出见 `artifacts/smartcs_final_20260920/`。双域 Retrieval Benchmark 的真实模型结果保存在 `artifacts/rag_round3/`：`hybrid_rerank` 的 global Top-10 为 Recall `0.825`、MRR `0.800`、nDCG `0.749`，wrong-domain rate `0.063`。这些是本地固定数据集结果，不代表线上质量或生产 SLA。
+
 ## 用户登录与访问控制
 
-本轮本地验收：全量 `351 passed in 71.72s`，Auth 专项 `63 passed in 28.67s`，checkpoint 专项 `14 passed in 21.34s`，Node 15 / 15，原有离线 Eval 14 / 14。真实 MySQL、JWT、HTTP 进程重启和 Chrome 双账号验收通过。完整口径见 [执行回报](artifacts/auth_20260919/execution_report.md)；专项测试已包含在全量数量内，不重复累计。
+本轮本地验收：认证阶段全量 `351 passed in 71.72s`，Auth 专项 `63 passed in 28.67s`，checkpoint 专项 `14 passed in 21.34s`；随后 RAG runtime isolation 收尾使最终全量达到 `367 passed, 18 skipped`。Node 15 / 15、离线 Eval 14 / 14、真实 MySQL、JWT、HTTP 进程重启和 Chrome 双账号验收均通过。认证专项测试已包含在最终全量数量内，不重复累计；完整认证证据见 [执行回报](artifacts/auth_20260919/execution_report.md)。
 
 浏览器通过 `POST /api/auth/login` 登录，服务端验证 Argon2 密码哈希并设置 HttpOnly JWT cookie。每次客户请求都校验签名、期限和发行者，再从 MySQL 读取账号状态及业务身份。前端不能指定 `user_id` 或 `business_user_id`。
 
@@ -128,7 +132,9 @@ Copy-Item .env.docker.example .env.docker
 # OPENAI_BASE_URL=...
 # MODEL_NAME=deepseek-v4-flash
 # EMBEDDING_BACKEND=local
-# EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
+# EMBEDDING_MODEL=BAAI/bge-m3
+# RAG_INDEX_ROOT=./artifacts/rag_round3/production_indexes
+# RAG_RERANKER_BACKEND=cross_encoder
 
 # 抓取网页并生成 RAG Markdown
 python -m scripts.fetch_knowledge_sources --config .\knowledge_sources\urls.yml --timeout 45 --min-clean-chars 200
@@ -234,7 +240,21 @@ PREPARED → ROUTED → EXECUTING → GENERATED → REVIEWED → FINISHED / WAIT
 
 ### RAG 管线
 
-完整 5 步 RAG 流程：Query 改写 → 向量检索（Top-5）→ LLM 重排序（Top-3）→ 上下文注入 → 生成回答。
+当前 RAG 流程：Query 改写 → 双域 Dense + BM25 → RRF 融合 → Cross-Encoder 重排 → 上下文注入 → 生成回答；检索最多进行两轮 refinement，最终回答仍使用原始问题。
+
+Round 1 的离线索引构建位于 `rag/` 和 `scripts/build_rag_indexes.py`，把 `apple_support` 与 `agent_engineering` 分成独立的原始/规范化文本、结构化 chunk、FAISS dense artifact 和带词频的 BM25 corpus/index。构建命令默认使用确定性的 hash backend，不下载模型；生成的 manifest 会明确标记 `artifact_kind=dry_run`、实际 backend/model 与目标 embedding 配置 `BAAI/bge-m3`、1024 维，需实际模型时再显式传 `--embedding-backend local`。Markdown/TXT/PDF 均可加载，PDF 只提取嵌入文本；URL-only TXT 会保留为 unresolved 元数据而不会生成伪内容 chunk。Round 2 的 RRF、Cross-Encoder 与在线混合检索已在同一 `rag/` 层实现，Round 3 的固定双域 Retrieval Benchmark 见下文。
+
+```text
+python -m scripts.build_rag_indexes --domain all --reset
+```
+
+输出默认位于 `vector_store/rag_indexes/{apple_support,agent_engineering}/`，包括 `chunks.jsonl`、`corpus.jsonl`、`bm25_index.json`、`index.faiss` 和 `manifest.json`。现有 `memory/long_term.py` 与聊天 RAG 运行时保持兼容；本命令只负责离线索引，不替换当前在线检索链路。
+
+### RAG Round 2 在线混合检索边界
+
+Round 2 的在线链路位于 `rag/`：原始问题经现有 Query rewrite 后，统一进入双域 Dense + BM25 检索、RRF 融合和可注入 Cross-Encoder reranker，再把最终 Top-K 上下文交给回答模型。`KnowledgeRAGAgent` 与 MCP `knowledge_search` 共用 `HybridRetriever`；artifact manifest、chunk 顺序、FAISS 维度、BM25 chunk IDs 和实际 embedding backend/model 不一致时会 fail closed。Round1 的 `dry_run` artifact 只能通过显式 `allow_dry_run` 用于测试，生产路径默认拒绝。
+
+Round 2 提供有界的最多两轮检索 refinement，并保留 `original_query` 用于最终回答。Round 3 已提供 60 条双域人工维护 query、可审计 graded qrels、manifest source hash 校验，以及 Dense/BM25/RRF/真实 Cross-Encoder 四路消融；headline 指标使用双域 global Top-20，不使用 query rewrite 或 oracle domain 过滤。`artifacts/rag_round3/metrics.json`、`metrics_by_domain.json`、`metrics_per_query.json` 和 `failure_analysis.md` 保存最终结果。
 
 ### RAG 向量库配置
 
@@ -246,14 +266,18 @@ PREPARED → ROUTED → EXECUTING → GENERATED → REVIEWED → FINISHED / WAIT
 |------|--------|------|
 | `FAISS_INDEX_PATH` | `./vector_store/faiss_index` | FAISS 索引与 metadata 保存位置 |
 | `EMBEDDING_BACKEND` | `hash` | `hash` 离线兜底；`local` / `sentence_transformers` 使用本地模型；`openai` / `remote` 使用远程 API |
-| `EMBEDDING_MODEL` | `BAAI/bge-small-zh-v1.5` | 本地 embedding 模型名；远程模式下可设为供应商支持的 embedding 模型 |
+| `EMBEDDING_MODEL` | `BAAI/bge-m3`（Round 3） | 本地 embedding 模型名；生产双域索引必须与构建索引的模型一致 |
 | `EMBEDDING_DIM` | `1536` | 远程 embedding 维度提示，本地模型会自动读取维度 |
+| `RAG_INDEX_ROOT` | 未设置时回退旧版 `FAISS_INDEX_PATH` | Round 3 生产索引根目录，例如 `./artifacts/rag_round3/production_indexes` |
+| `RAG_RERANKER_BACKEND` | `fake` | 生产索引必须使用 `cross_encoder`，测试 dry-run 才使用 `fake` |
 
-工程建议：开发和测试可以用默认 `hash` 跑通流程；需要更强检索时可使用本地 embedding 模型。Apple RAG 知识库可使用以下配置：
+本地双域生产检索使用以下配置。未设置 `RAG_INDEX_ROOT` 时，兼容路径会回退到旧版 `FAISS_INDEX_PATH`，不会自动加载 `agent_engineering` 生产索引。
 
 ```env
 EMBEDDING_BACKEND=local
-EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
+EMBEDDING_MODEL=BAAI/bge-m3
+RAG_INDEX_ROOT=./artifacts/rag_round3/production_indexes
+RAG_RERANKER_BACKEND=cross_encoder
 ```
 
 切换 embedding 模型后必须重新入库，因为旧 FAISS 向量的维度和语义空间不能复用。面向生产检索时，建议显式设置 `min_score`，避免弱相关 chunk 被送进大模型。
@@ -349,10 +373,10 @@ SentenceTransformerEmbeddingBackend 512 512 95
 - `refund_create`：经确认后创建退款申请，使用 `ExecutionLedger` 做执行幂等
 - `ticket_create`：通过 `TicketService` 持久化创建工单，使用 `client_request_id` 和 payload hash 做业务幂等
 - `ticket_query`：按工单号和用户归属查询持久化工单
-- `knowledge_search`：基于 `LongTermMemory.search()` 查询与主 RAG 共用的 FAISS 索引
+- `knowledge_search`：复用主 RAG 的 `HybridRetriever`，支持 `apple_support` 与 `agent_engineering` 双域检索
 - `risk_check`：已注册的风险查询工具
 
-应用启动时，`knowledge_search` 复用 `FAISS_INDEX_PATH` 对应的 `LongTermMemory`，返回命中文档片段、来源、相似度分数和 metadata。
+应用启动时，`knowledge_search` 复用主 RAG 的在线检索器，返回命中文档片段、来源、相似度分数和 metadata；传入 `domain` 或 `domains` 可限制知识域。
 可通过 HTTP 直接验证：
 
 ```powershell
@@ -455,7 +479,7 @@ python -m evals.runner
 python -m evals.runner --json
 ```
 
-`pytest` 覆盖代码和集成回归，Eval runner 检查场景级 Agent 与业务不变量。2026-09-18 checkpoint 阶段的历史全量复验为 `284 passed in 58.14s`，验收报告见 [checkpoint_test_report.md](artifacts/checkpoint_20260918/checkpoint_test_report.md)，原始输出见 [full_suite.txt](artifacts/checkpoint_20260918/full_suite.txt)；同阶段原有 Eval 14 / 14 和 3 项 Node 测试的验收记录见同目录 `round1_acceptance.md`。复现全量测试需设置 `OTEL_SDK_DISABLED=true`、`EMBEDDING_BACKEND=hash` 和 `SMARTCS_CHECKPOINT_MYSQL_TEST=1`，并提供可用 MySQL。14 项 checkpoint pytest 已包含在历史 284 项内；Node 另计。本轮认证全量为 351 项通过，详见文首及本轮执行回报。原有 Eval 没有扩展为 checkpoint 场景集，不能用 14 / 14 代替恢复验收，也不代表在线模型质量、真实流量、生产 SLA 或远程 CI 结果。
+`pytest` 覆盖代码和集成回归，Eval runner 检查场景级 Agent 与业务不变量。当前默认离线回归最终为 `367 passed, 18 skipped`；认证专项和 checkpoint 专项均已包含在其中。2026-09-18 checkpoint 阶段的历史全量复验为 `284 passed in 58.14s`，验收报告见 [checkpoint_test_report.md](artifacts/checkpoint_20260918/checkpoint_test_report.md)，原始输出见 [full_suite.txt](artifacts/checkpoint_20260918/full_suite.txt)；同阶段原有 Eval 14 / 14 和 3 项 Node 测试的验收记录见同目录 `round1_acceptance.md`。复现真实 MySQL 测试需显式设置 `OTEL_SDK_DISABLED=true`、`EMBEDDING_BACKEND=hash` 和 `SMARTCS_CHECKPOINT_MYSQL_TEST=1`，并提供可用 MySQL。RAG runtime closure 的隔离语义、顺序回归、Node UI 和 API smoke 已于 2026-09-20 复验通过；这些结果不代表在线模型质量、真实流量、生产 SLA 或远程 CI 已执行。
 
 真实 MySQL 定向验证必须显式开启，不会因本机存在 `.env` 自动运行外部集成测试：
 

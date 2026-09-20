@@ -136,6 +136,7 @@ class ChatOrchestrator:
         tool_executor: ToolExecutor | None = None,
         checkpoint_store: CheckpointStore | None = None,
         execution_reconciler=None,
+        retriever=None,
     ) -> None:
         self.llm = llm
         self.session_store = session_store
@@ -146,7 +147,10 @@ class ChatOrchestrator:
         self.execution_reconciler = execution_reconciler
         self.intent_router = IntentRouterAgent(llm)
         self.conversation_agent = ConversationAgent(llm)
-        self.knowledge_agent = KnowledgeRAGAgent(llm, long_term_memory)
+        self.retriever = retriever or long_term_memory.get_retriever(use_env=False)
+        self.knowledge_agent = KnowledgeRAGAgent(
+            llm, long_term_memory, retriever=self.retriever
+        )
         self.ticket_agent = TicketHandlerAgent(llm, tool_executor=tool_executor)
         self.refund_agent = RefundHandlerAgent(llm, tool_executor, session_store)
         self.compliance_agent = ComplianceCheckerAgent(llm)
@@ -397,6 +401,7 @@ def create_chat_orchestrator(
     tool_executor: ToolExecutor | None = None,
     checkpoint_store: CheckpointStore | None = None,
     execution_reconciler=None,
+    retriever=None,
 ) -> ChatOrchestrator:
     """Build an orchestrator from the application's already-owned services."""
     if llm is None:
@@ -414,6 +419,7 @@ def create_chat_orchestrator(
         tool_executor,
         checkpoint_store,
         execution_reconciler,
+        retriever,
     )
 
 

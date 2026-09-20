@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0b5f55" />
     <title>SmartCS 智能客服</title>
-    <link rel="stylesheet" href="/ui/styles.css" />
+    <link rel="stylesheet" href="/ui/styles.css?v=scrollbar-1" />
   </head>
-  <body>
+  <body data-auth-state="checking">
     <a class="skip-link" href="#message-input">跳到对话输入</a>
     <section class="login-page" id="login-page" aria-labelledby="login-title">
       <div class="login-brand brand"><span class="brand-mark">S</span><span>SmartCS</span></div>
@@ -24,7 +24,7 @@
         <p class="panel-copy">请使用已开通的账户，本页面暂不提供注册。</p>
       </form>
     </section>
-    <main class="app-shell" id="app-shell" hidden>
+    <main class="app-shell" id="app-shell" hidden style="display: none;" aria-hidden="true">
       <aside class="sidebar" aria-label="客服导航">
         <div class="brand">
           <span class="brand-mark">S</span>
@@ -131,6 +131,6 @@
     </main>
 
     <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="/ui/app.js"></script>
+    <script src="/ui/app.js?v=auth-state-2"></script>
   </body>
 </html>

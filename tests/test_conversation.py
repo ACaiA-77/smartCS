@@ -8,7 +8,15 @@ from unittest.mock import AsyncMock
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from agents.conversation import ConversationAgent
+from agents.conversation import CONVERSATION_SYSTEM_PROMPT, ConversationAgent
+
+
+def test_prompt_distinguishes_smartcs_rag_capability_from_conversation_boundary():
+    assert "apple_support" in CONVERSATION_SYSTEM_PROMPT
+    assert "agent_engineering" in CONVERSATION_SYSTEM_PROMPT
+    assert "knowledge_rag" in CONVERSATION_SYSTEM_PROMPT
+    assert "本轮不直接执行知识检索" in CONVERSATION_SYSTEM_PROMPT
+    assert "没有检索、MCP 或其他工具" not in CONVERSATION_SYSTEM_PROMPT
 
 
 @pytest.mark.asyncio
@@ -78,4 +86,20 @@ async def test_empty_messages_return_state_without_calling_llm():
 
     assert result is state
     assert result["sub_results"] == {"existing": "kept"}
+    llm.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_capability_question_uses_stable_dual_domain_answer():
+    llm = AsyncMock()
+
+    result = await ConversationAgent(llm).process({
+        "messages": [HumanMessage(content="你不是双领域的 RAG 吗？")],
+        "sub_results": {},
+    })
+
+    answer = result["sub_results"]["conversation"]
+    assert "apple_support" in answer
+    assert "agent_engineering" in answer
+    assert "conversation 节点本轮不直接执行知识检索" in answer
     llm.ainvoke.assert_not_awaited()

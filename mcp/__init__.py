@@ -27,12 +27,16 @@ from mcp.tools import register_all_tools
 __all__ = ["MCPToolServer", "create_server"]
 
 
-def create_server() -> MCPToolServer:
+def create_server(retriever=None, long_term_memory=None) -> MCPToolServer:
     """工厂函数：创建 MCPToolServer 并注册所有默认工具。
 
     等价于原来的 create_default_tools()，
     但工具注册逻辑拆到了 tools/ 目录下。
     """
     server = MCPToolServer()
-    register_all_tools(server.registry)
+    register_all_tools(
+        server.registry,
+        retriever=retriever,
+        long_term_memory=long_term_memory,
+    )
     return server

@@ -58,12 +58,14 @@ short_term_memory = ShortTermMemory(
 )
 session_store = SessionStore(short_term_memory)
 long_term_memory = LongTermMemory(index_path=os.getenv("FAISS_INDEX_PATH", "./vector_store/faiss_index"))
+shared_retriever = long_term_memory.get_retriever()
 order_repository = OrderRepository(os.getenv("ORDER_DB_PATH", "./data/orders.db"))
 refund_service = RefundService(order_repository)
 ticket_service = TicketService(order_repository)
 mcp_server = create_default_tools(
     MCPToolServer(),
     long_term_memory=long_term_memory,
+    retriever=shared_retriever,
     order_repository=order_repository,
     refund_service=refund_service,
     ticket_service=ticket_service,
@@ -87,6 +89,21 @@ metrics = AgentMetrics()
 chat_orchestrator = None
 checkpoint_store = None
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
+
+
+def _log_rag_runtime() -> None:
+    """Log non-sensitive retrieval configuration once during startup."""
+    try:
+        domains = ",".join(shared_retriever._domains(None)) or "none"
+    except Exception:
+        domains = "unknown"
+    logger.warning(
+        "RAG runtime: mode=%s domains=%s embedding=%s reranker=%s",
+        "artifact" if shared_retriever.is_artifact_mode else "legacy",
+        domains,
+        os.getenv("EMBEDDING_MODEL", "default"),
+        os.getenv("RAG_RERANKER_BACKEND", "fake"),
+    )
 
 
 @asynccontextmanager
@@ -122,11 +139,13 @@ async def lifespan(app: FastAPI):
     chat_orchestrator = create_chat_orchestrator(
         session_store=session_store,
         long_term_memory=long_term_memory,
+        retriever=shared_retriever,
         mcp_server=mcp_server,
         tool_executor=tool_executor,
         checkpoint_store=checkpoint_store,
         execution_reconciler=execution_reconciler,
     )
+    _log_rag_runtime()
 
     try:
         yield

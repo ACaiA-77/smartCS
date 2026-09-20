@@ -179,11 +179,49 @@ class LongTermMemory:
         self.min_score = min_score
         self._documents: list[dict[str, Any]] = []
         self._index = None
+        self._retriever = None
+        self._retriever_root = None
         self._init_index()
 
     @property
     def documents(self) -> list[dict[str, Any]]:
         return list(self._documents)
+
+    def get_retriever(
+        self,
+        artifact_root: str | None = None,
+        *,
+        use_env: bool = True,
+    ):
+        """Return a retriever, optionally ignoring process-wide RAG settings."""
+        from rag.retriever import HybridRetriever
+        from rag.reranker import create_reranker
+
+        configured_root = artifact_root
+        if configured_root is None and use_env:
+            configured_root = os.getenv("RAG_INDEX_ROOT")
+        if (
+            artifact_root is None
+            and use_env
+            and self._retriever is not None
+            and self._retriever_root == configured_root
+        ):
+            return self._retriever
+        explicit_artifacts = artifact_root is not None or configured_root is not None
+        root = configured_root
+        reranker_backend = os.getenv("RAG_RERANKER_BACKEND", "fake") if use_env else "fake"
+        reranker = create_reranker(reranker_backend)
+        retriever = HybridRetriever(
+            root,
+            embedding_backend=self.embedding_backend,
+            reranker=reranker,
+            allow_dry_run=os.getenv("RAG_ALLOW_DRY_RUN", "false").lower() in {"1", "true", "yes", "on"},
+            legacy_memory=None if explicit_artifacts else self,
+        )
+        if artifact_root is None and use_env:
+            self._retriever = retriever
+            self._retriever_root = configured_root
+        return retriever
 
     def _init_index(self) -> None:
         if faiss is None:

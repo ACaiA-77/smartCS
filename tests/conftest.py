@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from memory.long_term import LongTermMemory
+
+
+# Keep unit and integration tests deterministic; the service loads production
+# embedding settings from .env only when it is started outside pytest.
+os.environ.setdefault("EMBEDDING_BACKEND", "hash")
 
 
 def _collect_text(messages: list[BaseMessage]) -> tuple[str, str]:

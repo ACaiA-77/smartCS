@@ -11,7 +11,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from agents.orchestrator import ChatOrchestrator, create_chat_orchestrator
-from memory.long_term import LongTermMemory
+from memory.long_term import HashEmbeddingBackend, LongTermMemory
 from memory.session_store import SessionStore
 from memory.short_term import ShortTermMemory
 from mcp.approval_store import ApprovalService
@@ -301,3 +301,21 @@ def test_production_uses_explicit_orchestrator():
     assert "create_" + "supervisor_graph(" not in api_source
     assert "graph." + "ainvoke" not in api_source
     assert "chat_orchestrator.ainvoke" in api_source
+
+
+def test_orchestrator_uses_explicit_memory_when_production_rag_root_is_set(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("RAG_INDEX_ROOT", str(tmp_path / "production-index"))
+    memory = LongTermMemory(
+        index_path=str(tmp_path / "vectors"),
+        embedding_backend=HashEmbeddingBackend(64),
+    )
+    memory.add_document("隔离知识库中的账户恢复说明。", "isolated.md")
+    short = ShortTermMemory(redis_url="redis://127.0.0.1:6399/0", redis_retry_cooldown=60)
+    orchestrator = ChatOrchestrator(MockLLM(), SessionStore(short), memory)
+
+    hits = orchestrator.retriever.retrieve("账户恢复说明", top_k=1, rerank=False)
+
+    assert hits[0].source == "isolated.md"
+    assert orchestrator.retriever.legacy_memory is memory
