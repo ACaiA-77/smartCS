@@ -141,7 +141,7 @@ ledger 的工单 recovery payload 只保留 `client_request_id`、`user_id` 和 
 
 以下是项目演示流程；已完成的独立 HTTP / Chrome 本地验收记录见 [browser_restart.json](../artifacts/auth_20260919/browser_restart.json)，不以演示步骤替代原始证据。使用登录后的 Web 或保存 cookie 的 HTTP 客户端；旧 TUI 尚未适配，匿名协议会被拒绝。
 
-1. 用一张架构图说明 `JWT -> active account -> UserContext -> session ownership -> ChatOrchestrator`，再指出 RAG 直接访问 `LongTermMemory`，退款和工单经过身份检查及 `ToolExecutor`。
+1. 用一张架构图说明 `JWT -> active account -> UserContext -> session ownership -> ChatOrchestrator`，再指出 `KnowledgeRAGAgent -> HybridRetriever -> Dense FAISS + Sparse BM25 -> RRF -> Cross-Encoder`，退款和工单经过身份检查及 `ToolExecutor`。
 2. 登录账号 A，由服务端创建会话，查询“我的订单”，展示订单 READ 路径和归属过滤；不在请求中设置 `user_id`。
 3. 使用同一用户、同一会话和一笔符合条件的订单发起退款请求，展示 `refund_evaluate` 的 eligibility 结果与会话 `pending_action`。
 4. 回复“确认退款”，展示 `refund_create`、ledger complete、待确认状态清除，以及 SQLite 中一个退款效果。重复确认时说明没有待确认动作；相同执行键重放则由 ledger 返回已保存结果。
@@ -171,7 +171,7 @@ python -m pytest tests/test_business_sandbox.py tests/test_refund_service.py tes
 | Authentication / customer isolation | 专项 `63 passed in 28.67s`，已包含在最终全量 367 项内 |
 | Node / HTTP / browser | Node 15 / 15；真实 JWT / MySQL 的独立 HTTP / Chrome 本地验收 PASS |
 | Runtime observability | 保留聚合指标；原始明细和审批接口拒绝客户访问 |
-| Repository / CI configuration | 未提交、未推送，不据本地文档宣称远程 CI 已通过 |
+| Repository / CI configuration | 已本地提交至 `54aa0a9`；未 push，未验证 remote CI，未 deploy |
 | Documentation / presentation | 已统一最终回归、RAG benchmark 指标、历史证据和非生产边界 |
 
-本轮最终结论以 [执行报告](../artifacts/auth_20260919/execution_report.md) 和同目录原始输出为准。这不表示已经 committed、pushed、完成 remote CI 验证、deployed 或证明了真实生产运行。公共注册、密码找回、OAuth、SSO、RBAC、管理后台、SSE、分布式协调和更大的 live-model Eval 数据集均未纳入本轮。
+本轮最终结论以 [执行报告](../artifacts/auth_20260919/execution_report.md) 和同目录原始输出为准。当前稳定节点已本地提交至 `54aa0a9`；未 push、未验证 remote CI、未 deploy，也没有据此证明真实生产运行。公共注册、密码找回、OAuth、SSO、RBAC、管理后台、SSE、分布式协调和更大的 live-model Eval 数据集均未纳入本轮。

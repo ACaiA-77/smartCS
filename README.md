@@ -84,11 +84,13 @@ Business Domain
         ↓
 SQLite
 
-KnowledgeRAG
+KnowledgeRAGAgent
         ↓
-LongTermMemory
-        ↓
-FAISS
+HybridRetriever
+   ├─ Dense (FAISS)
+   ├─ Sparse (BM25)
+   ├─ RRF
+   └─ Cross-Encoder
 ```
 
 详细组件、状态边界和时序见 [docs/architecture.md](docs/architecture.md)。简历表达、面试问答和演示脚本见 [docs/resume_interview.md](docs/resume_interview.md)。
@@ -198,7 +200,7 @@ python-impl/
 
 ### 显式请求编排
 
-`ChatOrchestrator` 先恢复会话上下文，再调用 `IntentRouter`。置信度足够时，它最多选择一个响应分支，随后统一进行合规检查和响应合成；低置信度或未知路由直接返回澄清。问候、自我介绍、能力说明、致谢等进入 `ConversationAgent`，基于近期对话直接回复，不检索知识库或调用业务工具。具体产品知识和政策问题仍走 RAG；混合了寒暄的业务请求优先走业务分支。订单、退款和工单 Handler 通过 `ToolExecutor` 进入 MCP 和业务域，RAG Agent 则直接访问 `LongTermMemory`。完整入口和分支见 [docs/architecture.md](docs/architecture.md)。
+`ChatOrchestrator` 先恢复会话上下文，再调用 `IntentRouter`。置信度足够时，它最多选择一个响应分支，随后统一进行合规检查和响应合成；低置信度或未知路由直接返回澄清。问候、自我介绍、能力说明、致谢等进入 `ConversationAgent`，基于近期对话直接回复，不检索知识库或调用业务工具。具体产品知识和政策问题仍走 RAG；混合了寒暄的业务请求优先走业务分支。订单、退款和工单 Handler 通过 `ToolExecutor` 进入 MCP 和业务域，`KnowledgeRAGAgent` 通过共享 `HybridRetriever` 访问双域知识库。完整入口和分支见 [docs/architecture.md](docs/architecture.md)。
 
 工单写入同时使用执行层 `idempotency_key` 和业务域 `client_request_id`，分别覆盖执行回放与客户端请求幂等。`refund_create` 和 `ticket_create` 当前都是 medium risk 写操作，需要确认、幂等键和 ledger，但不因 medium risk 自动要求人工审批。
 

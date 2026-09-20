@@ -18,12 +18,15 @@ flowchart TD
     F --> CO[ChatOrchestrator]
     CO --> IR[IntentRouter]
     CO --> CV[ConversationAgent]
-    CO --> KR[KnowledgeRAG]
+    CO --> KR[KnowledgeRAGAgent]
     CO --> TH[TicketHandler]
     CO --> RH[RefundHandler]
     CO --> CC[ComplianceChecker]
-    KR --> LTM[LongTermMemory]
-    LTM --> FAISS[FAISS]
+    KR --> HR[HybridRetriever]
+    HR --> DENSE[Dense FAISS]
+    HR --> SPARSE[Sparse BM25]
+    HR --> RRF[RRF]
+    RRF --> CE[Cross-Encoder]
     TH --> TE[ToolExecutor]
     RH --> TE
     TE --> GUARD[Authenticated tool identity guard]
@@ -46,7 +49,7 @@ flowchart TD
 
 请求先经过外层 ASGI 可观测性包装器；客户接口再通过 FastAPI 认证依赖获得可信身份。这样，包含异常响应在内的请求都可以获得相关的 `X-Request-ID` 和聚合指标。涉及已有会话的读取、继续、删除和发消息操作，须先校验当前账号拥有该会话。`ChatOrchestrator` 负责恢复会话、路由意图、选择业务 Handler、执行合规检查和合成响应。
 
-成功路由后最多执行一个响应分支。低置信度或未知路由直接要求澄清。`ConversationAgent` 处理问候、身份、能力说明、致谢及相关上下文追问，只接收近期对话，不接入知识库或业务工具；输出仍经过统一合规检查。`KnowledgeRAG` 是知识检索分支，直接访问 `LongTermMemory` 和 FAISS，不把知识检索包装成业务写操作。订单查询、退款和工单等业务 Handler 使用 `ToolExecutor` 进入 MCP 工具和业务域。
+成功路由后最多执行一个响应分支。低置信度或未知路由直接要求澄清。`ConversationAgent` 处理问候、身份、能力说明、致谢及相关上下文追问，只接收近期对话，不接入知识库或业务工具；输出仍经过统一合规检查。`KnowledgeRAGAgent` 是知识检索分支，通过共享 `HybridRetriever` 依次访问 Dense FAISS、Sparse BM25、RRF 和 Cross-Encoder，不把知识检索包装成业务写操作。订单查询、退款和工单等业务 Handler 使用 `ToolExecutor` 进入 MCP 工具和业务域。
 
 ### 认证与会话归属
 
