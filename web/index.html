@@ -3,24 +3,36 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0b5f55" />
+    <meta name="theme-color" content="#142c3d" />
     <title>SmartCS 智能客服</title>
-    <link rel="stylesheet" href="/ui/styles.css?v=scrollbar-1" />
+    <link rel="stylesheet" href="/ui/styles.css?v=agent-desk-2" />
   </head>
   <body data-auth-state="checking">
     <a class="skip-link" href="#message-input">跳到对话输入</a>
     <section class="login-page" id="login-page" aria-labelledby="login-title">
-      <div class="login-brand brand"><span class="brand-mark">S</span><span>SmartCS</span></div>
+      <div class="login-brand">
+        <div class="brand"><span class="brand-mark">S</span><span>SmartCS<small>AI SUPPORT DESK</small></span></div>
+        <div class="login-brand-copy">
+          <p class="brand-kicker">智能客服服务台</p>
+          <h2>问题有入口，<br />处理有进度。</h2>
+          <p>知识咨询、订单查询与售后服务，集中在同一段会话里。</p>
+        </div>
+        <ol class="login-capabilities">
+          <li><span>01</span> 知识咨询</li>
+          <li><span>02</span> 订单查询</li>
+          <li><span>03</span> 售后处理</li>
+        </ol>
+      </div>
       <form class="login-form" id="login-form">
-        <p class="topbar-kicker">你的智能客服</p>
-        <h1 id="login-title">登录后，继续你的咨询</h1>
+        <p class="topbar-kicker">欢迎回到 SmartCS</p>
+        <h1 id="login-title">继续你的咨询</h1>
         <p class="panel-copy">查询自己的订单、处理售后，也可以接着上次的对话聊。</p>
         <label for="username">用户名</label>
         <input id="username" name="username" autocomplete="username" required maxlength="128" />
         <label for="password">密码</label>
         <input id="password" name="password" type="password" autocomplete="current-password" required />
         <p class="auth-message" id="auth-message" role="status">正在检查登录状态…</p>
-        <button class="send-button" id="login-button" type="submit" disabled>登录</button>
+        <button class="send-button" id="login-button" type="submit" disabled>登录服务台</button>
         <p class="panel-copy">请使用已开通的账户，本页面暂不提供注册。</p>
       </form>
     </section>
@@ -28,7 +40,7 @@
       <aside class="sidebar" aria-label="客服导航">
         <div class="brand">
           <span class="brand-mark">S</span>
-          <span>SmartCS</span>
+          <span>SmartCS<small>AI SUPPORT DESK</small></span>
         </div>
 
         <button class="new-session" id="new-session" type="button" aria-label="新建会话" title="新建会话">
@@ -57,7 +69,7 @@
       <section class="conversation-area" aria-label="客服对话">
         <header class="topbar">
           <div>
-            <p class="topbar-kicker">SmartCS 智能客服</p>
+            <p class="topbar-kicker">智能客服 / 当前会话</p>
             <h1 id="session-name">新客服咨询</h1>
           </div>
           <div class="topbar-actions">
@@ -102,7 +114,7 @@
         <section class="context-section">
           <div class="section-heading">
             <div>
-              <p class="section-label">当前账户</p>
+              <p class="section-label">服务上下文</p>
               <h2>我的订单</h2>
             </div>
             <span class="count-badge" id="order-count"></span>
