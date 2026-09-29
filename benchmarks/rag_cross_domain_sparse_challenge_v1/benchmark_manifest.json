@@ -1,0 +1,51 @@
+{
+  "benchmark_version": "rag-cross-domain-sparse-challenge-v1",
+  "split": "challenge",
+  "purpose": "engineering_model_selection",
+  "blindness": "not_unseen_holdout",
+  "known_dev_history_exposure": true,
+  "scoring_mode": "fact_group_v1",
+  "chunking_version": "structure-context-v1",
+  "index_root": "artifacts/rag_round3/production_indexes",
+  "query_count": 24,
+  "qrel_count": 49,
+  "raw_qrel_count": 49,
+  "fact_group_count": 32,
+  "alias_count": 17,
+  "domains": {
+    "apple_support": 12,
+    "agent_engineering": 12
+  },
+  "query_kinds": {
+    "apple_support": {
+      "semantic": 4,
+      "lexical": 4,
+      "confusing": 4
+    },
+    "agent_engineering": {
+      "semantic": 4,
+      "lexical": 4,
+      "confusing": 4
+    }
+  },
+  "mechanism_tags": {
+    "same_source_competition": 21,
+    "cross_domain_decoy": 6,
+    "supporting_evidence": 8,
+    "multi_fact": 8,
+    "multi_component_answer": 5
+  },
+  "qrel_completeness": "source_order_reviewed_not_corpus_exhaustive",
+  "review": "source-first authored engineering challenge; semantic review completed under user-delegated selection; not an unseen Holdout",
+  "review_result": "Smartcs-new readonly REVIEW=PASS iteration 2 on 2026-09-24",
+  "source_sha256": {
+    "apple_support": "bf0ce82c6414dee55bd6a7b69365b37d4322d89407dea48e66c3662b378b455d",
+    "agent_engineering": "d4b73fa26871ccf46077e91ac5363ce83fd922ba9c95232719dff1061568bd75"
+  },
+  "file_sha256": {
+    "queries.jsonl": "a97a43eea3fa219dc1cb12439ec9a7b3c2954cfa59d12ea3372c0655ea0481ff",
+    "qrels.jsonl": "76136024ea1dc4017efb4585a49f1fc32ba11fc26dfe762e72e3a1662a86e955",
+    "qrel_groups.jsonl": "43f23c66f2e6c09a17e4a69ce4c326ff4444840b9f370fed080d48b57ec7711c"
+  },
+  "qrel_groups_sha256": "43f23c66f2e6c09a17e4a69ce4c326ff4444840b9f370fed080d48b57ec7711c"
+}

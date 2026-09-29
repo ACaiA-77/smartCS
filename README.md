@@ -258,6 +258,8 @@ Round 2 的在线链路位于 `rag/`：原始问题经现有 Query rewrite 后�
 
 Round 2 提供有界的最多两轮检索 refinement，并保留 `original_query` 用于最终回答。Round 3 已提供 60 条双域人工维护 query、可审计 graded qrels、manifest source hash 校验，以及 Dense/BM25/RRF/真实 Cross-Encoder 四路消融；headline 指标使用双域 global Top-20，不使用 query rewrite 或 oracle domain 过滤。`artifacts/rag_round3/metrics.json`、`metrics_by_domain.json`、`metrics_per_query.json` 和 `failure_analysis.md` 保存最终结果。
 
+评测脚本默认沿用 chunk-ID 计分；只有显式传入 `--qrel-groups PATH` 才按事实组计分。同组不同 chunk 命中只计一次，但仍占用原始排名位置。Holdout v1 已冻结为正式评测包；其 qrel 覆盖不声称全语料穷尽。
+
 ### RAG 向量库配置
 
 长期记忆实现位于 `memory/long_term.py`，使用 FAISS 做本地向量索引，并把原文 chunk、来源文件、`doc_id`、`chunk_index` 等 metadata 一起保存，方便回答后追溯来源。
@@ -271,6 +273,7 @@ Round 2 提供有界的最多两轮检索 refinement，并保留 `original_query
 | `EMBEDDING_MODEL` | `BAAI/bge-m3`（Round 3） | 本地 embedding 模型名；生产双域索引必须与构建索引的模型一致 |
 | `EMBEDDING_DIM` | `1536` | 远程 embedding 维度提示，本地模型会自动读取维度 |
 | `RAG_INDEX_ROOT` | 未设置时回退旧版 `FAISS_INDEX_PATH` | Round 3 生产索引根目录，例如 `./artifacts/rag_round3/production_indexes` |
+| `RAG_SPARSE_MODE` | `global_corpus_v1`（仅生产 `RAG_INDEX_ROOT` 路径） | 可设为 `domain_local_v1` 回滚；隔离/旧版检索仍用本地域 BM25 |
 | `RAG_RERANKER_BACKEND` | `fake` | 生产索引必须使用 `cross_encoder`，测试 dry-run 才使用 `fake` |
 
 本地双域生产检索使用以下配置。未设置 `RAG_INDEX_ROOT` 时，兼容路径会回退到旧版 `FAISS_INDEX_PATH`，不会自动加载 `agent_engineering` 生产索引。
@@ -279,6 +282,7 @@ Round 2 提供有界的最多两轮检索 refinement，并保留 `original_query
 EMBEDDING_BACKEND=local
 EMBEDDING_MODEL=BAAI/bge-m3
 RAG_INDEX_ROOT=./artifacts/rag_round3/production_indexes
+RAG_SPARSE_MODE=global_corpus_v1
 RAG_RERANKER_BACKEND=cross_encoder
 ```
 

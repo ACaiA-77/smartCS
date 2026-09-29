@@ -1,0 +1,127 @@
+{
+  "gate_version": "global-sparse-ab-gate-v1",
+  "benchmark_version": "rag-cross-domain-sparse-challenge-v1",
+  "benchmark_split": "challenge",
+  "scoring_mode": "fact_group_v1",
+  "arms": {
+    "A": "domain_local_v1",
+    "B": "global_corpus_v1"
+  },
+  "pipeline": {
+    "dense_model": "BAAI/bge-m3",
+    "dense_top_k": 20,
+    "sparse_top_k": 20,
+    "rrf_k": 60,
+    "rrf_top_k": 20,
+    "ce_model": "BAAI/bge-reranker-v2-m3",
+    "ce_top_k": 10,
+    "query_rewrite": false,
+    "domain_oracle": false,
+    "query_domain_filter": null
+  },
+  "metric_contract": {
+    "aggregation": "macro_mean_over_queries_in_scope",
+    "wrong_domain_rate_at_10": "wrong-domain hits divided by returned hits, then query macro mean",
+    "grade_2_loss": "per-query grade-2 fact groups hit by A at CE10 but absent from B at CE10",
+    "threshold_unit": "absolute_fraction"
+  },
+  "gates": {
+    "sparse_mechanism": {
+      "bm25_decoy_wrong_domain_rate@10": {
+        "scope": "cross_domain_decoy_queries",
+        "normal": "B <= A - 0.10",
+        "if_A_below_0.10": "B <= A"
+      },
+      "bm25_recall@10": {
+        "scope": "all_24",
+        "rule": "B >= A - 0.02"
+      }
+    },
+    "rrf": {
+      "hybrid_rrf_recall@10": {
+        "scope": "all_24",
+        "rule": "B >= A"
+      },
+      "hybrid_rrf_wrong_domain_rate@10": {
+        "scope": "all_24",
+        "rule": "B <= A"
+      }
+    },
+    "final_ce": {
+      "hybrid_rerank_recall@10": {
+        "scope": "all_24",
+        "rule": "B >= A"
+      },
+      "hybrid_rerank_wrong_domain_rate@10": {
+        "scope": "all_24",
+        "rule": "B <= A"
+      },
+      "hybrid_rerank_mrr@10": {
+        "scope": "all_24",
+        "rule": "B >= A - 0.01"
+      },
+      "hybrid_rerank_ndcg@10": {
+        "scope": "all_24",
+        "rule": "B >= A - 0.01"
+      },
+      "newly_lost_grade_2_fact_groups@ce10": {
+        "scope": "all_24",
+        "rule": "count == 0"
+      }
+    },
+    "domain_safety": {
+      "apple_support_hybrid_rerank_recall@10": {
+        "scope": "apple_support",
+        "rule": "B >= A - 0.02"
+      },
+      "agent_engineering_hybrid_rerank_recall@10": {
+        "scope": "agent_engineering",
+        "rule": "B >= A - 0.02"
+      }
+    }
+  },
+  "observed_only": [
+    "bm25_mrr@10",
+    "bm25_ndcg@10",
+    "hybrid_rrf_mrr@10",
+    "hybrid_rrf_ndcg@10"
+  ],
+  "decision": {
+    "rule": "all_required_gates_must_pass",
+    "pass": "GLOBAL_SPARSE_DEFAULT_ELIGIBLE",
+    "fail": "KEEP_DOMAIN_LOCAL_DEFAULT",
+    "no_metric_tradeoffs": true,
+    "default_change_in_this_task": false
+  },
+  "first_run_policy": "After first A/B this is an observed selection set; a changed candidate needs challenge-v2 for a new independent gate.",
+  "cross_domain_decoy_query_ids": [
+    "challenge_apple_002",
+    "challenge_apple_003",
+    "challenge_apple_005",
+    "challenge_apple_010",
+    "challenge_apple_012",
+    "challenge_agent_005"
+  ],
+  "locked_sha256": {
+    "benchmarks/rag_cross_domain_sparse_challenge_v1/benchmark_manifest.json": "5bebd62fea8dd6d334dbd1dae9c7aba362c92d98f32b3544073458bd8abfa3e2",
+    "benchmarks/rag_cross_domain_sparse_challenge_v1/queries.jsonl": "a97a43eea3fa219dc1cb12439ec9a7b3c2954cfa59d12ea3372c0655ea0481ff",
+    "benchmarks/rag_cross_domain_sparse_challenge_v1/qrels.jsonl": "76136024ea1dc4017efb4585a49f1fc32ba11fc26dfe762e72e3a1662a86e955",
+    "benchmarks/rag_cross_domain_sparse_challenge_v1/qrel_groups.jsonl": "43f23c66f2e6c09a17e4a69ce4c326ff4444840b9f370fed080d48b57ec7711c",
+    "artifacts/rag_round3/production_indexes/global_sparse/manifest.json": "e1b5ae2c44c9630280570cdebc46c6cf8e53a16a49a5e7998e9429755176677a",
+    "artifacts/rag_round3/production_indexes/global_sparse/bm25_index.json": "97406c19bcdaedfc89eed275682486f4ebca3d0c4ecc9fc1377a9ff98166581f",
+    "artifacts/rag_round3/production_indexes/apple_support/manifest.json": "905d317ad0ea16e6fa92f53524505296805c7582217208bc70370b71e25df75c",
+    "artifacts/rag_round3/production_indexes/agent_engineering/manifest.json": "87873d1e2c0d8f3d1aa5c52cd6b4f9831a63125699d05a82dc3920fb69f68351",
+    "rag/build.py": "8880ad57467bbd335d9df7eaa9f2d95b40a4e3abcb7c59d43873214aa87727d7",
+    "rag/dense_retriever.py": "392c0282f0cb51ca833af5eced1475c85182c0b1a54471246bfcf08bc4bf4e8d",
+    "rag/sparse_retriever.py": "fb554845a1059d384744b3aea71a09a5e1b31bb30e649418fb38a381c904d304",
+    "rag/global_sparse.py": "55b12c4530f507ab766c23c732d28b1ec92bbd6b869b310dc167df036b2b7fb8",
+    "rag/retriever.py": "005df616498a1be300b6301940c211927f6ca1e1112fefd7d69117133fc68742",
+    "rag/fusion.py": "52ad7048daaf8231d4aeb78e975980d729e724dea9f6b6de18ebd103f1913898",
+    "rag/reranker.py": "e4cf8198a93eaa435f2962ae2cbec1349aa83094887d604df7a382bde6dba493",
+    "rag/embeddings.py": "1a6e2ba5805fdb3a6f841aaf019442ccfc93299234d2e8532361988d34899aa1",
+    "rag/evaluation/evaluator.py": "10cff893360ef6660c19a43e008ba4eaafc84f9140bc73d02ae483c1100afe49",
+    "rag/evaluation/metrics.py": "c1e6e6fd218c2098722fb806ea1c9964fc18f6a9b077a6d0bf14d25f985dbf16",
+    "scripts/evaluate_rag_retrieval.py": "cce56b1d516fef93ecad69505a532fa55f7b47e7173d91d86e77a67f2b97379a",
+    "scripts/validate_rag_cross_domain_sparse_gate.py": "02ccb407bfd1d03859c97c59a78795403a72128dfae67a953190ddd123180391"
+  }
+}

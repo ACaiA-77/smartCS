@@ -1,0 +1,25 @@
+{
+  "benchmark_version": "rag-holdout-v1",
+  "split": "holdout",
+  "scoring_mode": "fact_group_v1",
+  "chunking_version": "structure-context-v1",
+  "index_root": "artifacts/rag_round3/production_indexes",
+  "query_count": 36,
+  "raw_qrel_count": 62,
+  "fact_group_count": 44,
+  "alias_count": 18,
+  "human_review": "36 question texts approved; 44 groups, grades and aliases accepted via user reply '合理' on 2026-09-23",
+  "blindness": "partial",
+  "known_dev_history_exposure": true,
+  "qrel_completeness": "not established corpus-wide",
+  "source_sha256": {
+    "agent_engineering": "d4b73fa26871ccf46077e91ac5363ce83fd922ba9c95232719dff1061568bd75",
+    "apple_support": "bf0ce82c6414dee55bd6a7b69365b37d4322d89407dea48e66c3662b378b455d"
+  },
+  "file_sha256": {
+    "queries.jsonl": "27ffc0757c7b4bc591d4de8bf66df9f306f13a4076deb912d4bbdf030c386d57",
+    "qrels.jsonl": "9f6d492ac8f039853b82f4d004cbcb30ac8cc607b9b1f438e4b48cd589e2dbcf",
+    "qrel_groups.jsonl": "43ee5908533095795d49db847c997db46982a1f25ed1930aeb980f1151efa72e"
+  },
+  "qrel_groups_sha256": "43ee5908533095795d49db847c997db46982a1f25ed1930aeb980f1151efa72e"
+}

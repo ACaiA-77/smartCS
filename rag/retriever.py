@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 from .dense_retriever import ArtifactValidationError, DenseRetriever
 from .fusion import reciprocal_rank_fusion
+from .global_sparse import GlobalSparseRetriever
 from .models import RetrievalHit
 from .reranker import FakeReranker, Reranker
 from .sparse_retriever import SparseRetriever
@@ -53,7 +54,10 @@ class HybridRetriever:
         rrf_k: int = 60,
         legacy_memory: Any | None = None,
         domains: Iterable[str] | None = None,
+        sparse_mode: str = "domain_local_v1",
     ) -> None:
+        if sparse_mode not in {"domain_local_v1", "global_corpus_v1"}:
+            raise ValueError(f"unsupported sparse_mode: {sparse_mode}")
         self._force_artifacts = artifact_root is not None
         self.artifact_root = Path(artifact_root or "vector_store/rag_indexes")
         self.embedding_backend = embedding_backend
@@ -62,7 +66,9 @@ class HybridRetriever:
         self.rrf_k = rrf_k
         self.legacy_memory = legacy_memory
         self.default_domains = tuple(domains or ())
+        self.sparse_mode = sparse_mode
         self._domain_retrievers: dict[str, tuple[DenseRetriever, SparseRetriever]] = {}
+        self._global_sparse: GlobalSparseRetriever | None = None
 
     @classmethod
     def from_long_term_memory(
@@ -108,7 +114,7 @@ class HybridRetriever:
                 sorted(
                     item.name
                     for item in self.artifact_root.iterdir()
-                    if item.is_dir() and (item / "manifest.json").exists()
+                    if item.is_dir() and item.name != "global_sparse" and (item / "manifest.json").exists()
                 )
             )
             if found:
@@ -140,6 +146,13 @@ class HybridRetriever:
             pair = (dense, sparse)
             self._domain_retrievers[domain] = pair
         return pair
+
+    def _global_sparse_retriever(self) -> GlobalSparseRetriever:
+        if self._global_sparse is None:
+            self._global_sparse = GlobalSparseRetriever(
+                self.artifact_root, allow_dry_run=self.allow_dry_run
+            )
+        return self._global_sparse
 
     @staticmethod
     def _legacy_hit(document: dict[str, Any], position: int) -> RetrievalHit:
@@ -213,10 +226,14 @@ class HybridRetriever:
         if self.is_artifact_mode:
             if not selected_domains:
                 raise ArtifactValidationError("no artifact domains are configured")
+            use_global_sparse = self.sparse_mode == "global_corpus_v1" and len(selected_domains) > 1
             for domain in selected_domains:
                 dense, sparse = self._artifact_retrievers(domain)
                 dense_hits.extend(dense.search(query, dense_limit))
-                sparse_hits.extend(sparse.search(query, sparse_limit))
+                if not use_global_sparse:
+                    sparse_hits.extend(sparse.search(query, sparse_limit))
+            if use_global_sparse:
+                sparse_hits = self._global_sparse_retriever().search(query, sparse_limit)
         else:
             dense_hits, sparse_hits = self._legacy_lists(query, dense_limit, selected_domains)
         dense_hits = global_ranked_candidates(
@@ -265,9 +282,12 @@ class HybridRetriever:
                 rank_field="sparse_rank",
             )
         self._ensure_artifact_root()
+        selected_domains = self._domains(domains)
+        if self.sparse_mode == "global_corpus_v1" and len(selected_domains) > 1:
+            return self._global_sparse_retriever().search(query, top_k)
         hits = [
             hit
-            for domain in self._domains(domains)
+            for domain in selected_domains
             for hit in self._artifact_retrievers(domain)[1].search(query, top_k)
         ]
         return global_ranked_candidates(hits, top_k=top_k, rank_field="sparse_rank")

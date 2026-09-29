@@ -103,9 +103,17 @@ def build(index_root: Path, output_root: Path) -> dict[str, Any]:
     qrels = _read_jsonl(output_root / "qrels.jsonl")
     chunks_by_domain = {domain: _load_chunks(index_root, domain) for domain in DOMAINS}
     summary = _validate(queries, qrels, chunks_by_domain)
+    chunking_versions = [
+        json.loads((index_root / domain / "manifest.json").read_text(encoding="utf-8")).get("chunking_version")
+        for domain in DOMAINS
+    ]
+    if any(not isinstance(version, str) or not version.strip() for version in chunking_versions):
+        raise ValueError("domain manifests must declare a non-empty chunking_version")
+    if len(set(chunking_versions)) != 1:
+        raise ValueError("domain manifests have inconsistent chunking_version values")
     manifest = {
-        "benchmark_version": "rag-round3-v3-curated",
-        "chunking_version": "rag-round1",
+        "benchmark_version": "rag-round3-v4-qrel-audited",
+        "chunking_version": chunking_versions[0],
         "index_root": str(index_root),
         "domains": summary["domain_counts"],
         "query_count": summary["query_count"],
@@ -127,7 +135,7 @@ def build(index_root: Path, output_root: Path) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--index-root", type=Path, default=Path("artifacts/rag_round1/indexes"))
+    parser.add_argument("--index-root", type=Path, default=Path("artifacts/rag_round3/production_indexes"))
     parser.add_argument("--output-root", type=Path, default=Path("benchmarks/rag"))
     args = parser.parse_args()
     print(json.dumps(build(args.index_root, args.output_root), ensure_ascii=False, sort_keys=True))

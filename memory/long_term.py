@@ -181,6 +181,7 @@ class LongTermMemory:
         self._index = None
         self._retriever = None
         self._retriever_root = None
+        self._retriever_sparse_mode = None
         self._init_index()
 
     @property
@@ -200,11 +201,17 @@ class LongTermMemory:
         configured_root = artifact_root
         if configured_root is None and use_env:
             configured_root = os.getenv("RAG_INDEX_ROOT")
+        sparse_mode = (
+            os.getenv("RAG_SPARSE_MODE", "global_corpus_v1").strip()
+            if artifact_root is None and use_env and configured_root is not None
+            else "domain_local_v1"
+        )
         if (
             artifact_root is None
             and use_env
             and self._retriever is not None
             and self._retriever_root == configured_root
+            and self._retriever_sparse_mode == sparse_mode
         ):
             return self._retriever
         explicit_artifacts = artifact_root is not None or configured_root is not None
@@ -217,10 +224,12 @@ class LongTermMemory:
             reranker=reranker,
             allow_dry_run=os.getenv("RAG_ALLOW_DRY_RUN", "false").lower() in {"1", "true", "yes", "on"},
             legacy_memory=None if explicit_artifacts else self,
+            sparse_mode=sparse_mode,
         )
         if artifact_root is None and use_env:
             self._retriever = retriever
             self._retriever_root = configured_root
+            self._retriever_sparse_mode = sparse_mode
         return retriever
 
     def _init_index(self) -> None:

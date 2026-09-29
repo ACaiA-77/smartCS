@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from ..fusion import reciprocal_rank_fusion
 from ..models import RetrievalHit
 from ..retriever import global_ranked_candidates
-from .metrics import aggregate_metrics, evaluate_ranking
+from .metrics import aggregate_metrics, evaluate_grouped_ranking, evaluate_ranking
 from .models import BenchmarkQuery
 
 
@@ -66,7 +66,12 @@ def _wrong_domain_metrics(hits: list[RetrievalHit], domain: str) -> dict[str, fl
     return result
 
 
-def evaluate_variants(retriever: Any, queries: Iterable[BenchmarkQuery]) -> dict[str, Any]:
+def evaluate_variants(
+    retriever: Any,
+    queries: Iterable[BenchmarkQuery],
+    *,
+    relevance_groups_by_query: Mapping[str, list[Mapping[str, Any]]] | None = None,
+) -> dict[str, Any]:
     per_query: list[dict[str, Any]] = []
     for item in queries:
         dense = global_ranked_candidates(
@@ -89,8 +94,19 @@ def evaluate_variants(retriever: Any, queries: Iterable[BenchmarkQuery]) -> dict
             "rankings": {variant: _ids(hits) for variant, hits in rankings.items()},
             "variants": {},
         }
+        groups = None
+        if relevance_groups_by_query is not None:
+            groups = relevance_groups_by_query.get(item.query_id)
+            if groups is None:
+                raise ValueError(f"missing relevance groups for {item.query_id}")
+            row["scoring_mode"] = "fact_group_v1"
+            row["qrel_group_count"] = len(groups)
         for variant, hits in rankings.items():
-            metrics = evaluate_ranking(_ids(hits), item.qrels)
+            metrics = (
+                evaluate_ranking(_ids(hits), item.qrels)
+                if groups is None
+                else evaluate_grouped_ranking(_ids(hits), groups)
+            )
             metrics.update(_wrong_domain_metrics(hits, item.domain))
             row["variants"][variant] = metrics
         per_query.append(row)

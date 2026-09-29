@@ -1,0 +1,24 @@
+{"query_id": "challenge_apple_001", "query": "从 Apple 中国官网退多件商品时，应怎样打包，装箱单怎么处理？", "domain": "apple_support", "kind": "semantic", "mechanism_tags": ["same_source_competition"]}
+{"query_id": "challenge_apple_002", "query": "Apple 中国官网发来发货详情后，过了多久仍未交付时，买家可选择取消订单？", "domain": "apple_support", "kind": "semantic", "mechanism_tags": ["cross_domain_decoy", "supporting_evidence", "same_source_competition", "multi_fact"]}
+{"query_id": "challenge_apple_003", "query": "用 macOS 恢复重新安装系统时，个人数据一定会被移除吗？", "domain": "apple_support", "kind": "semantic", "mechanism_tags": ["cross_domain_decoy"]}
+{"query_id": "challenge_apple_004", "query": "对 App Store 的项目申请退款后，何时能知道进度？获批后款项会马上到账吗？", "domain": "apple_support", "kind": "semantic", "mechanism_tags": ["multi_component_answer", "same_source_competition"]}
+{"query_id": "challenge_apple_005", "query": "Apple 中国官网标价出错时，通知买家后提供哪两种订单处理选择？", "domain": "apple_support", "kind": "lexical", "mechanism_tags": ["cross_domain_decoy", "same_source_competition"]}
+{"query_id": "challenge_apple_006", "query": "Apple 免费或打折的试用订阅如果不想续订，至少要在结束前多久取消？", "domain": "apple_support", "kind": "lexical", "mechanism_tags": ["same_source_competition"]}
+{"query_id": "challenge_apple_007", "query": "Apple 中国大陆零售店从何时不再兑换购物卡，现有卡的余额应如何处理？", "domain": "apple_support", "kind": "lexical", "mechanism_tags": ["multi_component_answer"]}
+{"query_id": "challenge_apple_008", "query": "取消 AppleCare 计划需联系人工协助时，要准备哪三项资料？", "domain": "apple_support", "kind": "lexical", "mechanism_tags": ["multi_component_answer", "same_source_competition"]}
+{"query_id": "challenge_apple_009", "query": "分期付款的 Apple 中国官网订单退款后，每期还款额和手续费一定保持原样吗？", "domain": "apple_support", "kind": "confusing", "mechanism_tags": ["same_source_competition"]}
+{"query_id": "challenge_apple_010", "query": "在 Apple 中国官网下单并送货的商品，可以拿到任意 Apple 零售店退吗？", "domain": "apple_support", "kind": "confusing", "mechanism_tags": ["cross_domain_decoy", "supporting_evidence", "same_source_competition", "multi_fact"]}
+{"query_id": "challenge_apple_011", "query": "iPhone 电池因正常使用而损耗，属于 Apple 一年有限保修中的制造问题吗？", "domain": "apple_support", "kind": "confusing", "mechanism_tags": ["supporting_evidence", "same_source_competition", "multi_fact"]}
+{"query_id": "challenge_apple_012", "query": "订阅列表中找不到 AppleCare 计划，能据此断定保障已经取消了吗？", "domain": "apple_support", "kind": "confusing", "mechanism_tags": ["cross_domain_decoy", "same_source_competition"]}
+{"query_id": "challenge_agent_001", "query": "一个候选服务仓库没有命中业务关键词，为什么仍不能直接判定它不需改动？", "domain": "agent_engineering", "kind": "semantic", "mechanism_tags": ["supporting_evidence", "same_source_competition", "multi_fact"]}
+{"query_id": "challenge_agent_002", "query": "为什么不应让 PostToolUse 在每次改文件后都运行全套测试？", "domain": "agent_engineering", "kind": "semantic", "mechanism_tags": ["supporting_evidence", "same_source_competition", "multi_fact"]}
+{"query_id": "challenge_agent_003", "query": "自动生成了服务知识更新候选后，为什么高风险内容仍要人工确认语义？", "domain": "agent_engineering", "kind": "semantic", "mechanism_tags": ["same_source_competition"]}
+{"query_id": "challenge_agent_004", "query": "设计多个 Hook 时，为什么不应把每条项目规则都做成 Hook，能用代码判断的规则又该用什么？", "domain": "agent_engineering", "kind": "semantic", "mechanism_tags": ["supporting_evidence", "same_source_competition", "multi_fact"]}
+{"query_id": "challenge_agent_005", "query": "架构设计里的“订单”一词可能分别指哪四类单据？", "domain": "agent_engineering", "kind": "lexical", "mechanism_tags": ["cross_domain_decoy", "same_source_competition", "multi_component_answer"]}
+{"query_id": "challenge_agent_006", "query": "PermissionRequest 与 PreToolUse 是同一个 Hook 事件吗？前者发生在什么节点？", "domain": "agent_engineering", "kind": "lexical", "mechanism_tags": ["supporting_evidence", "same_source_competition", "multi_fact"]}
+{"query_id": "challenge_agent_007", "query": "为什么应在 PreToolUse 做危险工具操作拦截，而不是等 PostToolUse？", "domain": "agent_engineering", "kind": "lexical", "mechanism_tags": ["supporting_evidence", "same_source_competition", "multi_fact"]}
+{"query_id": "challenge_agent_008", "query": "技术方案设计 Agent Runtime 的五层分别是什么？", "domain": "agent_engineering", "kind": "lexical", "mechanism_tags": ["multi_component_answer"]}
+{"query_id": "challenge_agent_009", "query": "Hook 由运行环境自动触发，是否意味着脚本不会报错、超时，内部模型判断也一定确定？", "domain": "agent_engineering", "kind": "confusing", "mechanism_tags": ["same_source_competition"]}
+{"query_id": "challenge_agent_010", "query": "配置 Hook 后，能否把它当作唯一安全边界，取代 Permission 和 Sandbox？", "domain": "agent_engineering", "kind": "confusing", "mechanism_tags": ["same_source_competition"]}
+{"query_id": "challenge_agent_011", "query": "service-knowledge 必须与代码放在同一个仓库，Agent 才能使用吗？", "domain": "agent_engineering", "kind": "confusing", "mechanism_tags": ["same_source_competition"]}
+{"query_id": "challenge_agent_012", "query": "方案覆盖需求后，Agent 可以自己决定跨团队承诺和高风险变更授权吗？", "domain": "agent_engineering", "kind": "confusing", "mechanism_tags": ["same_source_competition"]}

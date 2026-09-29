@@ -98,8 +98,9 @@ def _log_rag_runtime() -> None:
     except Exception:
         domains = "unknown"
     logger.warning(
-        "RAG runtime: mode=%s domains=%s embedding=%s reranker=%s",
+        "RAG runtime: mode=%s sparse_mode=%s domains=%s embedding=%s reranker=%s",
         "artifact" if shared_retriever.is_artifact_mode else "legacy",
+        getattr(shared_retriever, "sparse_mode", "unknown"),
         domains,
         os.getenv("EMBEDDING_MODEL", "default"),
         os.getenv("RAG_RERANKER_BACKEND", "fake"),

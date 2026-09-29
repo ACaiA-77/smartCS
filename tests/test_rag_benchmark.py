@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,7 @@ from rag.evaluation.evaluator import evaluate_variants
 from rag.evaluation.models import BenchmarkQuery
 from rag.models import RetrievalHit
 from scripts.evaluate_rag_retrieval import validate_benchmark_manifest
+from scripts.build_rag_benchmark import build
 
 
 def test_checked_in_benchmark_is_balanced_and_auditable():
@@ -17,14 +20,17 @@ def test_checked_in_benchmark_is_balanced_and_auditable():
     qrels = [json.loads(line) for line in (root / "qrels.jsonl").read_text(encoding="utf-8").splitlines()]
     manifest = json.loads((root / "benchmark_manifest.json").read_text(encoding="utf-8"))
     assert len(queries) == 60
-    assert len(qrels) == manifest["qrel_count"] == 110
+    assert len(qrels) == manifest["qrel_count"] == 95
+    assert manifest["benchmark_version"] == "rag-round3-v4-qrel-audited"
+    assert manifest["chunking_version"] == "structure-context-v1"
     assert {row["domain"] for row in queries} == {"apple_support", "agent_engineering"}
     assert manifest["domains"] == {"apple_support": 30, "agent_engineering": 30}
     assert manifest["query_kinds"] == {
         "apple_support": {"confusing": 10, "lexical": 10, "semantic": 10},
         "agent_engineering": {"confusing": 10, "lexical": 10, "semantic": 10},
     }
-    assert manifest["relevance_distribution"] == {"1": 50, "2": 60}
+    assert manifest["relevance_distribution"] == dict(Counter(str(row["relevance"]) for row in qrels))
+    assert len({(row["query_id"], row["chunk_id"]) for row in qrels}) == len(qrels)
     assert all(
         set(row) >= {"query_id", "chunk_id", "relevance", "domain", "source", "heading_path", "rationale"}
         for row in qrels
@@ -55,6 +61,42 @@ def test_checked_in_benchmark_is_balanced_and_auditable():
     assert all(row.get("authoring") == "manual-curated-v2" for row in queries)
     assert len({row["query"] for row in queries}) == 60
     assert {row["kind"] for row in queries} == {"semantic", "lexical", "confusing"}
+    assert next(row for row in queries if row["query_id"] == "apple_029")["query"] == (
+        "通过 Apple 按月或按年付费的 AppleCare 计划取消后，保障会持续到什么时候？"
+    )
+    # Compound questions can require multiple supporting chunks without a direct answer.
+    assert {row["chunk_id"]: row["relevance"] for row in qrels if row["query_id"] == "apple_007"} == {
+        "9612d7764daa609cc0ab6841": 1,
+        "e2dce93fe5b10a44fc1666ad": 1,
+        "61da22fc10c2e2d1dcaea7b7": 1,
+    }
+
+
+def test_canonical_builder_reproduces_checked_in_manifest(tmp_path):
+    source = Path("benchmarks/rag")
+    for name in ("queries.jsonl", "qrels.jsonl"):
+        shutil.copyfile(source / name, tmp_path / name)
+    expected = json.loads((source / "benchmark_manifest.json").read_text(encoding="utf-8"))
+    assert build(Path("artifacts/rag_round3/production_indexes"), tmp_path) == expected
+    assert json.loads((tmp_path / "benchmark_manifest.json").read_text(encoding="utf-8")) == expected
+
+
+@pytest.mark.parametrize("version", ["different-version", None, ""])
+def test_builder_rejects_inconsistent_or_missing_chunking_version(tmp_path, version):
+    source = Path("benchmarks/rag")
+    for name in ("queries.jsonl", "qrels.jsonl"):
+        shutil.copyfile(source / name, tmp_path / name)
+    for domain in ("apple_support", "agent_engineering"):
+        target = tmp_path / "indexes" / domain
+        target.mkdir(parents=True)
+        shutil.copyfile(Path("artifacts/rag_round3/production_indexes") / domain / "chunks.jsonl", target / "chunks.jsonl")
+        (target / "manifest.json").write_text(
+            json.dumps({"chunking_version": "structure-context-v1" if domain == "apple_support" else version}),
+            encoding="utf-8",
+        )
+    with pytest.raises(ValueError, match="chunking_version"):
+        build(tmp_path / "indexes", tmp_path)
+    assert not (tmp_path / "benchmark_manifest.json").exists()
 
 
 class _StubRetriever:

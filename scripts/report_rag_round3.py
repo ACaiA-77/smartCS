@@ -8,12 +8,15 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
+DEFAULT_INDEX_ROOT = Path("artifacts/rag_round3/production_indexes")
+DEFAULT_OUTPUT_ROOT = Path("artifacts/rag_round3_v4")
+
 
 def _tokens(value: str) -> set[str]:
     return {item.lower() for item in re.findall(r"[a-z0-9-]+|[\u4e00-\u9fff]{2,4}", value)}
 
 
-def write_reports(benchmark_root: Path, output_root: Path, index_root: Path = Path("artifacts/rag_round1/indexes")) -> None:
+def write_reports(benchmark_root: Path, output_root: Path, index_root: Path = DEFAULT_INDEX_ROOT) -> None:
     output_root.mkdir(parents=True, exist_ok=True)
     queries = [json.loads(line) for line in (benchmark_root / "queries.jsonl").read_text(encoding="utf-8").splitlines()]
     qrels = [json.loads(line) for line in (benchmark_root / "qrels.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -156,8 +159,8 @@ def write_reports(benchmark_root: Path, output_root: Path, index_root: Path = Pa
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--benchmark-root", type=Path, default=Path("benchmarks/rag"))
-    parser.add_argument("--output-root", type=Path, default=Path("artifacts/rag_round3"))
-    parser.add_argument("--index-root", type=Path, default=Path("artifacts/rag_round1/indexes"))
+    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--index-root", type=Path, default=DEFAULT_INDEX_ROOT)
     args = parser.parse_args()
     write_reports(args.benchmark_root, args.output_root, args.index_root)
     return 0

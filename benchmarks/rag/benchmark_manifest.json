@@ -1,13 +1,13 @@
 {
   "authoring": "manual-curated; query text is maintained in queries.jsonl",
-  "benchmark_version": "rag-round3-v3-curated",
-  "chunking_version": "rag-round1",
+  "benchmark_version": "rag-round3-v4-qrel-audited",
+  "chunking_version": "structure-context-v1",
   "domains": {
     "agent_engineering": 30,
     "apple_support": 30
   },
   "index_root": "artifacts\\rag_round3\\production_indexes",
-  "qrel_count": 110,
+  "qrel_count": 95,
   "query_count": 60,
   "query_kinds": {
     "agent_engineering": {
@@ -22,8 +22,8 @@
     }
   },
   "relevance_distribution": {
-    "1": 50,
-    "2": 60
+    "1": 38,
+    "2": 57
   },
   "relevance_scale": {
     "0": "not included",

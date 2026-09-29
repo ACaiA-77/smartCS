@@ -121,6 +121,37 @@ def test_explicit_missing_artifact_root_fails_closed(tmp_path, monkeypatch):
         memory.get_retriever().retrieve("query")
 
 
+def test_production_sparse_default_rollback_cache_and_isolation(round2_artifacts, tmp_path, monkeypatch):
+    from memory.long_term import LongTermMemory
+
+    root, backend = round2_artifacts
+    monkeypatch.setenv("RAG_INDEX_ROOT", str(root))
+    monkeypatch.setenv("RAG_ALLOW_DRY_RUN", "true")
+    monkeypatch.setenv("RAG_RERANKER_BACKEND", "fake")
+    monkeypatch.delenv("RAG_SPARSE_MODE", raising=False)
+    memory = LongTermMemory(index_path=str(tmp_path / "legacy"), embedding_backend=backend)
+
+    production = memory.get_retriever()
+    assert production.sparse_mode == "global_corpus_v1"
+    assert memory.get_retriever() is production
+    assert production.sparse_search("refund", domains=["apple_support"], top_k=1)
+    with pytest.raises(ArtifactValidationError, match="global sparse"):
+        production.sparse_search("refund", top_k=1)
+
+    monkeypatch.setenv("RAG_SPARSE_MODE", "domain_local_v1")
+    rollback = memory.get_retriever()
+    assert rollback is not production and rollback.sparse_mode == "domain_local_v1"
+    assert memory.get_retriever() is rollback
+    assert memory.get_retriever(use_env=False).sparse_mode == "domain_local_v1"
+    assert memory.get_retriever(artifact_root=str(root)).sparse_mode == "domain_local_v1"
+
+    monkeypatch.setenv("RAG_SPARSE_MODE", "invalid")
+    with pytest.raises(ValueError, match="unsupported sparse_mode"):
+        memory.get_retriever()
+    monkeypatch.delenv("RAG_INDEX_ROOT")
+    assert memory.get_retriever().sparse_mode == "domain_local_v1"
+
+
 def test_bm25_uses_tf_idf_and_document_length(round2_artifacts):
     root, _ = round2_artifacts
     sparse = SparseRetriever(root, domain="apple_support", allow_dry_run=True)

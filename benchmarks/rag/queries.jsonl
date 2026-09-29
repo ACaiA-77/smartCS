@@ -26,7 +26,7 @@
 {"authoring": "manual-curated-v2", "domain": "apple_support", "kind": "lexical", "query": "App Store、iTunes Store 或 Apple Books 的项目怎么提交退款申请？", "query_id": "apple_026"}
 {"authoring": "manual-curated-v2", "domain": "apple_support", "kind": "confusing", "query": "取消 App 订阅后，后续费用会自动停止吗，和申请退款有什么区别？", "query_id": "apple_027"}
 {"authoring": "manual-curated-v2", "domain": "apple_support", "kind": "semantic", "query": "Apple 账户恢复过程中，如果又成功登录，如何取消等待流程？", "query_id": "apple_028"}
-{"authoring": "manual-curated-v2", "domain": "apple_support", "kind": "lexical", "query": "AppleCare 计划取消后退款金额如何按购买时间计算？", "query_id": "apple_029"}
+{"authoring": "manual-curated-v2", "domain": "apple_support", "kind": "lexical", "query": "通过 Apple 按月或按年付费的 AppleCare 计划取消后，保障会持续到什么时候？", "query_id": "apple_029"}
 {"authoring": "manual-curated-v2", "domain": "apple_support", "kind": "confusing", "query": "我能否从知识库直接查询具体订单退款金额，还是应转到官方实时页面？", "query_id": "apple_030"}
 {"authoring": "manual-curated-v2", "domain": "agent_engineering", "kind": "semantic", "query": "Hook 和普通提示词分别由谁触发？它们对 Agent 的约束有什么不同？", "query_id": "agent_001"}
 {"authoring": "manual-curated-v2", "domain": "agent_engineering", "kind": "lexical", "query": "Prompt、AGENTS.md 与 Hook 在持续约束 Agent 方面分别解决什么问题？", "query_id": "agent_002"}

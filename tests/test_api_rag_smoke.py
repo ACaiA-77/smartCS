@@ -113,6 +113,7 @@ def test_startup_rag_log_is_non_sensitive(monkeypatch, caplog):
 
     class _ConfiguredRetriever:
         is_artifact_mode = True
+        sparse_mode = "global_corpus_v1"
 
         @staticmethod
         def _domains(_value):
@@ -126,7 +127,7 @@ def test_startup_rag_log_is_non_sensitive(monkeypatch, caplog):
         api._log_rag_runtime()
 
     assert (
-        "RAG runtime: mode=artifact domains=apple_support,agent_engineering "
+        "RAG runtime: mode=artifact sparse_mode=global_corpus_v1 domains=apple_support,agent_engineering "
         "embedding=BAAI/bge-m3 reranker=cross_encoder"
     ) in caplog.text
     assert "OPENAI_API_KEY" not in caplog.text
