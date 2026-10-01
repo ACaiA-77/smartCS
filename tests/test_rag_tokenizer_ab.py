@@ -104,6 +104,54 @@ def test_rejects_changed_dense_index_before_measurement(comparison_fixture, tmp_
                        candidate_root=candidate, output_root=tmp_path / "result")
 
 
+def test_production_diagnostic_never_loads_or_calls_a_reranker(comparison_fixture, tmp_path: Path, monkeypatch):
+    # Production metadata is test-only; no real embeddings or metrics are claimed.
+    baseline, candidate, benchmark = comparison_fixture
+    backend = comparison.SentenceTransformerEmbeddingBackend()
+    backend.backend_name = "sentence_transformers"
+    backend.model_name = "BAAI/bge-m3"
+    for root in (baseline, candidate):
+        for domain in ("apple_support", "agent_engineering"):
+            path = root / domain / "manifest.json"
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            manifest.update({
+                "artifact_kind": "production", "actual_embedding_backend": "sentence_transformers",
+                "embedding_backend": "sentence_transformers", "actual_embedding_model": "BAAI/bge-m3",
+                "embedding_model": "BAAI/bge-m3", "model": "BAAI/bge-m3",
+            })
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    def forbidden_constructor():
+        raise AssertionError("diagnostic mode loaded a reranker")
+
+    monkeypatch.setattr(comparison, "CrossEncoderReranker", forbidden_constructor)
+    result = comparison.run(benchmark_root=benchmark, baseline_root=baseline,
+                            candidate_root=candidate, output_root=tmp_path / "diagnostic")
+    assert result["reranker_status"].startswith("not_rerun")
+    assert set(result["arms"]["jieba"]["overall"]) == {"dense", "bm25", "hybrid_rrf"}
+    assert len(result["arms"]["jieba"]["per_query"]) == 1
+    with pytest.raises(RuntimeError, match="reranking is disabled"):
+        comparison._RerankingDisabled().rerank("query", [])
+
+
+def test_failed_report_write_does_not_publish_partial_json(comparison_fixture, tmp_path: Path, monkeypatch):
+    baseline, candidate, benchmark = comparison_fixture
+    output = tmp_path / "failed_report"
+    original_write = Path.write_text
+
+    def interrupted_write(path, data, *args, **kwargs):
+        if path.name in {"comparison.json", "comparison.tmp"}:
+            original_write(path, data[:10], *args, **kwargs)
+            raise OSError("simulated interruption")
+        return original_write(path, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", interrupted_write)
+    with pytest.raises(OSError, match="simulated interruption"):
+        comparison.run(benchmark_root=benchmark, baseline_root=baseline,
+                       candidate_root=candidate, output_root=output)
+    assert not (output / "comparison.json").exists()
+
+
 def test_rerank_checkpoint_resume_and_input_hash_guard(comparison_fixture, tmp_path: Path, monkeypatch):
     # Small fixture with a counted test-only reranker; production runs use the real model.
     import jieba

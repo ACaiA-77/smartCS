@@ -18,7 +18,8 @@ from rag.embeddings import SentenceTransformerEmbeddingBackend
 from rag.evaluation.evaluator import _wrong_domain_metrics
 from rag.evaluation.metrics import aggregate_metrics, evaluate_grouped_ranking, evaluate_ranking
 from rag.fusion import reciprocal_rank_fusion
-from rag.reranker import CrossEncoderReranker, FakeReranker, RERANKER_MODEL
+from rag.models import RetrievalHit
+from rag.reranker import CrossEncoderReranker, RERANKER_MODEL
 from rag.retriever import HybridRetriever, global_ranked_candidates
 from scripts.evaluate_rag_retrieval import (
     load_queries,
@@ -28,6 +29,13 @@ from scripts.evaluate_rag_retrieval import (
 from scripts.validate_rag_models import validate
 
 DOMAINS = ("apple_support", "agent_engineering")
+
+
+class _RerankingDisabled:
+    """Reject accidental reranking without loading a model or returning fake scores."""
+
+    def rerank(self, query: str, candidates: list[RetrievalHit], top_k: int = 3) -> list[RetrievalHit]:
+        raise RuntimeError("reranking is disabled; pass --include-rerank for real scores")
 
 
 def _sha256(path: Path) -> str:
@@ -123,7 +131,7 @@ def run(
         )
         (output_root / "progress").mkdir(exist_ok=True)
     backend = SentenceTransformerEmbeddingBackend()
-    reranker = CrossEncoderReranker() if production else FakeReranker()
+    reranker = CrossEncoderReranker() if include_rerank else _RerankingDisabled()
     old = HybridRetriever(baseline_root, embedding_backend=backend, reranker=reranker, sparse_mode=sparse_mode)
     new = HybridRetriever(candidate_root, embedding_backend=backend, reranker=reranker, sparse_mode=sparse_mode)
     per_query: dict[str, list[dict[str, Any]]] = {"fallback": [], "jieba": []}
@@ -205,7 +213,10 @@ def run(
         "arms": results,
     }
     output_root.mkdir(parents=True, exist_ok=True)
-    (output_root / "comparison.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    report_path = output_root / "comparison.json"
+    pending_report = report_path.with_suffix(".tmp")
+    pending_report.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    pending_report.replace(report_path)
     return result
 
 
