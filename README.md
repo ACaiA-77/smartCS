@@ -4,6 +4,10 @@ SmartCS 是一个本地多 Agent 客服后端，基于显式 async `ChatOrchestr
 
 这是一个面向工程实践的本地业务 Sandbox、简历和演示项目，不代表真实生产部署。
 
+## 当前迭代范围
+
+本版保留认证、客户隔离、checkpoint 恢复和双域文本 RAG，增加 jieba 索引重建与可续跑的分词 A/B 评测工具。图片、音频和视频输入留待下一版本，本版不包含多模态功能。下方带日期的验收数据为历史记录，不代表当前 GitHub CI 或部署状态。
+
 ## Verified Local Status（Checkpoint 历史基线）
 
 | 项目 | 当前记录 |
@@ -256,7 +260,36 @@ python -m scripts.build_rag_indexes --domain all --reset
 
 Round 2 的在线链路位于 `rag/`：原始问题经现有 Query rewrite 后，统一进入双域 Dense + BM25 检索、RRF 融合和可注入 Cross-Encoder reranker，再把最终 Top-K 上下文交给回答模型。`KnowledgeRAGAgent` 与 MCP `knowledge_search` 共用 `HybridRetriever`；artifact manifest、chunk 顺序、FAISS 维度、BM25 chunk IDs 和实际 embedding backend/model 不一致时会 fail closed。Round1 的 `dry_run` artifact 只能通过显式 `allow_dry_run` 用于测试，生产路径默认拒绝。
 
-Round 2 提供有界的最多两轮检索 refinement，并保留 `original_query` 用于最终回答。Round 3 已提供 60 条双域人工维护 query、可审计 graded qrels、manifest source hash 校验，以及 Dense/BM25/RRF/真实 Cross-Encoder 四路消融；headline 指标使用双域 global Top-20，不使用 query rewrite 或 oracle domain 过滤。`artifacts/rag_round3/metrics.json`、`metrics_by_domain.json`、`metrics_per_query.json` 和 `failure_analysis.md` 保存最终结果。
+Round 2 提供有界的最多两轮检索 refinement，并保留 `original_query` 用于最终回答。Round 3 已提供 60 条双域人工维护 query、可审计 graded qrels、manifest source hash 校验，以及 Dense/BM25/RRF/真实 Cross-Encoder 四路消融；headline 指标使用双域 global Top-20，不使用 query rewrite 或 oracle domain 过滤。`artifacts/rag_round3/metrics.json`、`metrics_by_domain.json`、`metrics_per_query.json` 和 `failure_analysis.md` 保存既有跑次结果；当前 v4 qrels 经审订，旧跑次指标不可直接当作 v4 基线。
+
+BM25 中文切词优先使用 `jieba`；它未安装时会回退到内置词表和逐字切分。**安装 jieba 不会自动更新旧索引**，旧索引若按 fallback 构建，仅安装依赖会造成查询/索引分词不一致。要隔离重建、保留原 chunk ID 与 FAISS 向量，并在同一 benchmark 上比较 BM25、Dense 和 RRF（不含计算量较大的 Cross-Encoder 重排），可运行：
+
+```bash
+python -m pip install "jieba==0.42.1"
+python -m scripts.rebuild_rag_sparse --input-root artifacts/rag_round3/production_indexes --output-root artifacts/rag_jieba_comparison/jieba_indexes
+python -m scripts.evaluate_rag_tokenizer_ab --benchmark-root benchmarks/rag --baseline-root artifacts/rag_round3/production_indexes --candidate-root artifacts/rag_jieba_comparison/jieba_indexes --output-root artifacts/rag_jieba_comparison/round3_global --sparse-mode global_corpus_v1
+```
+
+如需双组真实重排评测，可给 `scripts.evaluate_rag_tokenizer_ab` 添加 `--include-rerank`，中断后使用相同参数加 `--resume` 续跑；结果目录首次运行必须不存在。`scripts.evaluate_rag_retrieval` 默认走本地域 BM25，不适合直接代替全局 BM25 双组对照。
+
+本机现选择 **jieba 0.42.1** 用于 BM25 中文分词：已评测索引复制至 `artifacts/rag_jieba/production_indexes`，查询端与建索引端版本、词典一致，原 fallback 索引保留不覆盖。36 问 holdout 和 24 问跨域挑战集已完成真实重排对照；结果有升有降，本次切换是配置选择，不宣称已证明全面优于 fallback。已有原始 fallback 索引时，可在安装固定依赖后重建该目录（以下命令仅在输出目录尚不存在时执行）：
+
+```bash
+python -m pip install -r requirements.txt
+python -m scripts.rebuild_rag_sparse --input-root artifacts/rag_round3/production_indexes --output-root artifacts/rag_jieba/production_indexes
+```
+
+全新 clone 不包含被忽略的原始索引，应从仓库知识源直接构建，不能运行上面的增量重建命令。以下命令使用本地 Hugging Face BGE-M3，不使用 hash / fake embedding；首次使用需下载模型，已有缓存可复用：
+
+```bash
+python -m pip install -r requirements.txt
+python -m scripts.build_rag_indexes --domain all --embedding-backend local --embedding-model BAAI/bge-m3 --output-dir artifacts/rag_jieba/production_indexes
+python -m scripts.build_global_sparse --artifact-root artifacts/rag_jieba/production_indexes
+```
+
+从知识源重新构建的 chunk 和向量未必与本机冻结索引相同，不能直接沿用旧 benchmark 的 chunk-ID qrels 或声称复现既有指标；严格 A/B 评测需使用原始冻结索引和对应 benchmark。
+
+将 `.env` 中 `RAG_INDEX_ROOT` 设为该目录，保留 `RAG_SPARSE_MODE=global_corpus_v1`、`EMBEDDING_BACKEND=local` 和 `RAG_RERANKER_BACKEND=cross_encoder`，重启 API 后生效。`artifacts/` 被 Git 忽略，不会随代码推送。不要只把路径回改到 fallback 索引而仍用 jieba 查询；回退也必须保证索引/查询分词一致。本次仅切换本机配置，Docker 如需使用新索引，还需挂载该目录、设置容器内 `RAG_INDEX_ROOT` 并确保依赖和模型匹配；现有 `.env.docker` 未自动修改。
 
 评测脚本默认沿用 chunk-ID 计分；只有显式传入 `--qrel-groups PATH` 才按事实组计分。同组不同 chunk 命中只计一次，但仍占用原始排名位置。Holdout v1 已冻结为正式评测包；其 qrel 覆盖不声称全语料穷尽。
 
@@ -272,7 +305,7 @@ Round 2 提供有界的最多两轮检索 refinement，并保留 `original_query
 | `EMBEDDING_BACKEND` | `hash` | `hash` 离线兜底；`local` / `sentence_transformers` 使用本地模型；`openai` / `remote` 使用远程 API |
 | `EMBEDDING_MODEL` | `BAAI/bge-m3`（Round 3） | 本地 embedding 模型名；生产双域索引必须与构建索引的模型一致 |
 | `EMBEDDING_DIM` | `1536` | 远程 embedding 维度提示，本地模型会自动读取维度 |
-| `RAG_INDEX_ROOT` | 未设置时回退旧版 `FAISS_INDEX_PATH` | Round 3 生产索引根目录，例如 `./artifacts/rag_round3/production_indexes` |
+| `RAG_INDEX_ROOT` | 未设置时回退旧版 `FAISS_INDEX_PATH` | jieba 运行索引根目录：`./artifacts/rag_jieba/production_indexes`（需先构建） |
 | `RAG_SPARSE_MODE` | `global_corpus_v1`（仅生产 `RAG_INDEX_ROOT` 路径） | 可设为 `domain_local_v1` 回滚；隔离/旧版检索仍用本地域 BM25 |
 | `RAG_RERANKER_BACKEND` | `fake` | 生产索引必须使用 `cross_encoder`，测试 dry-run 才使用 `fake` |
 
@@ -281,7 +314,7 @@ Round 2 提供有界的最多两轮检索 refinement，并保留 `original_query
 ```env
 EMBEDDING_BACKEND=local
 EMBEDDING_MODEL=BAAI/bge-m3
-RAG_INDEX_ROOT=./artifacts/rag_round3/production_indexes
+RAG_INDEX_ROOT=./artifacts/rag_jieba/production_indexes
 RAG_SPARSE_MODE=global_corpus_v1
 RAG_RERANKER_BACKEND=cross_encoder
 ```

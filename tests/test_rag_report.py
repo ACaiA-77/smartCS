@@ -5,14 +5,14 @@ from scripts import report_rag_round3
 
 
 def test_default_index_resolves_frozen_qrels_without_changing_history(tmp_path):
-    history = [Path("artifacts/rag_round3") / name for name in (
+    history = [Path("tests/fixtures/rag/historical_report") / name for name in (
         "query_overlap_report.json", "failure_analysis.md",
     )]
     before = {path: path.read_bytes() for path in history}
     benchmark = Path("benchmarks/rag")
     assert len((benchmark / "qrels.jsonl").read_text(encoding="utf-8").splitlines()) == 95
 
-    report_rag_round3.write_reports(benchmark, tmp_path)
+    report_rag_round3.write_reports(benchmark, tmp_path, Path("tests/fixtures/rag/production_chunks"))
 
     report = json.loads((tmp_path / "query_overlap_report.json").read_text(encoding="utf-8"))
     assert report["query_count"] == len(report["rows"]) == 60

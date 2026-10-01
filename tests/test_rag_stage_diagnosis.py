@@ -98,7 +98,7 @@ def test_baseline_parity_fails_closed():
 
 def test_frozen_agent_inputs_are_30_queries_55_qrels_and_match_per_query():
     queries = [row for row in load_queries(Path("benchmarks/rag")) if row.domain == "agent_engineering"]
-    baseline = json.loads(Path("artifacts/rag_corrected_baseline_20260921/metrics_per_query.json").read_text(encoding="utf-8"))
+    baseline = json.loads(Path("tests/fixtures/rag/corrected_baseline/metrics_per_query.json").read_text(encoding="utf-8"))
     checked = validate_agent_inputs(queries, baseline)
     assert len(checked) == 30
     assert sum(len(row["qrels"]) for row in checked.values()) == 55

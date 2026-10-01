@@ -1,0 +1,38 @@
+{
+  "actual_embedding_backend": "sentence_transformers",
+  "actual_embedding_dimension": 1024,
+  "actual_embedding_model": "BAAI/bge-m3",
+  "artifact_kind": "production",
+  "artifacts": {
+    "bm25": "bm25_index.json",
+    "chunks": "chunks.jsonl",
+    "corpus": "corpus.jsonl",
+    "faiss": "index.faiss"
+  },
+  "build_version": "offline-rag-v1",
+  "built_at": "2026-09-19T18:52:06.124549+00:00",
+  "chunking_version": "structure-context-v1",
+  "counts": {
+    "chunks": 169,
+    "documents": 16,
+    "failed": 0,
+    "unresolved": 0
+  },
+  "dim": 1024,
+  "dimension": 1024,
+  "domain": "apple_support",
+  "embedding_backend": "sentence_transformers",
+  "embedding_dimension": 1024,
+  "embedding_model": "BAAI/bge-m3",
+  "failed_sources": [],
+  "manifest_version": 1,
+  "model": "BAAI/bge-m3",
+  "source_types": [
+    "产品FAQ",
+    "账户注册与恢复指南",
+    "退款退货退订政策"
+  ],
+  "target_embedding_dimension": 1024,
+  "target_embedding_model": "BAAI/bge-m3",
+  "unresolved": []
+}

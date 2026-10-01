@@ -1,0 +1,792 @@
+{
+  "duplicate_query_count": 0,
+  "exact_title_copy_count": 0,
+  "high_lexical_overlap_count": 0,
+  "query_count": 60,
+  "rows": [
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.2,
+      "qrel_sources": [
+        "apple_account_registration_guide.md"
+      ],
+      "query_id": "apple_001",
+      "query_token_count": 5
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.1667,
+      "qrel_sources": [
+        "apple_account_registration_guide.md"
+      ],
+      "query_id": "apple_002",
+      "query_token_count": 6
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.3333,
+      "qrel_sources": [
+        "apple_account_registration_guide.md"
+      ],
+      "query_id": "apple_003",
+      "query_token_count": 6
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.4286,
+      "qrel_sources": [
+        "apple_account_registration_guide.md"
+      ],
+      "query_id": "apple_004",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.4286,
+      "qrel_sources": [
+        "apple_account_registration_guide.md"
+      ],
+      "query_id": "apple_005",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.3333,
+      "qrel_sources": [
+        "apple_account_registration_guide.md"
+      ],
+      "query_id": "apple_006",
+      "query_token_count": 6
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.375,
+      "qrel_sources": [
+        "apple_account_registration_guide.md",
+        "apple_product_faq.md"
+      ],
+      "query_id": "apple_007",
+      "query_token_count": 8
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.0,
+      "qrel_sources": [
+        "apple_account_registration_guide.md"
+      ],
+      "query_id": "apple_008",
+      "query_token_count": 6
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.0,
+      "qrel_sources": [
+        "apple_account_registration_guide.md"
+      ],
+      "query_id": "apple_009",
+      "query_token_count": 5
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.3333,
+      "qrel_sources": [
+        "apple_account_registration_guide.md"
+      ],
+      "query_id": "apple_010",
+      "query_token_count": 6
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.0,
+      "qrel_sources": [
+        "apple_account_registration_guide.md"
+      ],
+      "query_id": "apple_011",
+      "query_token_count": 5
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.1429,
+      "qrel_sources": [
+        "apple_account_registration_guide.md"
+      ],
+      "query_id": "apple_012",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.4444,
+      "qrel_sources": [
+        "apple_product_faq.md"
+      ],
+      "query_id": "apple_013",
+      "query_token_count": 9
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.25,
+      "qrel_sources": [
+        "apple_product_faq.md"
+      ],
+      "query_id": "apple_014",
+      "query_token_count": 8
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.25,
+      "qrel_sources": [
+        "apple_product_faq.md"
+      ],
+      "query_id": "apple_015",
+      "query_token_count": 8
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.4286,
+      "qrel_sources": [
+        "apple_product_faq.md"
+      ],
+      "query_id": "apple_016",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.25,
+      "qrel_sources": [
+        "apple_product_faq.md"
+      ],
+      "query_id": "apple_017",
+      "query_token_count": 8
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.2857,
+      "qrel_sources": [
+        "apple_product_faq.md"
+      ],
+      "query_id": "apple_018",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.4286,
+      "qrel_sources": [
+        "apple_product_faq.md"
+      ],
+      "query_id": "apple_019",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.375,
+      "qrel_sources": [
+        "apple_account_registration_guide.md",
+        "apple_product_faq.md"
+      ],
+      "query_id": "apple_020",
+      "query_token_count": 8
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.3333,
+      "qrel_sources": [
+        "apple_refund_subscription_policy.md"
+      ],
+      "query_id": "apple_021",
+      "query_token_count": 6
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.3333,
+      "qrel_sources": [
+        "apple_refund_subscription_policy.md"
+      ],
+      "query_id": "apple_022",
+      "query_token_count": 6
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.1429,
+      "qrel_sources": [
+        "apple_refund_subscription_policy.md"
+      ],
+      "query_id": "apple_023",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.2857,
+      "qrel_sources": [
+        "apple_refund_subscription_policy.md"
+      ],
+      "query_id": "apple_024",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.2857,
+      "qrel_sources": [
+        "apple_refund_subscription_policy.md"
+      ],
+      "query_id": "apple_025",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.6667,
+      "qrel_sources": [
+        "apple_refund_subscription_policy.md"
+      ],
+      "query_id": "apple_026",
+      "query_token_count": 9
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.2222,
+      "qrel_sources": [
+        "apple_refund_subscription_policy.md"
+      ],
+      "query_id": "apple_027",
+      "query_token_count": 9
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.2857,
+      "qrel_sources": [
+        "apple_account_registration_guide.md"
+      ],
+      "query_id": "apple_028",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.2857,
+      "qrel_sources": [
+        "apple_refund_subscription_policy.md"
+      ],
+      "query_id": "apple_029",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "apple_support",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.0,
+      "qrel_sources": [
+        "apple_product_faq.md",
+        "apple_refund_subscription_policy.md"
+      ],
+      "query_id": "apple_030",
+      "query_token_count": 8
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.25,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_001",
+      "query_token_count": 8
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.5,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_002",
+      "query_token_count": 8
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.3333,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_003",
+      "query_token_count": 9
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.7778,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_004",
+      "query_token_count": 9
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.5556,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_005",
+      "query_token_count": 9
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.5,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_006",
+      "query_token_count": 6
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.4444,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_007",
+      "query_token_count": 9
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.25,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_008",
+      "query_token_count": 8
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.6667,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_009",
+      "query_token_count": 6
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.5,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_010",
+      "query_token_count": 8
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.25,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_011",
+      "query_token_count": 8
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.2222,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_012",
+      "query_token_count": 9
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.5556,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_013",
+      "query_token_count": 9
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.5,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_014",
+      "query_token_count": 8
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.2857,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_015",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.4444,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_016",
+      "query_token_count": 9
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.1429,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_017",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.125,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_018",
+      "query_token_count": 8
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.8,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_019",
+      "query_token_count": 10
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.1429,
+      "qrel_sources": [
+        "Getnotes/Agent-Hook深度教程-事件-匹配-处理器-阻止机制一次讲透.md"
+      ],
+      "query_id": "agent_020",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.0,
+      "qrel_sources": [
+        "Getnotes/架构师 Agent 落地实践：从技术方案设计到复杂系统理解-2026年09月09日-来自【得到大脑】.md"
+      ],
+      "query_id": "agent_021",
+      "query_token_count": 8
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.125,
+      "qrel_sources": [
+        "Getnotes/架构师 Agent 落地实践：从技术方案设计到复杂系统理解-2026年09月09日-来自【得到大脑】.md"
+      ],
+      "query_id": "agent_022",
+      "query_token_count": 8
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.1667,
+      "qrel_sources": [
+        "Getnotes/架构师 Agent 落地实践：从技术方案设计到复杂系统理解-2026年09月09日-来自【得到大脑】.md"
+      ],
+      "query_id": "agent_023",
+      "query_token_count": 6
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.0,
+      "qrel_sources": [
+        "Getnotes/架构师 Agent 落地实践：从技术方案设计到复杂系统理解-2026年09月09日-来自【得到大脑】.md"
+      ],
+      "query_id": "agent_024",
+      "query_token_count": 6
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.2857,
+      "qrel_sources": [
+        "Getnotes/架构师 Agent 落地实践：从技术方案设计到复杂系统理解-2026年09月09日-来自【得到大脑】.md"
+      ],
+      "query_id": "agent_025",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.2,
+      "qrel_sources": [
+        "Getnotes/架构师 Agent 落地实践：从技术方案设计到复杂系统理解-2026年09月09日-来自【得到大脑】.md"
+      ],
+      "query_id": "agent_026",
+      "query_token_count": 5
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "semantic",
+      "max_qrel_lexical_overlap": 0.1429,
+      "qrel_sources": [
+        "Getnotes/架构师 Agent 落地实践：从技术方案设计到复杂系统理解-2026年09月09日-来自【得到大脑】.md"
+      ],
+      "query_id": "agent_027",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "lexical",
+      "max_qrel_lexical_overlap": 0.4444,
+      "qrel_sources": [
+        "Getnotes/架构师 Agent 落地实践：从技术方案设计到复杂系统理解-2026年09月09日-来自【得到大脑】.md"
+      ],
+      "query_id": "agent_028",
+      "query_token_count": 9
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.0,
+      "qrel_sources": [
+        "Getnotes/架构师 Agent 落地实践：从技术方案设计到复杂系统理解-2026年09月09日-来自【得到大脑】.md"
+      ],
+      "query_id": "agent_029",
+      "query_token_count": 7
+    },
+    {
+      "authoring": "manual-curated-v2",
+      "domain": "agent_engineering",
+      "exact_title_copy": false,
+      "high_lexical_overlap": false,
+      "kind": "confusing",
+      "max_qrel_lexical_overlap": 0.25,
+      "qrel_sources": [
+        "Getnotes/架构师 Agent 落地实践：从技术方案设计到复杂系统理解-2026年09月09日-来自【得到大脑】.md"
+      ],
+      "query_id": "agent_030",
+      "query_token_count": 8
+    }
+  ],
+  "threshold": "query tokens overlapping qrel content >= 0.9"
+}

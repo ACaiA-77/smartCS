@@ -1,2 +1,5 @@
 *.pdf binary
 *.faiss binary
+# Preserve byte hashes pinned by benchmark manifests and frozen test fixtures.
+benchmarks/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+tests/fixtures/rag/** -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

@@ -14,6 +14,9 @@ from scripts.evaluate_rag_retrieval import validate_benchmark_manifest
 from scripts.build_rag_benchmark import build
 
 
+INDEX = Path("tests/fixtures/rag/production_chunks")
+
+
 def test_checked_in_benchmark_is_balanced_and_auditable():
     root = Path("benchmarks/rag")
     queries = [json.loads(line) for line in (root / "queries.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -48,7 +51,7 @@ def test_checked_in_benchmark_is_balanced_and_auditable():
         "apple_001", "apple_009", "apple_011", "apple_015", "apple_016",
         "apple_018", "apple_023", "apple_026", "apple_029",
     } and row["relevance"] == 1 for row in qrels)
-    index_root = Path(manifest["index_root"])
+    index_root = INDEX
     chunks_by_domain = {
         domain: {
             json.loads(line)["chunk_id"]
@@ -77,7 +80,8 @@ def test_canonical_builder_reproduces_checked_in_manifest(tmp_path):
     for name in ("queries.jsonl", "qrels.jsonl"):
         shutil.copyfile(source / name, tmp_path / name)
     expected = json.loads((source / "benchmark_manifest.json").read_text(encoding="utf-8"))
-    assert build(Path("artifacts/rag_round3/production_indexes"), tmp_path) == expected
+    expected["index_root"] = str(INDEX)
+    assert build(INDEX, tmp_path) == expected
     assert json.loads((tmp_path / "benchmark_manifest.json").read_text(encoding="utf-8")) == expected
 
 
@@ -89,7 +93,7 @@ def test_builder_rejects_inconsistent_or_missing_chunking_version(tmp_path, vers
     for domain in ("apple_support", "agent_engineering"):
         target = tmp_path / "indexes" / domain
         target.mkdir(parents=True)
-        shutil.copyfile(Path("artifacts/rag_round3/production_indexes") / domain / "chunks.jsonl", target / "chunks.jsonl")
+        shutil.copyfile(INDEX / domain / "chunks.jsonl", target / "chunks.jsonl")
         (target / "manifest.json").write_text(
             json.dumps({"chunking_version": "structure-context-v1" if domain == "apple_support" else version}),
             encoding="utf-8",
@@ -161,4 +165,4 @@ def test_benchmark_manifest_hash_mismatch_fails_closed(tmp_path):
     root.mkdir()
     (root / source.name).write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ValueError, match="source hash mismatch"):
-        validate_benchmark_manifest(root, Path(manifest["index_root"]))
+        validate_benchmark_manifest(root, INDEX)

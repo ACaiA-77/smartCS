@@ -24,4 +24,4 @@ trafilatura>=1.12.0
 readability-lxml>=0.8.1
 html2text>=2024.2.26
 pypdf>=5.0.0
-jieba>=0.42.1
+jieba==0.42.1

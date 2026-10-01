@@ -1,0 +1,51 @@
+{
+  "actual_embedding_backend": "sentence_transformers",
+  "actual_embedding_dimension": 1024,
+  "actual_embedding_model": "BAAI/bge-m3",
+  "artifact_kind": "production",
+  "artifacts": {
+    "bm25": "bm25_index.json",
+    "chunks": "chunks.jsonl",
+    "corpus": "corpus.jsonl",
+    "faiss": "index.faiss"
+  },
+  "build_version": "offline-rag-v1",
+  "built_at": "2026-09-19T19:21:53.248101+00:00",
+  "chunking_version": "structure-context-v1",
+  "counts": {
+    "chunks": 1306,
+    "documents": 6,
+    "failed": 0,
+    "unresolved": 2
+  },
+  "dim": 1024,
+  "dimension": 1024,
+  "domain": "agent_engineering",
+  "embedding_backend": "sentence_transformers",
+  "embedding_dimension": 1024,
+  "embedding_model": "BAAI/bge-m3",
+  "failed_sources": [],
+  "manifest_version": 1,
+  "model": "BAAI/bge-m3",
+  "source_types": [
+    "markdown",
+    "pdf",
+    "text"
+  ],
+  "target_embedding_dimension": 1024,
+  "target_embedding_model": "BAAI/bge-m3",
+  "unresolved": [
+    {
+      "document_id": "4157ea5a3f64e63267e42735",
+      "reason": "url_only_stub",
+      "source": "github/Learn_Harness_Engineering.txt",
+      "source_url": "https://walkinglabs.github.io/learn-harness-engineering/zh/"
+    },
+    {
+      "document_id": "95310996e0b5f2dea0cb2b98",
+      "reason": "url_only_stub",
+      "source": "github/Pi_learning.txt",
+      "source_url": "https://dg-ai-notes.pages.dev/"
+    }
+  ]
+}

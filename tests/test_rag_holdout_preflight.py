@@ -10,7 +10,7 @@ import scripts.evaluate_rag_retrieval as retrieval_eval
 from scripts.evaluate_rag_retrieval import run, validate_benchmark_manifest
 
 
-INDEX = Path("artifacts/rag_round3/production_indexes")
+INDEX = Path("tests/fixtures/rag/production_chunks")
 GOLD = Path("benchmarks/rag_holdout_v1")
 
 
@@ -53,6 +53,14 @@ def test_valid_holdout_reaches_model_gate_after_preflight(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="requires qrel_groups_sha256"):
         run(benchmark_root=root, artifact_root=INDEX, output_root=tmp_path / "out",
             qrel_groups_path=root / "qrel_groups.jsonl")
+
+
+@pytest.mark.parametrize("benchmark", [
+    "benchmarks/rag", "benchmarks/rag_holdout_v1",
+    "benchmarks/rag_cross_domain_sparse_challenge_v1",
+])
+def test_checked_in_benchmarks_match_frozen_bytes(benchmark):
+    validate_benchmark_manifest(Path(benchmark), INDEX)
 
 
 def test_legacy_manifest_has_no_new_hash_requirement():
