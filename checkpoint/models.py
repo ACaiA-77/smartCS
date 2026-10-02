@@ -49,6 +49,7 @@ class AgentCheckpoint(BaseModel):
     pending_action: dict[str, JsonValue] | None = None
     context: dict[str, JsonValue] = Field(default_factory=dict)
     version: int = Field(default=0, ge=0)
+    last_event_seq: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_snapshot(self):

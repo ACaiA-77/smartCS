@@ -66,7 +66,7 @@ flowchart TD
 | 状态类别 | 所有者 | 内容和边界 |
 | --- | --- | --- |
 | 平台身份与会话归属 | MySQL `platform_user` + `conversation_session` | 账号、密码哈希、账号状态、业务身份映射及会话所属账号；与工作流进度分开保存 |
-| 会话与工作流状态 | `SessionStore` + MySQL `CheckpointStore` | `last_intent`、累积实体、轮次、退款 `pending_action`、节点结果与最近 20 条消息；API 使用 MySQL 权威快照 |
+| 会话与工作流状态 | `SessionStore` + MySQL `CheckpointStore` | `last_intent`、累积实体、轮次、退款 `pending_action`、节点结果；消息历史存于 append-only `conversation_event`，API 使用 MySQL 权威事件与游标 |
 | 执行状态 | `ExecutionLedger` | 写操作的 `idempotency_key`、参数 hash、执行中、完成、失败和可恢复 payload |
 | 业务状态 | 订单、退款、工单 domain 和 SQLite | 订单归属、退款效果、工单内容和状态，是业务有效性与业务结果的权威来源 |
 

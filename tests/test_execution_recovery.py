@@ -456,11 +456,14 @@ def test_invalid_env_threshold_uses_safe_default_and_warns(
 @pytest.mark.asyncio
 async def test_startup_recovery_logs_only_aggregate_counts(monkeypatch, caplog) -> None:
     from api import main as api_main
+    from types import SimpleNamespace
     from unittest.mock import AsyncMock, Mock
 
     # Lifecycle logging test must not connect to MySQL because a real .env exists.
     monkeypatch.setattr(api_main.CheckpointStore, "from_env", Mock(return_value=Mock(initialize=AsyncMock())))
     monkeypatch.setattr(api_main.PlatformDatabase, "from_env", Mock(return_value=Mock(initialize=AsyncMock())))
+    memory_service = SimpleNamespace(initialize=AsyncMock())
+    monkeypatch.setattr(api_main, "UserMemoryService", Mock(return_value=memory_service))
     monkeypatch.setattr(api_main, "issue_token", Mock(return_value="component-only-not-a-jwt"))
 
     summary = {
@@ -490,6 +493,7 @@ async def test_startup_recovery_logs_only_aggregate_counts(monkeypatch, caplog) 
             pass
 
     assert calls == 1
+    memory_service.initialize.assert_awaited_once()
     assert "startup execution recovery" in caplog.text
     assert "scanned=2" in caplog.text
     assert "recovered_completed=1" in caplog.text

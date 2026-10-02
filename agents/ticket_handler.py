@@ -13,6 +13,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from context.invocation import invoke_agent
 from tracing.otel_config import trace_agent_call
 from mcp.tool_execution import ToolExecutionContext, ToolExecutor
 from tickets.service import canonical_ticket_payload_hash
@@ -84,14 +85,18 @@ class TicketHandlerAgent:
         self.mcp_server = mcp_server
 
     @trace_agent_call("ticket_analyze")
-    async def analyze_request(self, user_message: str) -> dict:
+    async def analyze_request(
+        self, user_message: str, *, state: dict[str, Any] | None = None
+    ) -> dict:
         """分析用户需求，提取工单信息"""
         messages = [
             SystemMessage(content=TICKET_SYSTEM_PROMPT),
             HumanMessage(content=f"用户消息: {user_message}"),
         ]
 
-        response = await self.llm.ainvoke(messages)
+        response = await invoke_agent(
+            self.llm, "ticket_handler", messages, state=state
+        )
 
         import json
         try:
@@ -361,8 +366,8 @@ class TicketHandlerAgent:
 
         checkpoint = active_checkpoint.get()
         ticket_info = (
-            await checkpoint.ticket_plan(lambda: self.analyze_request(last_message))
-            if checkpoint is not None else await self.analyze_request(last_message)
+            await checkpoint.ticket_plan(lambda: self.analyze_request(last_message, state=state))
+            if checkpoint is not None else await self.analyze_request(last_message, state=state)
         )
         action = ticket_info.get("action", "create")
         for key, val in accumulated.items():

@@ -158,12 +158,13 @@ def create_embedding_backend(embedding_dim: int = 1536) -> EmbeddingBackend:
     return HashEmbeddingBackend(embedding_dim)
 
 
-class LongTermMemory:
+class KnowledgeMemory:
     """
-    FAISS-based long-term memory for RAG retrieval.
+    Shared FAISS-based knowledge memory for RAG retrieval.
 
-    It keeps the vector index and the original chunk metadata in sync, so a
-    retrieved result can be traced back to its source document.
+    This is intentionally for global knowledge only. User-owned profile and
+    episodic memory live in memory.user_memory and never reuse these retriever
+    ids, vectors, or FAISS artifacts.
     """
 
     def __init__(
@@ -513,3 +514,7 @@ class LongTermMemory:
             chunks.append(current_chunk.strip())
 
         return chunks if chunks else [text[:chunk_size]]
+
+
+# Backward-compatible import name used by agents, tests, and monkeypatch paths.
+LongTermMemory = KnowledgeMemory

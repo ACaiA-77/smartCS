@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import hashlib
 import os
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from dotenv import load_dotenv
@@ -26,11 +28,22 @@ from platform_db.users import Users
 from platform_db.sessions import Sessions
 
 from agents.orchestrator import create_chat_orchestrator
+from context.invocation import configure_context_manager
+from context.manager import ContextManager, WorkingSetCache
+from context.models import (
+    ContextCompressionError,
+    ContextError,
+    ContextOverflowError,
+    ContextOwnershipError,
+    ModelProfile,
+)
 from checkpoint.models import AgentCheckpoint, CheckpointError, CheckpointConflict, CheckpointOwnershipError
 from checkpoint.store import CheckpointStore
 from memory.short_term import ShortTermMemory
 from memory.session_store import ConversationState, SessionStore
-from memory.long_term import LongTermMemory
+from memory.knowledge import KnowledgeMemory
+from memory.user_memory import UserMemoryService
+from memory.user_memory_worker import UserMemoryWorker
 from mcp.mcp_server import MCPToolServer, create_default_tools
 from mcp.order_repository import OrderRepository
 from mcp.approval_store import ApprovalNotFoundError, ApprovalService, ApprovalStateError
@@ -57,7 +70,7 @@ short_term_memory = ShortTermMemory(
     redis_retry_cooldown=float(os.getenv("REDIS_RETRY_COOLDOWN_SECONDS", "30")),
 )
 session_store = SessionStore(short_term_memory)
-long_term_memory = LongTermMemory(index_path=os.getenv("FAISS_INDEX_PATH", "./vector_store/faiss_index"))
+long_term_memory = KnowledgeMemory(index_path=os.getenv("FAISS_INDEX_PATH", "./vector_store/faiss_index"))
 shared_retriever = long_term_memory.get_retriever()
 order_repository = OrderRepository(os.getenv("ORDER_DB_PATH", "./data/orders.db"))
 refund_service = RefundService(order_repository)
@@ -88,6 +101,9 @@ tool_executor = InstrumentedToolExecutor(
 metrics = AgentMetrics()
 chat_orchestrator = None
 checkpoint_store = None
+context_manager = None
+user_memory_service = None
+user_memory_worker = None
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 
 
@@ -110,7 +126,12 @@ def _log_rag_runtime() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    global chat_orchestrator, checkpoint_store
+    global chat_orchestrator, checkpoint_store, context_manager, user_memory_service, user_memory_worker
+
+    # Fail startup on invalid budgets before reporting healthy or initializing
+    # external services. This validates configuration only; no tokenizer/model
+    # provider or weights are loaded here.
+    ModelProfile.from_env()
 
     init_tracer(
         service_name=os.getenv("OTEL_SERVICE_NAME", "smart-cs-multi-agent"),
@@ -121,6 +142,18 @@ async def lifespan(app: FastAPI):
     await checkpoint_store.initialize()
     platform = PlatformDatabase.from_env()
     await platform.initialize()
+    user_memory_service = UserMemoryService(database=platform)
+    await user_memory_service.initialize()
+    # Candidate application is owned by this bounded background worker, never
+    # by the chat request tail: the durable lease queue survives restarts.
+    user_memory_worker = UserMemoryWorker(user_memory_service)
+    await user_memory_worker.start()
+    context_manager = ContextManager(
+        event_store=checkpoint_store,
+        cache=WorkingSetCache(short_term_memory, ttl=1800),
+        user_memory=user_memory_service,
+    )
+    configure_context_manager(context_manager)
     app.state.platform_users = Users(platform)
     app.state.platform_sessions = Sessions(platform)
     # Validate JWT configuration at startup; never fall back to a built-in secret.
@@ -145,14 +178,21 @@ async def lifespan(app: FastAPI):
         tool_executor=tool_executor,
         checkpoint_store=checkpoint_store,
         execution_reconciler=execution_reconciler,
+        context_manager=context_manager,
     )
     _log_rag_runtime()
 
     try:
         yield
     finally:
+        if user_memory_worker is not None:
+            await user_memory_worker.stop()
+            user_memory_worker = None
         chat_orchestrator = None
         checkpoint_store = None
+        context_manager = None
+        user_memory_service = None
+        configure_context_manager(None)
         app.state.platform_users = None
         app.state.platform_sessions = None
 
@@ -185,6 +225,13 @@ async def private_api_responses(request: Request, call_next):
 
 if _HAS_FASTAPI_OTEL:
     FastAPIInstrumentor.instrument_app(app)
+
+@app.exception_handler(ContextError)
+async def context_error(_request: Request, exc: ContextError):
+    status = 409 if isinstance(exc, (ContextOverflowError, ContextCompressionError, ContextOwnershipError)) else 503
+    detail = "context request cannot be assembled" if status == 409 else "context service unavailable"
+    return JSONResponse(status_code=status, content={"detail": detail})
+
 
 @app.exception_handler(CheckpointError)
 async def checkpoint_error(_request: Request, exc: CheckpointError):
@@ -364,6 +411,10 @@ async def _persist_order_query_context(
     session_id: str | None,
     user_id: str,
     order: dict,
+    *,
+    tool_arguments: dict | None = None,
+    tool_result: dict | None = None,
+    event_operation_id: str | None = None,
 ) -> None:
     """把网页端直接调用订单工具的结果接入同一会话记忆。"""
     if not session_id or not order.get("found") or not order.get("order_id"):
@@ -375,19 +426,85 @@ async def _persist_order_query_context(
             cp = await checkpoint_store.load(session_id, user_id)
             if cp is not None and cp.status == "running":
                 raise CheckpointConflict("unfinished chat request owns this session")
-            context = dict(cp.context) if cp else {"workflow_version": 1, "state": {}}
+            context = dict(cp.context) if cp else {
+                "workflow_version": 1,
+                "session_state": ConversationState().to_dict(),
+                "state": {},
+            }
             current = ConversationState.from_dict(context.get("session_state", {}))
             current.last_intent = "order_query"
             current.accumulated_entities["order_id"] = order_id
             context["session_state"] = current.to_dict()
-            history = [m.model_dump() for m in cp.messages] if cp else []
-            history.extend([{"role": "user", "content": f"查询订单 {order_id}"},
-                            {"role": "assistant", "content": f"已查询订单 {order_id}，状态：{order.get('status_label', '未知')}。"}])
-            value = AgentCheckpoint(session_id=session_id, user_id=user_id, intent="order_query",
+
+            operation_id = event_operation_id if isinstance(event_operation_id, str) and event_operation_id else str(uuid.uuid4())
+            operation_hash = hashlib.sha256(
+                f"{session_id}:{user_id}:{operation_id}".encode("utf-8")
+            ).hexdigest()[:40]
+            event_key = f"direct-order-query:{operation_hash}"
+            safe_arguments = {"order_id": order_id}
+            result_payload = dict(tool_result or order)
+            for private_key in ("user_id", "business_user_id", "customer_email", "phone"):
+                result_payload.pop(private_key, None)
+            await checkpoint_store.append_event(
+                session_id,
+                user_id,
+                "TOOL_CALL",
+                {"name": "order_query", "arguments": tool_arguments or safe_arguments},
+                event_key=f"{event_key}:call",
+            )
+            await checkpoint_store.append_event(
+                session_id,
+                user_id,
+                "TOOL_RESULT",
+                {"name": "order_query", "success": True, "result": result_payload},
+                event_key=f"{event_key}:result",
+            )
+            context_message = (
+                f"上一轮已查询订单 {order_id}，状态：{order.get('status_label', order.get('status', '未知'))}，"
+                f"商品：{order.get('product', '未知')}。"
+            )
+            synthetic_user_message = f"查询订单 {order_id}"
+            await checkpoint_store.append_event(
+                session_id,
+                user_id,
+                "USER_MESSAGE",
+                {"role": "user", "content": synthetic_user_message, "synthetic": True},
+                event_key=f"{event_key}:user",
+            )
+            await checkpoint_store.append_event(
+                session_id,
+                user_id,
+                "ASSISTANT_MESSAGE",
+                {"role": "assistant", "content": context_message},
+                event_key=f"{event_key}:assistant",
+            )
+            # These context events do not belong to the previous chat receipt.
+            context.pop("request_id", None)
+            context.pop("request_hash", None)
+            value = AgentCheckpoint(
+                session_id=session_id,
+                user_id=user_id,
+                intent="order_query",
                 current_stage="WAIT_CONFIRM" if current.pending_action else "FINISHED",
-                status="waiting" if current.pending_action else "finished", pending_action=current.pending_action,
-                messages=history[-20:], context=context, version=cp.version if cp else 0)
-            await (checkpoint_store.update(value) if cp else checkpoint_store.save(value))
+                status="waiting" if current.pending_action else "finished",
+                pending_action=current.pending_action,
+                messages=[],
+                context=context,
+                version=cp.version if cp else 0,
+                last_event_seq=cp.last_event_seq if cp else 0,
+            )
+            saved = await (checkpoint_store.update(value) if cp else checkpoint_store.save(value))
+            if context_manager is not None:
+                synchronize = getattr(context_manager, "synchronize_checkpoint", None)
+                if callable(synchronize):
+                    projection = AgentCheckpoint.model_validate({
+                        **saved.model_dump(),
+                        "messages": [
+                            {"role": "user", "content": synthetic_user_message},
+                            {"role": "assistant", "content": context_message},
+                        ],
+                    })
+                    await synchronize(projection)
         return
     current = await session_store.get_state(session_id)
     entities = dict(current.accumulated_entities or {})
@@ -429,7 +546,7 @@ async def chat(request: ChatRequest, user: UserContext = Depends(get_current_use
                 "client_request_id": request.client_request_id,
                 "messages": [HumanMessage(content=request.message)],
             })
-        except CheckpointError:
+        except (CheckpointError, ContextError):
             raise
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="invalid checkpoint request") from exc
@@ -467,6 +584,8 @@ async def chat(request: ChatRequest, user: UserContext = Depends(get_current_use
 
     try:
         result = await chat_orchestrator.ainvoke(initial_state)
+    except ContextError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
 
@@ -508,7 +627,7 @@ async def resume_checkpoint(session_id: str, request: ResumeRequest, user: UserC
         raise HTTPException(status_code=503, detail="checkpoint unavailable")
     try:
         result = await chat_orchestrator.resume(session_id, user.business_user_id, request.client_request_id)
-    except CheckpointError:
+    except (CheckpointError, ContextError):
         raise
     except Exception as exc:
         raise HTTPException(status_code=503, detail="恢复未完成，已保存断点；请检查服务或业务执行账本") from exc
@@ -520,8 +639,7 @@ async def get_history(session_id: str, user: UserContext = Depends(get_current_u
     """获取对话历史"""
     await _owned_session(session_id, user)
     if checkpoint_store is not None:
-        cp = await checkpoint_store.load(session_id, user.business_user_id)
-        history = [m.model_dump() for m in cp.messages] if cp else []
+        history = await checkpoint_store.history(session_id, user.business_user_id)
     else:
         history = await session_store.get_history(session_id)
     return {"session_id": session_id, "messages": history}
@@ -540,6 +658,8 @@ async def clear_history(session_id: str, user: UserContext = Depends(get_current
             await session_store.clear(session_id)
             if cp is not None:
                 await checkpoint_store.delete(session_id, user_id, cp.version)
+            if context_manager is not None:
+                await context_manager.invalidate_session(session_id, user_id)
     else:
         await session_store.clear(session_id)
     return {"session_id": session_id, "cleared": True}
@@ -582,6 +702,9 @@ async def call_tool(request: ToolExecuteRequest, user: UserContext = Depends(get
             session_id=request.session_id,
             user_id=user.business_user_id,
             order=result.result,
+            tool_arguments={"order_id": arguments.get("order_id")},
+            tool_result=result.result,
+            event_operation_id=request.idempotency_key,
         )
     return {
         "success": result.success,
@@ -621,6 +744,9 @@ async def execute_tool(request: ToolExecuteRequest, user: UserContext = Depends(
             session_id=request.session_id,
             user_id=user.business_user_id,
             order=result.result,
+            tool_arguments={"order_id": arguments.get("order_id")},
+            tool_result=result.result,
+            event_operation_id=request.idempotency_key,
         )
     return result.as_dict()
 
@@ -688,8 +814,11 @@ async def get_metrics():
 
 @app.get("/api/metrics/runtime")
 async def get_runtime_metrics(user: UserContext = Depends(get_current_user)):
-    """获取进程内运行时聚合指标。"""
-    return runtime_metrics.snapshot()
+    """获取经认证的进程级数值运行时指标，不包含会话内容。"""
+    snapshot = runtime_metrics.snapshot()
+    context_snapshot = getattr(context_manager, "metrics_snapshot", None)
+    snapshot["context"] = context_snapshot() if callable(context_snapshot) else {}
+    return snapshot
 
 
 @app.get("/health")

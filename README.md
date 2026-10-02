@@ -218,7 +218,7 @@ python-impl/
 | `accumulated_entities` | 每轮实体合并（新覆盖旧） | `knowledge_rag` / `ticket_handler` 实体补全 |
 | `turn_count` | 每轮递增 | 会话状态与调试 |
 
-API checkpoint 路径以 MySQL 快照为权威来源：`SessionStore` 在请求内使用独立上下文，节点成功后把结构化状态与最近 20 条消息（不是 20 轮）一起持久化。Redis 不可用、过期或含有旧 `pending_action` 都不会覆盖 MySQL；第一次使用新 checkpoint 时不会自动迁移旧 Redis 会话。
+API checkpoint 路径以 MySQL 事件日志与快照为权威来源：`conversation_event` 表 append-only 记录完整会话流水，`session_digest` 保存滚动摘要与受保护字段，`agent_checkpoint` 只保留工作流恢复游标（不再复制整段消息历史）。`SessionStore` 在请求内使用独立上下文；Redis/进程内 Working Set 只是可丢失加速层，miss 或过期后从 MySQL digest + 最近事件 + checkpoint 无损重建。Redis 不可用、过期或含有旧 `pending_action` 都不会覆盖 MySQL；第一次使用新 checkpoint 时不会自动迁移旧 Redis 会话。上下文组装统一由 `context.ContextManager` 完成（接口见 [docs/context_manager_api.md](docs/context_manager_api.md)），预算与压缩阈值可用 `SMARTCS_CONTEXT_*` 环境变量调节（见 `.env.example`）。
 
 不传 `checkpoint_store` 的离线编排器仍保留原 Redis / 进程内存兼容路径，包括旧 `[wm_snapshot]` 的一次性读取。该兼容路径没有工作流断点恢复能力。详见下节。
 
@@ -242,7 +242,7 @@ PREPARED → ROUTED → EXECUTING → GENERATED → REVIEWED → FINISHED / WAIT
 
 服务重启不会批量自动执行业务。未完成的模型生成步骤需要重新生成，不是逐 token 或模型内部状态恢复。MySQL 与业务 SQLite 之间没有分布式事务，恢复依赖已有权威业务查询，只覆盖当前退款/工单；不承诺任意外部工具 exactly-once。
 
-前端按认证账号保存当前标签页的会话和请求 ID，刷新后恢复历史，未完成请求提供“继续处理”。JWT 仅在 HttpOnly cookie 中，不存入 JavaScript 存储。切换账号时清空页面数据。请求未到达服务时，以原消息和原请求 ID 重发，不覆盖另一个运行中请求。MySQL 会话和回执无自动过期；最近 20 条消息不是永久完整聊天档案。旧匿名 checkpoint 不自动关联到新账号，避免认领他人历史。
+前端按认证账号保存当前标签页的会话和请求 ID，刷新后恢复历史，未完成请求提供“继续处理”。JWT 仅在 HttpOnly cookie 中，不存入 JavaScript 存储。切换账号时清空页面数据。请求未到达服务时，以原消息和原请求 ID 重发，不覆盖另一个运行中请求。MySQL 会话、事件日志和回执无自动过期；对话历史以 append-only 事件为完整档案，清空历史使用 cutoff 事件而不删除原始事件。旧匿名 checkpoint 不自动关联到新账号，避免认领他人历史。
 
 ### RAG 管线
 

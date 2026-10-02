@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import hashlib
+import logging
 import uuid
 from dataclasses import asdict
 from typing import Any
@@ -13,10 +14,11 @@ from langchain_openai import ChatOpenAI
 
 from agents.compliance_checker import ComplianceCheckerAgent
 from agents.conversation import ConversationAgent
-from agents.intent_router import IntentRouterAgent
+from agents.intent_router import INTENT_SYSTEM_PROMPT, IntentRouterAgent
 from agents.knowledge_rag import KnowledgeRAGAgent
 from agents.refund_handler import RefundHandlerAgent
 from agents.ticket_handler import TicketHandlerAgent
+from context.manager import ContextManager
 from memory.long_term import LongTermMemory
 from memory.session_store import ConversationState, SessionStore
 from mcp.mcp_server import MCPToolServer
@@ -29,17 +31,25 @@ from checkpoint.models import (
 from checkpoint.store import CheckpointStore
 
 
+logger = logging.getLogger(__name__)
+
+
 def _encode_messages(messages):
     encoded = []
     for message in messages:
         if type(message) not in (HumanMessage, AIMessage) or not isinstance(message.content, str):
             raise CheckpointCorrupt("only text human/assistant messages can be checkpointed")
         encoded.append({"role": "user" if isinstance(message, HumanMessage) else "assistant", "content": message.content})
-    return encoded[-20:]
+    return encoded
 
 
 def _decode_messages(messages):
-    return [(HumanMessage if message.role == "user" else AIMessage)(content=message.content) for message in messages]
+    decoded = []
+    for message in messages:
+        role = message["role"] if isinstance(message, dict) else message.role
+        content = message["content"] if isinstance(message, dict) else message.content
+        decoded.append((HumanMessage if role == "user" else AIMessage)(content=content))
+    return decoded
 
 
 def _validate_runtime_snapshot(checkpoint):
@@ -89,8 +99,18 @@ class _CheckpointRun:
             **cp.model_dump(), "intent": self.state.get("intent", ""),
             "current_stage": stage, "status": {"FINISHED": "finished", "WAIT_CONFIRM": "waiting"}.get(stage, "running"),
             "pending_action": session.get("pending_action"), "context": context,
-            "messages": _encode_messages(self.state["messages"]),
+            "messages": (
+                [{"role": "assistant", "content": self.state["messages"][-1].content}]
+                if stage in {"WAIT_CONFIRM", "FINISHED"}
+                and self.state.get("messages")
+                and isinstance(self.state["messages"][-1], AIMessage)
+                else []
+            ),
         }))
+        # The checkpoint store returns only its bounded compatibility message
+        # snapshot. Sync it instead of copying the full in-flight conversation at
+        # every workflow stage; ContextManager augments its working set as needed.
+        await self.owner._synchronize_checkpoint(self.checkpoint)
 
     async def ticket_plan(self, create):
         plan = self.checkpoint.context.get("ticket_plan")
@@ -137,6 +157,7 @@ class ChatOrchestrator:
         checkpoint_store: CheckpointStore | None = None,
         execution_reconciler=None,
         retriever=None,
+        context_manager: ContextManager | None = None,
     ) -> None:
         self.llm = llm
         self.session_store = session_store
@@ -145,6 +166,7 @@ class ChatOrchestrator:
         self.tool_executor = tool_executor
         self.checkpoint_store = checkpoint_store
         self.execution_reconciler = execution_reconciler
+        self.context_manager = context_manager or ContextManager()
         self.intent_router = IntentRouterAgent(llm)
         self.conversation_agent = ConversationAgent(llm)
         self.retriever = retriever or long_term_memory.get_retriever(use_env=False)
@@ -154,6 +176,124 @@ class ChatOrchestrator:
         self.ticket_agent = TicketHandlerAgent(llm, tool_executor=tool_executor)
         self.refund_agent = RefundHandlerAgent(llm, tool_executor, session_store)
         self.compliance_agent = ComplianceCheckerAgent(llm)
+
+    async def _process_user_memory(
+        self,
+        session_id: str,
+        user_id: str,
+        request_id: str,
+        content: str,
+        checkpoint: AgentCheckpoint,
+    ) -> None:
+        """Enqueue only the durable source user turn after its receipt is saved.
+
+        Candidate application is owned by the application's bounded background
+        ``UserMemoryWorker`` (durable lease queue). The chat request never
+        awaits application/consolidation, so chat latency cannot grow with
+        memory work; enqueue failures stay idempotent and observable.
+        """
+        service = getattr(self.context_manager, "user_memory", None)
+        enqueue = getattr(service, "process_message", None)
+        if not callable(enqueue):
+            return
+
+        try:
+            events = await self.checkpoint_store.recent_events(
+                session_id,
+                user_id,
+                after_seq=max(0, checkpoint.last_event_seq - 1000),
+                limit=1000,
+            )
+            prepared = [
+                event for event in events
+                if event.get("event_type") == "STATE_CHANGE"
+                and event.get("payload", {}).get("request_id") == request_id
+                and event.get("payload", {}).get("stage") == "PREPARED"
+            ]
+            if not prepared:
+                return
+            boundary = min(int(event.get("seq") or 0) for event in prepared)
+            source = max(
+                (
+                    event for event in events
+                    if event.get("event_type") == "USER_MESSAGE"
+                    and not event.get("payload", {}).get("synthetic")
+                    and int(event.get("seq") or 0) < boundary
+                    and event.get("payload", {}).get("content") == content
+                ),
+                key=lambda event: int(event.get("seq") or 0),
+                default=None,
+            )
+            if source is None:
+                return
+
+            enqueue_result = None
+            for attempt in range(2):
+                enqueue_result = await enqueue(
+                    user_id, session_id, source["event_id"], content
+                )
+                if not enqueue_result or not enqueue_result.get("retryable"):
+                    break
+            if not enqueue_result or enqueue_result.get("retryable"):
+                logger.warning("user-memory candidate enqueue deferred after bounded retry")
+        except Exception as exc:
+            # The chat receipt/checkpoint is authoritative and already durable.
+            # Memory enqueue retries are idempotent and must never trigger
+            # model/tool replay; the background worker owns later application.
+            logger.warning("user-memory enqueue deferred (%s)", type(exc).__name__)
+
+    async def _synchronize_checkpoint(self, checkpoint: AgentCheckpoint, messages=None) -> None:
+        synchronize = getattr(self.context_manager, "synchronize_checkpoint", None)
+        if callable(synchronize):
+            projection = checkpoint
+            if messages is not None:
+                projection = AgentCheckpoint.model_validate({
+                    **checkpoint.model_dump(),
+                    "messages": _encode_messages(messages),
+                })
+            await synchronize(projection)
+
+    async def _admit_incoming_context(
+        self,
+        session_id: str,
+        user_id: str,
+        content: str,
+        session_state: dict[str, Any],
+    ) -> None:
+        """Fail closed on required context before a new checkpoint can become running.
+
+        This is a pure context build: it does not invoke an LLM or mutate business
+        state. In particular, an oversized confirmation leaves the prior
+        WAIT_CONFIRM checkpoint and its authoritative pending action intact.
+        """
+        model = getattr(self.llm, "model_name", None) or getattr(self.llm, "model", None)
+        last_intent = session_state.get("last_intent")
+        task_message = f"用户消息: {content}"
+        if last_intent:
+            task_message = f"上一轮意图: {last_intent}\n\n{task_message}"
+        admission_state = {
+            "session_id": session_id,
+            "user_id": user_id,
+            "intent": "",
+            "current_agent": "orchestrator",
+            "needs_clarification": False,
+            "compliance_passed": True,
+            "messages": [HumanMessage(content=content)],
+            "session_state": session_state,
+            "pending_action": session_state.get("pending_action"),
+            "accumulated_entities": session_state.get("accumulated_entities", {}),
+            "sub_results": {"_session_context": session_state},
+        }
+        await self.context_manager.build(
+            session_id,
+            user_id,
+            "intent_router",
+            content,
+            model=model if isinstance(model, str) else None,
+            state=admission_state,
+            system_prompt=INTENT_SYSTEM_PROMPT,
+            task_message=task_message,
+        )
 
     async def _prepare_state(self, state: dict[str, Any]) -> dict[str, Any]:
         session_id = str(state.get("session_id", "default"))
@@ -286,11 +426,22 @@ class ChatOrchestrator:
         del config
         if self.checkpoint_store is not None:
             return await self._checkpoint_invoke(state)
-        current = await self._prepare_state(state)
-        current = await self._route_intent(current)
-        current = await self._handle(current)
-        current = await self.compliance_agent.process(current)
-        return await self._synthesize(current)
+        session_id = str(state.get("session_id", "default"))
+        user_id = str(state.get("user_id", "anonymous"))
+        messages = state.get("messages", [])
+        if messages:
+            content = getattr(messages[-1], "content", None)
+            if isinstance(content, str):
+                session_state = (await self.session_store.get_state(session_id)).to_dict()
+                await self._admit_incoming_context(session_id, user_id, content, session_state)
+        async with self.context_manager.bind_request(
+            session_id, user_id, request_id=str(uuid.uuid4()), state=state
+        ):
+            current = await self._prepare_state(state)
+            current = await self._route_intent(current)
+            current = await self._handle(current)
+            current = await self.compliance_agent.process(current)
+            return await self._synthesize(current)
 
     async def _handle(self, current):
         if not current.get("needs_clarification"):
@@ -338,6 +489,10 @@ class ChatOrchestrator:
                 request_hash = hashlib.sha256(messages[-1]["content"].encode()).hexdigest()
                 receipt = await store.receipt(session_id, user_id, request_id, request_hash)
                 if receipt is not None:
+                    if cp is not None and cp.context.get("request_id") == request_id and cp.status in {"finished", "waiting"}:
+                        await self._process_user_memory(
+                            session_id, user_id, request_id, messages[-1]["content"], cp
+                        )
                     return receipt
                 if cp is not None and cp.status == "running":
                     if cp.context.get("request_id") != request_id or cp.context.get("request_hash") != request_hash:
@@ -346,51 +501,89 @@ class ChatOrchestrator:
                     previous_version = cp.version if cp else 0
                     if cp:
                         session = cp.context["session_state"]
-                        messages = [m.model_dump() for m in cp.messages] + messages[-1:]
                     else:
                         # MySQL is authoritative. An expired/deleted checkpoint must not revive Redis data.
                         session = ConversationState().to_dict()
-                    current = {"messages": [HumanMessage(content=m["content"]) if m["role"] == "user" else AIMessage(content=m["content"]) for m in messages[-20:]],
+                    await self._admit_incoming_context(
+                        session_id, user_id, messages[-1]["content"], session
+                    )
+                    current = {"messages": [HumanMessage(content=messages[-1]["content"])],
                                "user_id": user_id, "session_id": session_id, "intent": "", "sub_results": {},
                                "compliance_passed": True, "final_response": "", "current_agent": "orchestrator", "needs_clarification": False}
                     cp = AgentCheckpoint(session_id=session_id, user_id=user_id, version=previous_version,
-                        messages=messages[-20:], pending_action=session.get("pending_action"),
+                        messages=[messages[-1]], pending_action=session.get("pending_action"),
                         context={"workflow_version": 1, "request_id": request_id, "request_hash": request_hash,
                                  "session_state": session, "state": {k: v for k, v in current.items() if k not in {"messages", "session_id", "user_id"}}})
                     cp = await (store.update(cp) if previous_version else store.save(cp))
             if cp.context.get("workflow_version") != 1:
                 raise CheckpointCorrupt("unsupported workflow version; manual migration required")
             try:
+                # CheckpointStore.load provides a bounded, trusted compatibility
+                # snapshot (at most 20 messages). Full history remains available
+                # only through the explicit UI history API; context builds augment
+                # this snapshot from their owner-scoped working set.
                 current = {**cp.context["state"], "session_id": session_id, "user_id": user_id,
                            "messages": _decode_messages(cp.messages)}
+                await self._synchronize_checkpoint(cp, current["messages"])
                 session = cp.context["session_state"]
             except (KeyError, TypeError) as exc:
                 raise CheckpointCorrupt("checkpoint state is incomplete") from exc
             if cp.status in {"finished", "waiting"}:
-                return {**current, "client_request_id": cp.context["request_id"]}
-            with self.session_store.checkpoint_context(session_id, session):
-                run = _CheckpointRun(self, cp, current)
-                token = active_checkpoint.set(run)
-                try:
-                    if run.checkpoint.current_stage == "PREPARED":
-                        current = await self._prepare_state(current)
-                        run.state = await self._route_intent(current)
-                        await run.save("ROUTED")
-                    if run.checkpoint.current_stage == "ROUTED":
-                        await run.save("EXECUTING")
-                    if run.checkpoint.current_stage == "EXECUTING":
-                        run.state = await self._handle(run.state)
-                        await run.save("GENERATED")
-                    if run.checkpoint.current_stage == "GENERATED":
-                        run.state = await self.compliance_agent.process(run.state)
-                        await run.save("REVIEWED")
-                    if run.checkpoint.current_stage == "REVIEWED":
-                        run.state = await self._synthesize(run.state)
-                        pending = (await self.session_store.get_state(session_id)).pending_action
-                        await run.save("WAIT_CONFIRM" if pending else "FINISHED")
-                    return {**run.state, "client_request_id": run.checkpoint.context["request_id"]}
-                finally:
-                    active_checkpoint.reset(token)
+                if cp.context.get("request_id"):
+                    user_message = next(
+                        (item.content for item in reversed(current["messages"]) if isinstance(item, HumanMessage)),
+                        "",
+                    )
+                    await self._process_user_memory(
+                        session_id, user_id, cp.context["request_id"], user_message, cp
+                    )
+                return {**current, "client_request_id": cp.context.get("request_id")}
+            if resume:
+                request_id = cp.context["request_id"]
+            current["_checkpoint_last_event_seq"] = cp.last_event_seq
+            current["_checkpoint_version"] = cp.version
+            async with self.context_manager.bind_request(
+                session_id,
+                user_id,
+                request_id=request_id,
+                state=current,
+                last_event_seq=cp.last_event_seq,
+                checkpoint_version=cp.version,
+            ):
+                with self.session_store.checkpoint_context(session_id, session):
+                    run = _CheckpointRun(self, cp, current)
+                    token = active_checkpoint.set(run)
+                    try:
+                        if run.checkpoint.current_stage == "PREPARED":
+                            current = await self._prepare_state(current)
+                            run.state = await self._route_intent(current)
+                            await run.save("ROUTED")
+                        if run.checkpoint.current_stage == "ROUTED":
+                            await run.save("EXECUTING")
+                        if run.checkpoint.current_stage == "EXECUTING":
+                            run.state = await self._handle(run.state)
+                            await run.save("GENERATED")
+                        if run.checkpoint.current_stage == "GENERATED":
+                            run.state = await self.compliance_agent.process(run.state)
+                            await run.save("REVIEWED")
+                        if run.checkpoint.current_stage == "REVIEWED":
+                            run.state = await self._synthesize(run.state)
+                            pending = (await self.session_store.get_state(session_id)).pending_action
+                            await run.save("WAIT_CONFIRM" if pending else "FINISHED")
+                            user_message = next(
+                                (item.content for item in reversed(run.state["messages"]) if isinstance(item, HumanMessage)),
+                                "",
+                            )
+                            await self._process_user_memory(
+                                session_id,
+                                user_id,
+                                run.checkpoint.context["request_id"],
+                                user_message,
+                                run.checkpoint,
+                            )
+                        return {**run.state, "client_request_id": run.checkpoint.context["request_id"]}
+                    finally:
+                        active_checkpoint.reset(token)
 
 
 def create_chat_orchestrator(
@@ -402,6 +595,7 @@ def create_chat_orchestrator(
     checkpoint_store: CheckpointStore | None = None,
     execution_reconciler=None,
     retriever=None,
+    context_manager: ContextManager | None = None,
 ) -> ChatOrchestrator:
     """Build an orchestrator from the application's already-owned services."""
     if llm is None:
@@ -420,6 +614,7 @@ def create_chat_orchestrator(
         checkpoint_store,
         execution_reconciler,
         retriever,
+        context_manager,
     )
 
 

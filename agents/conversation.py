@@ -6,6 +6,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from context.invocation import invoke_agent
 from tracing.otel_config import trace_agent_call
 
 
@@ -29,8 +30,6 @@ DUAL_DOMAIN_CAPABILITY_RESPONSE = (
 
 class ConversationAgent:
     """Generate natural replies for conversation intent without business side effects."""
-
-    _MAX_CONTEXT_MESSAGES = 6
 
     def __init__(self, llm: Any) -> None:
         self.llm = llm
@@ -57,7 +56,7 @@ class ConversationAgent:
             cls._message_copy(message)
             for message in messages[:current_index]
             if isinstance(message, (HumanMessage, AIMessage))
-        ][-cls._MAX_CONTEXT_MESSAGES :]
+        ]
         return [
             SystemMessage(content=CONVERSATION_SYSTEM_PROMPT),
             *history,
@@ -86,7 +85,16 @@ class ConversationAgent:
         if self._is_capability_question(str(current_message.content)):
             answer = DUAL_DOMAIN_CAPABILITY_RESPONSE
         else:
-            response = await self.llm.ainvoke(prompt_messages)
+            context_state = {
+                **state,
+                "messages": [
+                    message for message in messages
+                    if isinstance(message, (HumanMessage, AIMessage))
+                ],
+            }
+            response = await invoke_agent(
+                self.llm, "conversation", prompt_messages, state=context_state
+            )
             answer = response.content if isinstance(response.content, str) else str(response.content)
         sub_results = dict(state.get("sub_results") or {})
         sub_results["conversation"] = answer

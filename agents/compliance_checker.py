@@ -16,6 +16,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from context.invocation import invoke_agent
 from tracing.otel_config import trace_agent_call
 
 
@@ -128,14 +129,23 @@ class ComplianceCheckerAgent:
         )
 
     @trace_agent_call("compliance_llm_check")
-    async def llm_check(self, content: str) -> ComplianceResult:
+    async def llm_check(
+        self, content: str, *, state: dict[str, Any] | None = None
+    ) -> ComplianceResult:
         """LLM深度合规审查（处理规则引擎无法覆盖的场景）"""
         messages = [
             SystemMessage(content=COMPLIANCE_SYSTEM_PROMPT),
             HumanMessage(content=f"请审查以下客服回复内容的合规性：\n\n{content}"),
         ]
 
-        response = await self.llm.ainvoke(messages)
+        response = await invoke_agent(
+            self.llm,
+            "compliance_checker",
+            messages,
+            state=state,
+            task_message=f"请审查以下客服回复内容的合规性：\\n\\n{content}",
+            isolated=True,
+        )
 
         import json
         try:
@@ -152,7 +162,9 @@ class ComplianceCheckerAgent:
         )
 
     @trace_agent_call("compliance_full_check")
-    async def full_check(self, content: str) -> ComplianceResult:
+    async def full_check(
+        self, content: str, *, state: dict[str, Any] | None = None
+    ) -> ComplianceResult:
         """
         两阶段合规审查：
         1. 规则引擎快速检查（毫秒级）
@@ -163,7 +175,7 @@ class ComplianceCheckerAgent:
         if not rule_result.passed and rule_result.risk_level in ("high", "critical"):
             return rule_result
 
-        llm_result = await self.llm_check(content)
+        llm_result = await self.llm_check(content, state=state)
 
         all_violations = rule_result.violations + llm_result.violations
         final_passed = rule_result.passed and llm_result.passed
@@ -198,7 +210,7 @@ class ComplianceCheckerAgent:
         if not content_to_check.strip():
             return {**state, "compliance_passed": True}
 
-        compliance_result = await self.full_check(content_to_check)
+        compliance_result = await self.full_check(content_to_check, state=state)
 
         if not compliance_result.passed:
             for key in sub_results:

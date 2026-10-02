@@ -12,6 +12,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from context.invocation import invoke_agent
 from memory.long_term import LongTermMemory
 from rag.models import RetrievalHit
 from rag.runtime import RetrievalRuntime, RetrievalTrace
@@ -81,7 +82,12 @@ class KnowledgeRAGAgent:
         messages = [
             HumanMessage(content=QUERY_REWRITE_PROMPT.format(query=original_query)),
         ]
-        response = await self.llm.ainvoke(messages)
+        response = await invoke_agent(
+            self.llm,
+            "knowledge_rag.rewrite",
+            messages,
+            isolated=True,
+        )
         return response.content.strip()
 
     @trace_agent_call("rag_retrieve")
@@ -125,25 +131,30 @@ class KnowledgeRAGAgent:
         return trace
 
     @trace_agent_call("rag_generate")
-    async def generate_answer(self, query: str, context_docs: list[dict]) -> str:
+    async def generate_answer(
+        self,
+        query: str,
+        context_docs: list[dict],
+        *,
+        state: dict[str, Any] | None = None,
+    ) -> str:
         """基于检索文档生成回答"""
         if not context_docs:
             return "抱歉，知识库中暂未找到与您问题相关的信息。建议您联系人工客服获取帮助。"
 
-        context = "\n\n---\n\n".join(
-            f"来源: {doc.get('source', '未知')}\n内容: {doc.get('content', '')}"
-            for doc in context_docs
-        )
-
         messages = [
             SystemMessage(content=RAG_SYSTEM_PROMPT),
-            HumanMessage(content=(
-                f"用户问题: {query}\n\n"
-                f"检索到的参考文档:\n{context}"
-            )),
+            HumanMessage(content=f"用户问题: {query}"),
         ]
 
-        response = await self.llm.ainvoke(messages)
+        response = await invoke_agent(
+            self.llm,
+            "knowledge_rag",
+            messages,
+            state=state,
+            task_message=f"用户问题: {query}",
+            evidence=context_docs,
+        )
         return response.content
 
     @trace_agent_call("knowledge_rag_process")
@@ -189,7 +200,7 @@ class KnowledgeRAGAgent:
         )
         reranked_docs = trace.hits
 
-        answer = await self.generate_answer(original_query, reranked_docs)
+        answer = await self.generate_answer(original_query, reranked_docs, state=state)
 
         return {
             **state,

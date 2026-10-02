@@ -15,6 +15,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from context.invocation import invoke_agent
 from tracing.otel_config import trace_agent_call
 
 
@@ -102,12 +103,13 @@ class IntentRouterAgent:
             return floor
 
     @staticmethod
-    def _format_chat_context(messages: list, max_turns: int = 6) -> str:
-        """取最近若干轮对话文本，供意图分类参考（不含当前最后一条）。"""
+    def _format_chat_context(messages: list, max_turns: int | None = None) -> str:
+        """Format prior turns; context budgeting and truncation happen centrally."""
+        del max_turns  # retained for call-site compatibility; no local history slicing
         if len(messages) <= 1:
             return ""
         lines = []
-        for m in messages[:-1][-max_turns:]:
+        for m in messages[:-1]:
             if isinstance(m, HumanMessage):
                 lines.append(f"user: {m.content}")
             elif isinstance(m, AIMessage):
@@ -278,6 +280,7 @@ class IntentRouterAgent:
         last_intent: str | None = None,
         context_entities: dict[str, Any] | None = None,
         pending_action: dict[str, Any] | None = None,
+        state: dict[str, Any] | None = None,
     ) -> IntentResult:
         """对用户消息进行意图分类"""
         if pending_action is None and isinstance(context_entities, dict):
@@ -300,7 +303,13 @@ class IntentRouterAgent:
         ]
 
         if result is None:
-            response = await self.llm.ainvoke(messages)
+            response = await invoke_agent(
+                self.llm,
+                "intent_router",
+                messages,
+                state=state,
+                task_message=human,
+            )
 
             try:
                 content = response.content.strip()
@@ -351,7 +360,8 @@ class IntentRouterAgent:
             return state
 
         last_message = messages[-1].content if messages else ""
-        ctx = self._format_chat_context(messages)
+        # Recent history is supplied and bounded by the shared context builder.
+        ctx = ""
 
         # 从 _session_context 读取上一轮意图
         context = state.get("sub_results", {}).get("_session_context", {})
@@ -365,6 +375,7 @@ class IntentRouterAgent:
             last_intent=last_intent,
             context_entities=context_entities,
             pending_action=pending_action,
+            state=state,
         )
 
         return {

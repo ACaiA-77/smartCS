@@ -60,7 +60,32 @@ async def mysql():
     async with store.session_lock(sid):
         cp = await store.load(sid, "user_002")
         if cp:
-            await store.delete(sid, cp.user_id, cp.version)
+            # Test-only cleanup marker: fixture teardown is not a business
+            # completion and must not mint/overwrite a request receipt. Keep
+            # workflow/session state valid, then use the production delete path
+            # so it records HISTORY_CLEARED and retains raw events.
+            context = dict(cp.context)
+            context.pop("request_id", None)
+            context.pop("request_hash", None)
+            context["fixture_cleanup"] = True
+            state = dict(context.get("state", {}))
+            state.setdefault("intent", cp.intent or "")
+            state.setdefault("sub_results", {})
+            state.setdefault("compliance_passed", True)
+            state.setdefault("final_response", "")
+            state.setdefault("current_agent", "orchestrator")
+            state.setdefault("needs_clarification", False)
+            context["state"] = state
+            stage = "WAIT_CONFIRM" if cp.pending_action is not None else "FINISHED"
+            cleanup_checkpoint = AgentCheckpoint.model_validate({
+                **cp.model_dump(),
+                "messages": [],
+                "current_stage": stage,
+                "status": "waiting" if stage == "WAIT_CONFIRM" else "finished",
+                "context": context,
+            })
+            cleaned = await store.update(cleanup_checkpoint)
+            await store.delete(sid, cleaned.user_id, cleaned.version)
 
 
 def runtime(tmp_path, store, **kwargs):
@@ -89,6 +114,14 @@ async def interrupt_at(store, stage, action):
             await action()
     finally:
         store.update = original
+
+
+async def test_running_checkpoint_delete_remains_conflict(mysql):
+    store, sid = mysql
+    checkpoint = await store.save(AgentCheckpoint(session_id=sid, user_id="user_002"))
+
+    with pytest.raises(CheckpointConflict):
+        await store.delete(sid, checkpoint.user_id, checkpoint.version)
 
 
 async def test_mysql_crud_ownership_cas_lock_and_corrupt_data(mysql):

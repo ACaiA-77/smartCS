@@ -18,6 +18,7 @@ from mcp.approval_store import ApprovalService
 from mcp.execution_ledger import ExecutionLedger, canonical_arguments_hash
 from mcp.mcp_server import MCPToolServer, ToolCallResult, ToolDefinition, customer_tool_arguments
 from checkpoint.models import active_checkpoint
+from context.manager import active_context
 
 
 @dataclass(frozen=True)
@@ -121,7 +122,19 @@ class ToolExecutor:
         is_write = tool is not None and str(tool.operation_type or "read").lower() == "write"
         if checkpoint is not None and is_write:
             await checkpoint.before_write(name, arguments, context or ToolExecutionContext())
+
+        request_context = active_context.get()
+        context_manager = getattr(request_context, "manager", None)
+        if context_manager is not None:
+            await context_manager.record_tool_call(name, arguments)
+
         result = await self._execute(name, arguments, context)
+
+        # Persist the full result before applying unresolved-outcome handling. If
+        # event persistence fails after a write, the checkpoint remains fenced
+        # and the execution ledger is the sole recovery authority on resume.
+        if context_manager is not None:
+            await context_manager.record_tool_result(result)
         if checkpoint is not None and is_write:
             checkpoint.after_write(result)
         return result

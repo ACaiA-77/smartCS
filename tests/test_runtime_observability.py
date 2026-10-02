@@ -389,7 +389,8 @@ async def test_runtime_metrics_requires_auth_and_hides_legacy_payloads(monkeypat
 
     assert legacy.status_code == 403
     assert runtime.status_code == 200
-    assert set(runtime.json()) == {"requests", "tools", "recovery"}
+    assert set(runtime.json()) == {"requests", "tools", "recovery", "context"}
+    assert all(isinstance(value, (int, float)) for value in runtime.json()["context"].values())
     assert "items" not in runtime.json()["recovery"]
 
 

@@ -222,18 +222,16 @@ class SessionStore:
             return history[-last_n:]
         return history
 
-    async def get_context_window(self, session_id: str, max_tokens: int = 4000) -> str:
+    async def get_context_window(
+        self,
+        session_id: str,
+        max_tokens: int | None = None,
+        model: str | None = None,
+    ) -> str:
         history = await self.get_history(session_id)
-        context_parts: list[str] = []
-        estimated_tokens = 0
-        for message in reversed(history):
-            text = f"{message['role']}: {message['content']}"
-            tokens = len(text) // 2
-            if estimated_tokens + tokens > max_tokens:
-                break
-            context_parts.insert(0, text)
-            estimated_tokens += tokens
-        return "\n".join(context_parts)
+        from context.budget import history_context_text
+
+        return history_context_text(history, max_tokens=max_tokens, model=model)
 
     async def clear(self, session_id: str) -> None:
         await self.short_term_memory.clear(session_id)
