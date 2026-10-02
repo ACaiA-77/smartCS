@@ -5,6 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     HF_HOME=/home/app/.cache/huggingface \
     SENTENCE_TRANSFORMERS_HOME=/home/app/.cache/sentence-transformers \
+    TIKTOKEN_CACHE_DIR=/home/app/.cache/tiktoken \
     FAISS_INDEX_PATH=/app/vector_store/faiss_index \
     HOST=0.0.0.0 \
     PORT=8000
@@ -25,6 +26,12 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     "torch==${TORCH_VERSION}" \
     && python -m pip install --no-cache-dir --prefer-binary --retries 5 --timeout 120 \
     --index-url "${PIP_INDEX_URL}" -r requirements.txt
+
+# Bake the tiktoken BPE file into the image so context budgeting never needs a
+# runtime download (offline/restricted networks stay fully functional).
+RUN mkdir -p "${TIKTOKEN_CACHE_DIR}" \
+    && python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')" \
+    && chown -R app:app /home/app/.cache
 
 COPY --chown=app:app . .
 

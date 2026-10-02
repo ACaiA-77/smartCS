@@ -289,7 +289,7 @@ python -m scripts.build_global_sparse --artifact-root artifacts/rag_jieba/produc
 
 从知识源重新构建的 chunk 和向量未必与本机冻结索引相同，不能直接沿用旧 benchmark 的 chunk-ID qrels 或声称复现既有指标；严格 A/B 评测需使用原始冻结索引和对应 benchmark。
 
-将 `.env` 中 `RAG_INDEX_ROOT` 设为该目录，保留 `RAG_SPARSE_MODE=global_corpus_v1`、`EMBEDDING_BACKEND=local` 和 `RAG_RERANKER_BACKEND=cross_encoder`，重启 API 后生效。`artifacts/` 被 Git 忽略，不会随代码推送。不要只把路径回改到 fallback 索引而仍用 jieba 查询；回退也必须保证索引/查询分词一致。本次仅切换本机配置，Docker 如需使用新索引，还需挂载该目录、设置容器内 `RAG_INDEX_ROOT` 并确保依赖和模型匹配；现有 `.env.docker` 未自动修改。
+将 `.env` 中 `RAG_INDEX_ROOT` 设为该目录，保留 `RAG_SPARSE_MODE=global_corpus_v1`、`EMBEDDING_BACKEND=local` 和 `RAG_RERANKER_BACKEND=cross_encoder`，重启 API 后生效。`artifacts/` 被 Git 忽略，不会随代码推送。不要只把路径回改到 fallback 索引而仍用 jieba 查询；回退也必须保证索引/查询分词一致。Docker 侧已同步：`compose.yaml` 将 `./artifacts/rag_jieba` 只读挂载到容器 `/app/artifacts/rag_jieba`，`.env.docker.example` 的 `RAG_INDEX_ROOT=/app/artifacts/rag_jieba/production_indexes` 与 `EMBEDDING_MODEL=BAAI/bge-m3` 与冻结索引匹配；真实 `.env.docker` 需按示例自行同步。
 
 评测脚本默认沿用 chunk-ID 计分；只有显式传入 `--qrel-groups PATH` 才按事实组计分。同组不同 chunk 命中只计一次，但仍占用原始排名位置。Holdout v1 已冻结为正式评测包；其 qrel 覆盖不声称全语料穷尽。
 
@@ -607,7 +607,7 @@ curl -X POST http://localhost:8000/api/chat \
 
 ## Docker
 
-Dockerfile 用于把 FastAPI 后端打包成可部署镜像。镜像内默认不打包真实 `.env` / `.env.docker`、`vector_store/`、raw HTML 和测试文件；运行时通过 `--env-file` 和 volume 挂载注入配置、向量库和模型缓存。
+Dockerfile 用于把 FastAPI 后端打包成可部署镜像。镜像内默认不打包真实 `.env` / `.env.docker`、`vector_store/`、raw HTML 和测试文件；运行时通过 `--env-file` 和 volume 挂载注入配置、向量库和模型缓存。镜像构建时会把 tiktoken `cl100k_base` BPE 文件烘焙进 `/home/app/.cache/tiktoken`，上下文预算计数在容器内无需任何运行期下载。
 
 本机 Python 直接运行使用 `.env`；Docker 容器运行建议使用 `.env.docker`。不要提交真实 `.env` / `.env.docker`，仓库只提交 `.env.example` / `.env.docker.example`。
 
@@ -633,6 +633,14 @@ FAISS_INDEX_PATH=/app/vector_store/faiss_index
 ```
 
 所以容器内程序必须用 `/app/vector_store/faiss_index` 才能找到挂载进去的 FAISS 索引。
+
+除 FAISS 外，Docker 运行还需要三块配置（`.env.docker.example` 已全部包含，真实 `.env.docker` 照抄后补密钥）：
+
+- **MySQL checkpoint/用户记忆**：容器内 `MYSQL_HOST` 不能写 `127.0.0.1`（那是容器自身），Docker Desktop 用 `host.docker.internal`；先 `docker compose -f compose.checkpoint.yaml up -d` 启动独立 MySQL。
+- **JWT 认证**：`AUTH_JWT_SECRET` 必须填入至少 32 字节的随机密钥，留空会拒绝启动；首次需在容器内运行 `python -m scripts.init_demo_auth_user` 建演示账号。
+- **jieba 生产索引**：`compose.yaml` 已把 `./artifacts/rag_jieba` 只读挂载到 `/app/artifacts/rag_jieba`，容器内 `RAG_INDEX_ROOT=/app/artifacts/rag_jieba/production_indexes`；索引缺失或 embedding 模型不匹配时启动会 fail closed。
+
+中央上下文预算可用 `SMARTCS_CONTEXT_*` 环境变量调节（默认值见 `.env.docker.example` 注释）。
 
 先在宿主机完成网页采集与向量入库：
 

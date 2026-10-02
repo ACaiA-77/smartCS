@@ -10,6 +10,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./vector_store:/app/vector_store
+      # Read-only jieba production RAG indexes; RAG_INDEX_ROOT points inside this mount.
+      - ./artifacts/rag_jieba:/app/artifacts/rag_jieba:ro
       - smartcs-hf-cache:/home/app/.cache/huggingface
       - smartcs-st-cache:/home/app/.cache/sentence-transformers
     depends_on:
