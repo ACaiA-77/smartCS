@@ -18,6 +18,13 @@ from evals.scenarios import (
 
 @pytest.mark.asyncio
 async def test_default_suite_runs_fully_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A cold tiktoken cache downloads its BPE file exactly once; that is local
+    # environment setup, not eval-time network use. Warm it before sockets are
+    # blocked so a fresh clone/CI runner cannot misreport offline failures.
+    from context.budget import TokenCounter
+
+    TokenCounter()
+
     attempts: list[tuple[str, object]] = []
 
     def blocked(name: str):
