@@ -1,12 +1,35 @@
-# SmartCS Python 实现
+# SmartCS — Business Runtime（业务运行时）
 
-SmartCS 是一个本地多 Agent 客服后端，基于显式 async `ChatOrchestrator` 和策略约束的 `ToolExecutor`。项目用于展示确定性路由、会话状态归属、持久化业务写入、确认与审批、幂等、崩溃恢复、离线 Agent 评估、故障注入和运行时可观测性。
+SmartCS 是一个**双层**智能客服系统，本仓库是其 Python 侧：**Business Runtime**。
+Agent 运行时（Agent Harness）是 `../pi-harness`（Node 22 / TypeScript / Pi SDK）。
 
-这是一个面向工程实践的本地业务 Sandbox、简历和演示项目，不代表真实生产部署。
+```text
+        Agent Harness (pi-harness, TS/Pi)          ← 决定「想做什么」
+                    ↓
+        内部 HTTP + 每轮 Service JWT（身份信封）
+                    ↓
+        Business Runtime (python-impl, FastAPI)    ← 决定「是否允许发生」
+```
+
+**边界规则（由设计保证，不靠约定）**：Agent 可以提出工具调用；业务写操作是否真正执行，
+由本仓库的确定性授权与执行层最终决定。Harness 不持久化业务状态、不自铸可信身份、
+也不把模型 transcript 当作业务事实。
+
+对外主链路的完整说明见 [docs/architecture.md](docs/architecture.md)，
+边界规则见 [docs/runtime-boundaries.md](docs/runtime-boundaries.md)，
+崩溃与恢复语义见 [docs/recovery.md](docs/recovery.md)。
 
 ## 当前迭代范围
 
 本版保留认证、客户隔离、checkpoint 恢复和双域文本 RAG，增加 jieba 索引重建与可续跑的分词 A/B 评测工具。图片、音频和视频输入留待下一版本，本版不包含多模态功能。下方带日期的验收数据为历史记录，不代表当前 GitHub CI 或部署状态。
+
+## Historical Migration Record
+
+> 以下三节（Verified Local Status / Final RAG Runtime Closure / 用户登录与访问控制中的验收段落）
+> 是**历史迁移记录**，保留原样以维持证据链。它们描述的是各阶段当时的验收结果，
+> **不是当前架构入口**，也不与后续数字相加。当前架构请从
+> [docs/architecture.md](docs/architecture.md) 读起；
+> 各阶段报告位于 `../pi-harness/PHASEn_REPORT.md`，原始验收产物位于 `artifacts/`。
 
 ## Verified Local Status（Checkpoint 历史基线）
 
@@ -53,68 +76,71 @@ JWT 有效期 30 分钟。登出清除浏览器 cookie，不提供 refresh-token
 
 CLI 登录和 cookie 写请求需显式发送与服务地址一致的 `Origin`，并在同一个 HTTP 会话保留登录 cookie；不要把密码、JWT 放进命令行参数、示例脚本或日志。浏览器会自动携带同源 Origin。
 
-## Architecture at a glance
+## Architecture at a glance（当前主链路）
+
+主链路的 Agent 循环在 `pi-harness` 中；本仓库提供它调用的**全部业务能力**，
+以及所有权威状态的落点。
 
 ```text
 Customer Browser / authenticated API client
         ↓
-JWT Authentication → current platform account → UserContext
-        ↓
-Request Observability，外层 ASGI
-        ↓
-FastAPI handler
-        ↓
-ChatOrchestrator
-        ↓
-IntentRouter
-        ↓
-最多一个响应分支：自然对话或业务 Handler；低置信度时直接澄清
-        ↓
-Compliance
-        ↓
-Response
-
-TicketHandler / RefundHandler
+pi-harness: Pi Session → Main Agent → Tool Selection
+        ↓  （内部 HTTP，每轮一枚短期 Service JWT）
+python-impl /internal/*  ← 服务间通道，不对公网暴露
+   ├─ /internal/auth/verify        身份解析，account → business_user 唯一权威
+   ├─ /internal/tools/execute      READ 工具；剥离模型传入的身份字段，
+   │                               从可信 claims 重新绑定 user_id
+   ├─ /internal/tools/execute      WRITE 工具（仅 live 模式可达）
+   │                               授权 → operation 落库 → 才执行
+   ├─ /internal/context/turn-snapshot   每轮权威业务事实快照
+   ├─ /internal/compliance/review  规则掩码（始终）+ 可选 LLM 复核
+   ├─ /internal/memory/enqueue     长期记忆 outbox 消费端
+   └─ /internal/operation_status   写操作结果的权威裁决（ExecutionLedger）
         ↓
 ToolExecutor
-  ├─ confirmation
-  ├─ approval，仅 high-risk
+  ├─ confirmation / approval（仅 high-risk）
   ├─ timeout / READ retry
-  └─ idempotency
+  └─ idempotency（client_request_id + canonical payload hash）
         ↓
-MCP Tool
+Business Domain（order / refund / ticket）→ SQLite + ExecutionLedger
         ↓
-Business Domain
-        ↓
-SQLite
-
-KnowledgeRAGAgent
-        ↓
-HybridRetriever
-   ├─ Dense (FAISS)
-   ├─ Sparse (BM25)
-   ├─ RRF
-   └─ Cross-Encoder
+Knowledge：HybridRetriever = Dense(FAISS) + Sparse(BM25) → RRF → Cross-Encoder
 ```
 
-详细组件、状态边界和时序见 [docs/architecture.md](docs/architecture.md)。简历表达、面试问答和演示脚本见 [docs/resume_interview.md](docs/resume_interview.md)。
+工具传输的最终边界是**混合**的，这是刻意选择而非过渡态：
+
+- `knowledge_search` 走 **MCP**（streamable HTTP）：共享语料、无 per-user 身份，
+  渠道只需要一个服务级 token；
+- `order_query / ticket_query / refund_evaluate / risk_check / refund_confirm /
+  ticket_create` 走**内部 HTTP**：它们依赖 per-turn 身份信封
+  （account / business_user / session / client_request），MCP 的长连接模型
+  无法自然表达这一点。
 
 ## Architecture summary
 
-- `ChatOrchestrator` 是显式 async 编排层，当前没有采用 LangGraph 的图运行时。
-- Agent 负责意图和交互，不负责决定权威业务状态。Agent output is not authoritative business state。
-- 聊天链路中的副作用写入统一经过 `ToolExecutor`。`/api/tools/call` 只允许 READ；CLI business simulator 是独立的业务状态模拟路径。
+- **权威状态在 Python，不在 Agent**。Agent output is not authoritative business state；
+  transcript 也不是业务事实。
+- `ChatOrchestrator` / `IntentRouter` / `KnowledgeRAGAgent` / `TicketHandler` /
+  `RefundHandler` 是同一仓库中的 **legacy 路径**：仍由 `harness_version='legacy'`
+  的会话与通用 `/api/chat` 使用，能力与业务域完全共享（同一个 `ToolExecutor`、
+  同一套领域服务）。它不是新功能的主链路，Pi 会话走的是上面的 `/internal/*` 通道。
+- 聊天链路中的副作用写入统一经过 `ToolExecutor`；`WRITE` 工具在非 `live` 部署下
+  在服务端就不可达，而不是"被提示词劝阻"。
 - 退款和工单效果由业务域写入 SQLite，`ExecutionLedger` 记录执行幂等和 replay。
-- 工单使用 `client_request_id` 加 canonical payload hash 表示业务请求身份，跨用户或 payload 冲突不会返回旧工单信息。
-- 启动时的 crash recovery 只根据权威域状态协调 `refund_create` 和 `ticket_create` 的 stale ledger claim。
-- API 聊天使用 MySQL `CheckpointStore` 保存节点进度、待确认状态和消息；恢复时固化工具计划并复用原 `ExecutionLedger`。
+- 工单使用 `client_request_id` 加 canonical payload hash 表示业务请求身份，跨用户或
+  payload 冲突不会返回旧工单信息。
+- 崩溃恢复见 [docs/recovery.md](docs/recovery.md)：收据（`agent_run_receipt`）与
+  长期记忆 outbox 都从**持久状态**恢复，不依赖任何进程内状态。
 - Eval 检查路由、无副作用、安全边界和故障收敛等不变量，不使用 LLM-as-judge。
+
+简历表达、面试问答和演示脚本见 [docs/resume_interview.md](docs/resume_interview.md)。
 
 ## 技术栈
 
 | 组件 | 技术 |
 |------|------|
-| Agent 编排 | 显式 async `ChatOrchestrator` |
+| Agent 运行时（主链路） | `pi-harness`，Node 22 / TypeScript / Pi SDK |
+| Agent 编排（legacy 路径） | 显式 async `ChatOrchestrator` |
 | HTTP 框架 | FastAPI + Uvicorn |
 | LLM 调用 | LangChain `ChatOpenAI` |
 | 向量检索 | FAISS |
