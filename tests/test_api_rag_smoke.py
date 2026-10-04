@@ -87,13 +87,16 @@ class _SmokeSessions:
     def __init__(self):
         self.rows: dict[str, dict] = {}
 
-    async def create(self, account_id, title="", client_request_id=None):
+    async def create(self, account_id, title="", client_request_id=None, harness_version="legacy"):
         session_id = f"smoke-{uuid.uuid4().hex}"
         row = {
             "session_id": session_id,
             "account_id": account_id,
             "title": title,
             "client_request_id": client_request_id,
+            # Phase 7: Sessions.create now pins the harness at creation; the
+            # double follows the interface (values are not asserted here).
+            "harness_version": harness_version,
         }
         self.rows[session_id] = row
         return row
