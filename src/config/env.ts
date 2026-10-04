@@ -45,13 +45,29 @@ export interface LlmConfig {
   sourceFile: string;
 }
 
+/** The model-credential fields a real provider requires, in reporting order. */
+const LLM_FIELDS = ["OPENAI_BASE_URL", "OPENAI_API_KEY", "MODEL_NAME"] as const;
+
+function llmConfigPath(envFile?: string): string {
+  return envFile ?? process.env.SMARTCS_PYTHON_ENV_FILE ?? resolve(WORKSPACE_ROOT, "python-impl", ".env");
+}
+
+/** Why a real provider cannot be used; `null` when it can. Used for fail-fast. */
+export function llmConfigGap(envFile?: string): string | null {
+  const file = llmConfigPath(envFile);
+  if (!existsSync(file)) return `env file not found: ${file}`;
+  const parsed = parseDotEnv(readFileSync(file, "utf-8"));
+  const missing = LLM_FIELDS.filter((field) => !parsed[field]);
+  return missing.length ? `missing ${missing.join(", ")} in ${file}` : null;
+}
+
 /**
  * Read OPENAI_BASE_URL / OPENAI_API_KEY / MODEL_NAME from the existing
  * python-impl/.env. Returns null when the file or any field is missing, which
  * lets callers fall back to the Faux provider instead of fabricating a key.
  */
 export function loadLlmConfigFromPythonEnv(envFile?: string): LlmConfig | null {
-  const file = envFile ?? process.env.SMARTCS_PYTHON_ENV_FILE ?? resolve(WORKSPACE_ROOT, "python-impl", ".env");
+  const file = llmConfigPath(envFile);
   if (!existsSync(file)) return null;
   const parsed = parseDotEnv(readFileSync(file, "utf-8"));
   const baseUrl = parsed.OPENAI_BASE_URL;
@@ -61,10 +77,72 @@ export function loadLlmConfigFromPythonEnv(envFile?: string): LlmConfig | null {
   return { baseUrl, apiKey, model, sourceFile: file };
 }
 
-/** Resolve whether a real provider can be used; `faux` forces the offline path. */
-export function resolveProviderMode(): "openai" | "faux" {
-  if (process.env.SMARTCS_PHASE0_PROVIDER === "faux") return "faux";
-  return loadLlmConfigFromPythonEnv() ? "openai" : "faux";
+export const PROVIDER_MODE_ENV = "SMARTCS_PROVIDER_MODE";
+
+/** Thrown when the process cannot satisfy the provider it was configured for. */
+export class ProviderConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderConfigError";
+  }
+}
+
+/**
+ * True inside a test runner. Vitest sets VITEST; NODE_ENV=test covers the rest.
+ * This is the ONLY thing that licenses the Faux fallback, and it is read from
+ * the environment rather than threaded through call sites on purpose: a
+ * deployment cannot accidentally claim to be a test, because it does not
+ * control these variables the way it controls its own configuration.
+ */
+export function isTestProcess(): boolean {
+  return Boolean(process.env.VITEST) || process.env.NODE_ENV === "test";
+}
+
+/**
+ * Resolve the provider for this process.
+ *
+ *   SMARTCS_PROVIDER_MODE=faux    → offline provider. Always allowed; this is
+ *                                   how a developer or a test asks for it.
+ *   SMARTCS_PROVIDER_MODE=openai  → require a complete LLM config. Refuse to
+ *                                   start otherwise.
+ *   unset                          → infer: a complete config means openai; no
+ *                                   config means faux, but ONLY in a test
+ *                                   process. Anywhere else it is a refusal.
+ *
+ * The third branch is the Phase 9 fix. Until now a served deployment with no
+ * model credentials started happily and answered every user from the Faux
+ * provider — `/health` was green, the product was broken, and nothing said so.
+ * A missing credential is a configuration error and must surface at startup,
+ * not as a mysterious degradation. `SMARTCS_PHASE0_PROVIDER=faux` remains
+ * supported as the legacy spelling of the explicit offline request.
+ */
+export function resolveProviderMode(raw = process.env[PROVIDER_MODE_ENV]): "openai" | "faux" {
+  const declared = (raw ?? "").trim().toLowerCase();
+  if (declared && declared !== "openai" && declared !== "faux") {
+    throw new ProviderConfigError(
+      `invalid ${PROVIDER_MODE_ENV}: ${raw} (expected openai|faux)`,
+    );
+  }
+  if (process.env.SMARTCS_PHASE0_PROVIDER === "faux" && !declared) return "faux";
+
+  const config = loadLlmConfigFromPythonEnv();
+  if (declared === "faux") return "faux";
+  if (declared === "openai") {
+    if (!config) {
+      throw new ProviderConfigError(
+        `${PROVIDER_MODE_ENV}=openai but the model configuration is incomplete: ${llmConfigGap()}`,
+      );
+    }
+    return "openai";
+  }
+
+  if (config) return "openai";
+  if (isTestProcess()) return "faux";
+  throw new ProviderConfigError(
+    `no model configuration and no explicit provider mode: ${llmConfigGap()}. ` +
+      `Set ${PROVIDER_MODE_ENV}=openai after fixing the credentials, or ` +
+      `${PROVIDER_MODE_ENV}=faux to run the offline provider deliberately.`,
+  );
 }
 
 let pythonEnvCache: Record<string, string> | undefined;

@@ -289,6 +289,14 @@ export async function createSmartCsAgent(options: CreateSmartCsAgentOptions = {}
   const knowledgeTransport = toolMode === "fake" ? "http" : resolveKnowledgeTransport();
   // The prompt must name the tool that is actually declared for this transport.
   const knowledgeToolName = knowledgeTransport === "mcp" ? KNOWLEDGE_MCP_TOOL : KNOWLEDGE_HTTP_TOOL;
+  // Whether write tools will actually be on the tool face — not merely whether
+  // the mode allows them. `shadow` without a plan store mounts nothing, and a
+  // fake-tool agent never mounts business tools at all; the prompt follows the
+  // mounted set, because a prompt that advertises tools the model does not have
+  // is exactly the drift Phase 10 §② exists to remove.
+  const shadowStore = options.shadowPlanStore;
+  const writeToolsMounted =
+    toolMode !== "fake" && (writeMode === "live" || (writeMode === "shadow" && Boolean(shadowStore)));
   const extensionFactories: ExtensionFactory[] = [
     createAuditExtension(audit, turnContext),
     createContextInjectionExtension(snapshotHolder),
@@ -315,7 +323,10 @@ export async function createSmartCsAgent(options: CreateSmartCsAgentOptions = {}
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
-    systemPrompt: systemPromptFor(knowledgeToolName),
+    // Phase 10 §②: the prompt is composed from the same switch that mounts the
+    // write tools, so what the model is told it can do and what its tool face
+    // actually offers cannot drift apart.
+    systemPrompt: systemPromptFor(knowledgeToolName, { writeTools: writeToolsMounted }),
     // The skills section is composed here rather than by the SDK: the harness
     // owns its prompt in full, so it owns the disclosure that goes into it.
     // Only names and descriptions — the bodies stay on disk until the model
@@ -349,7 +360,6 @@ export async function createSmartCsAgent(options: CreateSmartCsAgentOptions = {}
     customTools = createFakeTools();
   } else {
     const client = businessClient ?? new PythonInternalClient();
-    const shadowStore = options.shadowPlanStore;
     customTools = createBusinessReadTools({
       client,
       turnContext,
@@ -376,8 +386,8 @@ export async function createSmartCsAgent(options: CreateSmartCsAgentOptions = {}
     }
     // shadow needs a plan store; live needs neither the store nor the
     // synthetic pending id (the runtime owns the real `pending_action`).
-    const writeToolsWanted = writeMode === "live" || (writeMode === "shadow" && Boolean(shadowStore));
-    if (writeToolsWanted) {
+    // Same predicate the prompt was composed from, above.
+    if (writeToolsMounted) {
       customTools = [
         ...customTools,
         ...createShadowWriteTools({
@@ -419,10 +429,13 @@ export async function createSmartCsAgent(options: CreateSmartCsAgentOptions = {}
     customTools = [...customTools, ...options.additionalTools];
   }
 
+  // `writeToolsMounted`, not `writeToolsEnabled`: the whitelist may only name
+  // tools that were actually constructed above. Naming an unmounted write tool
+  // (shadow without a plan store) used to put a phantom entry on the tool face.
   const defaultWhitelist: string[] =
     toolMode === "fake"
       ? [...SMARTCS_TOOL_WHITELIST]
-      : writeToolsEnabled(writeMode)
+      : writeToolsMounted
         ? [...readToolNames, ...SHADOW_WRITE_TOOL_NAMES]
         : [...readToolNames];
   if (toolMode !== "fake" && knowledgeTransport === "mcp") {

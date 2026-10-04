@@ -249,17 +249,10 @@ describe("Phase 3 acceptance", () => {
   }, 120_000);
 
   it("P3-3: the outbox delivers exactly once, and survives a dispatcher restart", async () => {
-    const identity = {
-      accountId: account.accountId,
-      businessUserId: "user_001",
-      sessionId: SESSION_ID,
-      clientRequestId: "p3-1",
-    };
-    const dispatcher = new MemoryOutboxDispatcher({
-      receipts,
-      pythonClient: client,
-      identityFor: (sessionId) => (sessionId === SESSION_ID ? identity : undefined),
-    });
+    // No identity is supplied: the dispatcher rebuilds it from the durable
+    // session + provenance rows (Phase 10 §①). A dispatcher constructed here
+    // shares no memory with the one that wrote the receipt.
+    const dispatcher = new MemoryOutboxDispatcher({ receipts, pythonClient: client });
 
     const first = await dispatcher.dispatchOnce();
     expect(first.enqueued).toBeGreaterThan(0);
@@ -269,11 +262,7 @@ describe("Phase 3 acceptance", () => {
 
     // A brand-new dispatcher (i.e. after a restart) finds nothing left to do:
     // the durable state, not process memory, decides.
-    const restarted = new MemoryOutboxDispatcher({
-      receipts,
-      pythonClient: client,
-      identityFor: (sessionId) => (sessionId === SESSION_ID ? identity : undefined),
-    });
+    const restarted = new MemoryOutboxDispatcher({ receipts, pythonClient: client });
     const second = await restarted.dispatchOnce();
     expect(second.enqueued).toBe(0);
     expect(second.scanned).toBe(0);

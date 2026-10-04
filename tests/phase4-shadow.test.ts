@@ -278,7 +278,8 @@ describe("Phase 4 acceptance", () => {
 
     // Resolve the placeholder id the same way the harness does, by evaluating first.
     faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("refund_evaluate", { order_id: ORDER_ID, user_id: USER_ID })], {
+      // Phase 10 §③: business parameters only; the runtime binds the caller.
+      fauxAssistantMessage([fauxToolCall("refund_evaluate", { order_id: ORDER_ID })], {
         stopReason: "toolUse",
       }),
       fauxAssistantMessage("可以退款。"),

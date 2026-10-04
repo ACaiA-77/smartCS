@@ -322,15 +322,13 @@ describe("Phase 6 observability", () => {
     await rebuildHarness(python.url, { auditQueue: queue });
     // The runtime authorizes a ticket write only when the durable user message
     // itself asks for one; the model's tool call is a request, not authority.
-    // The identity fields the model supplies are stripped and re-bound by the
-    // runtime, which is also why they are placeholders here.
+    // Phase 10 §③: the model sends business parameters only — `user_id`,
+    // `client_request_id` and `request_payload_hash` are supplied server-side
+    // at the live-write boundary and are no longer expressible here.
     faux.setResponses([
       fauxAssistantMessage(
         [
           fauxToolCall("ticket_create", {
-            client_request_id: "model-supplied",
-            request_payload_hash: "model-supplied",
-            user_id: "model-supplied",
             title: "包裹未收到",
             description: "客户反馈包裹长时间未收到，请协助处理。",
           } as never),

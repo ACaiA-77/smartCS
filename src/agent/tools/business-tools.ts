@@ -7,11 +7,33 @@
  * (plan v2 §7). The `AbortSignal` is forwarded so an aborted SSE stream tears
  * the tool HTTP request down too.
  *
- * Parameter schemas are a field-by-field TypeBox translation of the existing
- * definitions in `python-impl/mcp/mcp_server.py`, which stays the single
- * authority. `user_id` IS translated because the Python definitions declare it;
- * the runtime strips and re-binds it from the verified claims, so a value the
- * model supplies is inert (there is a dedicated acceptance case for that).
+ * ── Schema ownership (Phase 10 §③ — explicit reversal of the Phase 2 rule) ──
+ *
+ * Phase 2 translated `python-impl/mcp/mcp_server.py` field-for-field, including
+ * `user_id`, on the grounds that the Python definition is the single authority.
+ * That is reversed here, deliberately:
+ *
+ *   THE MODEL-VISIBLE SCHEMA IS THE BUSINESS-PARAMETER SUBSET.
+ *
+ * Identity, authorization, idempotency and tracing parameters belong to the
+ * runtime, not to the model. `user_id` is stripped from `arguments` and
+ * force-bound from the verified service claims (`internal_api/tools.py` §4/§4b);
+ * `client_request_id` and `request_payload_hash` are supplied server-side at
+ * the live-write boundary (§_execute_live_write). A model that supplies them
+ * changes nothing — the values are dropped — so declaring them only adds
+ * schema noise, more ways to omit a required field, and a misleading picture of
+ * who is responsible for what. The Python side is UNCHANGED: it still declares
+ * and enforces the full schema, and still refuses a call that arrives without
+ * the injected fields.
+ *
+ * Consequence for readers comparing the two files: this list is intentionally
+ * NOT a translation of `input_schema`. The Python definition remains the
+ * authority for what the runtime accepts; these schemas are the authority for
+ * what the model is asked to decide. The mapping is asserted end-to-end by the
+ * Phase 10 acceptance cases, which drive the real runtime with these schemas.
+ *
+ * Parameter names are still taken verbatim from the Python handlers — a name
+ * the handler does not accept is a call that fails at `handler(**arguments)`.
  */
 
 import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -110,31 +132,28 @@ pending_action_id=${pendingActionId}` },
 
 export function createBusinessReadTools(deps: BusinessToolDeps): ToolDefinition[] {
   return [
-    // mcp_server.py: order_query
+    // mcp_server.py: order_query. Model params: order_id. `user_id` is
+    // force-bound server-side, which is also what scopes the lookup to the
+    // caller's own orders.
     shell(deps, {
       name: "order_query",
       label: "订单查询",
-      description: "查询订单信息，支持按订单号或用户ID查询",
-      // required: ["order_id"] in mcp_server.py — user_id is declared but
-      // optional there, so it must be optional here too.
+      description: "查询订单信息，支持按订单号查询",
       parameters: Type.Object(
-        {
-          order_id: Type.String({ description: "订单号" }),
-          user_id: Type.Optional(Type.String({ description: "用户ID" })),
-        },
+        { order_id: Type.String({ description: "订单号" }) },
         { additionalProperties: false },
       ),
     }),
-    // mcp_server.py: refund_evaluate
+    // mcp_server.py: refund_evaluate. Model params: order_id.
+    // The review suggested an optional `reason?` here; the Python handler is
+    // `refund_evaluate(order_id, user_id)` and would reject an unknown keyword,
+    // so it is deliberately NOT declared (PHASE10_REPORT.md §偏差).
     shell(deps, {
       name: "refund_evaluate",
       label: "退款条件评估",
       description: "评估订单是否符合退款条件",
       parameters: Type.Object(
-        {
-          order_id: Type.String({ description: "订单号" }),
-          user_id: Type.String({ description: "用户ID" }),
-        },
+        { order_id: Type.String({ description: "订单号" }) },
         { additionalProperties: false },
       ),
     }),
@@ -153,23 +172,28 @@ export function createBusinessReadTools(deps: BusinessToolDeps): ToolDefinition[
         { additionalProperties: false },
       ),
     }),
-    // mcp_server.py: ticket_query
+    // mcp_server.py: ticket_query. Model params: ticket_id. `user_id` is
+    // force-bound, which is what makes this "本人工单" rather than any ticket.
     shell(deps, {
       name: "ticket_query",
       label: "工单查询",
       description: "按工单号查询本人客服工单",
       parameters: Type.Object(
-        { ticket_id: Type.String(), user_id: Type.String() },
+        { ticket_id: Type.String({ description: "工单号" }) },
         { additionalProperties: false },
       ),
     }),
-    // mcp_server.py: risk_check
+    // mcp_server.py: risk_check. Model params: action, amount?. The subject of
+    // the check is the caller, never a model-chosen user.
     shell(deps, {
       name: "risk_check",
       label: "风控检查",
       description: "风控接口 — 检查交易/操作的风险等级",
       parameters: Type.Object(
-        { user_id: Type.String(), action: Type.String(), amount: Type.Optional(Type.Number()) },
+        {
+          action: Type.String({ description: "待检查的操作" }),
+          amount: Type.Optional(Type.Number({ description: "涉及金额" })),
+        },
         { additionalProperties: false },
       ),
     }),

@@ -185,9 +185,12 @@ afterAll(async () => {
 
 describe("Phase 2 acceptance", () => {
   it("P2-1: the model queries its own order through the real tool chain", async () => {
+    // Phase 10 §③: the model declares business parameters only — no user_id.
+    // "My own orders" is a consequence of the runtime binding the caller's
+    // identity, not of the model asserting one.
     faux.setResponses([
       fauxAssistantMessage(
-        [fauxText("我帮你查一下订单。"), fauxToolCall("order_query", { order_id: OWN_ORDER, user_id: "user_001" })],
+        [fauxText("我帮你查一下订单。"), fauxToolCall("order_query", { order_id: OWN_ORDER })],
         { stopReason: "toolUse" },
       ),
       fauxAssistantMessage("你的订单 ORD-20260801-0001 当前状态是待付款。"),
@@ -206,27 +209,69 @@ describe("Phase 2 acceptance", () => {
     expect(orderResult!.text).toContain("SQLite 本地国内电商演示数据");
   }, 120_000);
 
-  it("P2-2: a forged user_id is stripped, audited and force-bound to the real owner", async () => {
+  it("P2-2a: the model cannot express an identity at all (Phase 10 §③)", async () => {
+    // Before Phase 10 the model could *send* `user_id` and relied on the
+    // runtime to drop it. Now the model-visible schema does not declare it, so
+    // the call is refused at the TypeBox layer and never reaches the wire.
+    // This is the first of the two identity guarantees; P2-2b is the second.
     faux.setResponses([
       fauxAssistantMessage(
-        // The model tries to read someone else's order by claiming that identity.
         [fauxToolCall("order_query", { order_id: OTHERS_ORDER, user_id: "user_002" })],
         { stopReason: "toolUse" },
       ),
-      fauxAssistantMessage("未找到该订单。"),
+      fauxAssistantMessage("参数有误。"),
     ]);
 
-    const response = await chat("p2-2", `查一下 ${OTHERS_ORDER}`);
+    const response = await chat("p2-2a", `查一下 ${OTHERS_ORDER}`);
     expect(response.status).toBe(200);
 
     const result = toolResults().filter((r) => r.toolName === "order_query").at(-1);
     expect(result).toBeDefined();
-    expect(result!.isError).toBe(false);
-    // Force-bound to user_001, so user_002's order is invisible.
-    expect(result!.text).toContain("found=False");
-    expect(result!.text).toContain(OTHERS_ORDER);
-    // The forged identity is not echoed back as if it were accepted.
+    expect(result!.isError).toBe(true);
+    // The refusal is about the unknown field, not about business outcome: the
+    // tool never ran, so no order data (own or otherwise) came back.
     expect(result!.text).not.toContain("found=True");
+    expect(result!.text).not.toContain("待付款");
+  }, 120_000);
+
+  it("P2-2b: a forged user_id is stripped, audited and force-bound to the real owner", async () => {
+    // Defence in depth: the model can no longer produce this call, but a
+    // compromised or buggy harness still can — so the RUNTIME guarantee is
+    // asserted directly against the runtime, bypassing the model entirely.
+    // `executeTool` is the exact call the tool shell makes.
+    const client = new PythonInternalClient({ baseUrl: python.url });
+    const identity = {
+      accountId: account.accountId,
+      businessUserId: "user_001",
+      sessionId: SESSION_ID,
+      clientRequestId: "p2-2b",
+    };
+
+    const forged = await client.executeTool({
+      tool: "order_query",
+      arguments: { order_id: OTHERS_ORDER, user_id: "user_002" },
+      identity,
+      toolCallId: "p2-2b-forged",
+    });
+    // Force-bound to user_001, so user_002's order is invisible...
+    expect(forged.content).toContain("found=False");
+    expect(forged.content).toContain(OTHERS_ORDER);
+    expect(forged.content).not.toContain("found=True");
+    // ...and the runtime reports the strip + the rebind in its audit trail
+    // rather than silently accepting the value.
+    const audit = (forged.details as { audit?: { strippedFields?: string[]; forcedFields?: string[] } }).audit;
+    expect(audit?.strippedFields).toContain("user_id");
+    expect(audit?.forcedFields).toContain("user_id");
+
+    // The same call without the forgery reaches the same answer: the forgery
+    // changed nothing, which is the actual property under test.
+    const honest = await client.executeTool({
+      tool: "order_query",
+      arguments: { order_id: OTHERS_ORDER },
+      identity,
+      toolCallId: "p2-2b-honest",
+    });
+    expect(honest.content).toBe(forged.content);
   }, 120_000);
 
   it("P2-3: unknown tools and unknown fields surface to the model as errors", async () => {

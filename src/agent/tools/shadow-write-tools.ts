@@ -6,11 +6,18 @@
  * load-bearing property — **no internal HTTP request is made**, so shadow mode
  * cannot produce a side effect even if the Python side were misconfigured.
  *
- * Schemas follow the Phase 5 target surface:
- *   * `ticket_create` is a field-for-field translation of the existing
- *     definition in `python-impl/mcp/mcp_server.py`;
+ * Schemas follow the Phase 5 target surface, narrowed by the Phase 10 §③ rule
+ * (see `business-tools.ts` for the full rationale): the model sees business
+ * parameters only.
+ *   * `ticket_create` declares title/description/priority?/category? — the
+ *     runtime supplies `user_id`, `client_request_id` and `request_payload_hash`
+ *     itself at the live-write boundary (`internal_api/tools.py`
+ *     `_execute_live_write`), so declaring them here would be three more fields
+ *     for the model to get wrong for no effect;
  *   * `refund_confirm` does NOT exist in `mcp_server.py` (it is a Phase 5
- *     addition), so its schema is taken from phase4-design.md §2.1.
+ *     addition), so its schema is taken from phase4-design.md §2.1. It takes
+ *     only the pending id — the business parameters come from the frozen
+ *     pending snapshot on the Python side.
  * Neither takes a `confirmed` parameter: authorization is never a model input.
  */
 
@@ -108,17 +115,16 @@ export function createShadowWriteTools(deps: ShadowWriteDeps): ToolDefinition[] 
     name: "ticket_create",
     label: "创建工单（Shadow）",
     description: "创建客服工单",
-    // Field-for-field translation of mcp_server.py's ticket_create. Note the
-    // absence of any `confirmed` parameter.
+    // Business parameters only; no `confirmed`, no identity, no idempotency
+    // key. Names match mcp_server.py's ticket_create handler.
     parameters: Type.Object(
       {
-        client_request_id: Type.String(),
-        request_payload_hash: Type.String(),
-        user_id: Type.String(),
-        title: Type.String(),
-        description: Type.String(),
-        priority: Type.Optional(Type.String({ enum: ["low", "medium", "high", "urgent"] })),
-        category: Type.Optional(Type.String()),
+        title: Type.String({ description: "工单标题" }),
+        description: Type.String({ description: "问题描述" }),
+        priority: Type.Optional(
+          Type.String({ enum: ["low", "medium", "high", "urgent"], description: "优先级" }),
+        ),
+        category: Type.Optional(Type.String({ description: "工单分类" })),
       },
       { additionalProperties: false },
     ),
