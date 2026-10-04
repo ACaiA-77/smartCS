@@ -65,6 +65,28 @@ export interface PythonClientOptions {
   baseUrl?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /**
+   * Timeout for `/internal/tools/execute` only. A tool call runs business work
+   * — a retrieval pass, a query — whose latency belongs to the deployment, not
+   * to the protocol; the 10s transport default was measured below the real RAG
+   * latency (9-14s), which turned a healthy tool into an intermittent 504.
+   * Every other internal call stays on `timeoutMs`.
+   */
+  toolTimeoutMs?: number;
+}
+
+/** Deployment tuning, not a business rule: set it to the real retrieval latency. */
+export const TOOL_TIMEOUT_ENV = "SMARTCS_TOOL_TIMEOUT_MS";
+export const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
+
+function resolveToolTimeoutMs(): number {
+  const raw = process.env[TOOL_TIMEOUT_ENV];
+  if (raw === undefined || raw.trim() === "") return DEFAULT_TOOL_TIMEOUT_MS;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`invalid ${TOOL_TIMEOUT_ENV}: ${raw} (expected milliseconds)`);
+  }
+  return value;
 }
 
 /**
@@ -99,11 +121,13 @@ export class PythonInternalClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly toolTimeoutMs: number;
 
   constructor(options: PythonClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? pythonInternalBaseUrl()).replace(/\/+$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 10_000;
+    this.toolTimeoutMs = options.toolTimeoutMs ?? resolveToolTimeoutMs();
   }
 
   /** POST /internal/auth/verify — the only Phase 1 internal call. */
@@ -207,8 +231,8 @@ export class PythonInternalClient {
           client_request_id: params.identity.clientRequestId,
         }),
         signal: params.signal
-          ? AbortSignal.any([params.signal, AbortSignal.timeout(this.timeoutMs)])
-          : AbortSignal.timeout(this.timeoutMs),
+          ? AbortSignal.any([params.signal, AbortSignal.timeout(this.toolTimeoutMs)])
+          : AbortSignal.timeout(this.toolTimeoutMs),
       });
     } catch (error) {
       if (params.signal?.aborted) throw new PythonInternalError(499, "tool call aborted");
