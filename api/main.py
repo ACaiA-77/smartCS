@@ -27,6 +27,15 @@ from platform_db.database import PlatformDatabase, PlatformUnavailable, Platform
 from platform_db.users import Users
 from platform_db.sessions import Sessions
 
+from internal_api import internal_router
+from internal_api.harness_client import (
+    HarnessUnavailable,
+    call_harness,
+    forward_chat,
+    harness_version_for_account,
+    rollout_percent,
+)
+
 from agents.orchestrator import create_chat_orchestrator
 from context.invocation import configure_context_manager
 from context.manager import ContextManager, WorkingSetCache
@@ -156,8 +165,24 @@ async def lifespan(app: FastAPI):
     configure_context_manager(context_manager)
     app.state.platform_users = Users(platform)
     app.state.platform_sessions = Sessions(platform)
+    # Handle for the Phase 5 write-authorization service (pending_action +
+    # receipt.open_write_operations), which needs raw transaction access.
+    app.state.platform_database = platform
+    # Authoritative source for /internal/operation_status (Phase 5c).
+    app.state.execution_ledger = execution_ledger
+    # Exposed for the /internal/tools/execute channel so it can reuse the exact
+    # same executor (and its retry/timeout/binding policy) without importing
+    # this module from internal_api (which would be a circular import).
+    app.state.tool_executor = tool_executor
+    # Read-only sources for the Phase 3 turn snapshot: authoritative business
+    # facts and long-term memory highlights.
+    app.state.order_repository = order_repository
+    app.state.user_memory_service = user_memory_service
     # Validate JWT configuration at startup; never fall back to a built-in secret.
     issue_token(1)
+    # Phase 7: a malformed rollout switch must fail startup, not every session
+    # creation. The value only decides NEW sessions (existing ones are pinned).
+    logger.info("pi cohort rollout: percent=%d", rollout_percent())
 
     summary = execution_reconciler.reconcile_stale()
     logger.info(
@@ -195,6 +220,11 @@ async def lifespan(app: FastAPI):
         configure_context_manager(None)
         app.state.platform_users = None
         app.state.platform_sessions = None
+        app.state.tool_executor = None
+        app.state.platform_database = None
+        app.state.execution_ledger = None
+        app.state.order_repository = None
+        app.state.user_memory_service = None
 
 
 try:
@@ -222,6 +252,11 @@ async def private_api_responses(request: Request, call_next):
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
     return response
+
+# Internal service-to-service channel (pi-harness -> Business Runtime). Separate
+# credential and audience from the public API; expected to be reachable only on
+# the internal network (isolation is a deployment concern, not enforced here).
+app.include_router(internal_router)
 
 if _HAS_FASTAPI_OTEL:
     FastAPIInstrumentor.instrument_app(app)
@@ -284,6 +319,9 @@ class ChatResponse(BaseModel):
     intent: str
     compliance_passed: bool
     client_request_id: str | None = None
+    # Phase 7 rollout observation: which harness served this turn. The value is
+    # the session's creation-time pin, never a per-request decision.
+    harness_version: str = "legacy"
 
 
 class ResumeRequest(BaseModel):
@@ -356,9 +394,26 @@ async def list_sessions(user: UserContext = Depends(get_current_user)):
     return {"sessions": await app.state.platform_sessions.list_owned(user.account_id)}
 
 
+async def _create_session(user: UserContext, *, title: str = "", client_request_id: str | None = None) -> dict:
+    """Create a session on the account's cohort — the one place that decides.
+
+    Explicit creation (POST /api/sessions) and the chat path's implicit
+    creation both come through here, so an account cannot end up in two cohorts
+    depending on which door it enters by.
+    """
+    session = await app.state.platform_sessions.create(
+        user.account_id, title=title, client_request_id=client_request_id,
+        harness_version=harness_version_for_account(user.account_id))
+    # Rollout observation (phase7-design §3): which harness the new session is
+    # pinned to. No title or message content is logged.
+    logger.info("session created: session_id=%s harness_version=%s",
+                session["session_id"], session["harness_version"])
+    return session
+
+
 @app.post("/api/sessions")
 async def create_session(user: UserContext = Depends(get_current_user)):
-    return await app.state.platform_sessions.create(user.account_id)
+    return await _create_session(user)
 
 
 @app.get("/api/sessions/{session_id}")
@@ -523,28 +578,65 @@ async def _persist_order_query_context(
     await session_store.add_message(session_id, "assistant", context_message)
 
 
+async def _forward_user_token(request: Request) -> str:
+    """The caller's own public token, forwarded verbatim to the harness.
+
+    `get_current_user` has already accepted this request by the time a handler
+    runs, so this only re-reads the same two sources it accepts (the HttpOnly
+    cookie, or a Bearer header that must agree with it). It never decides
+    identity — the harness re-verifies the token and re-resolves the account
+    with this runtime before acting.
+    """
+    cookie = request.cookies.get(COOKIE_NAME)
+    authorization = request.headers.get("authorization")
+    if authorization is not None:
+        parts = authorization.split()
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            return parts[1]
+    return cookie or ""
+
+
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest, user: UserContext = Depends(get_current_user)):
-    """主聊天接口"""
+async def chat(
+    body: ChatRequest,
+    user: UserContext = Depends(get_current_user),
+    user_token: str = Depends(_forward_user_token),
+):
+    """统一入口：legacy 会话走本进程 orchestrator，pi 会话转发 pi-harness。
+
+    `user_token` is injected by FastAPI and used only by the pi branch (to
+    forward the caller's own token verbatim). It is a parameter rather than a
+    `Request` the handler digs into, so the two business arguments stay first
+    and the handler remains directly callable — the way route-level tests
+    exercise it.
+    """
     if chat_orchestrator is None:
         raise HTTPException(status_code=503, detail="系统初始化中")
 
-    if request.session_id:
-        session_id = request.session_id
-        await _owned_session(session_id, user)
+    if body.session_id:
+        session_id = body.session_id
+        session = await _owned_session(session_id, user)
     else:
-        session = await app.state.platform_sessions.create(user.account_id, title=request.message[:100],
-                                                          client_request_id=request.client_request_id)
+        # Written once, at creation. A retry that lands on an existing row
+        # keeps that row's harness_version — see platform_db/sessions.py.
+        session = await _create_session(
+            user, title=body.message[:100], client_request_id=body.client_request_id)
         session_id = session["session_id"]
-    await app.state.platform_sessions.touch(session_id, user.account_id, title=request.message[:100])
+    await app.state.platform_sessions.touch(session_id, user.account_id, title=body.message[:100])
+
+    if (session.get("harness_version") or "legacy") == "pi":
+        # A pi session is served by the harness or not at all: degrading to the
+        # legacy orchestrator here would fork one conversation into two
+        # transcript systems (phase7-design §2). Unreachable harness -> 503.
+        return await _pi_chat(user_token, body, session_id, user)
 
     if checkpoint_store is not None:
         from langchain_core.messages import HumanMessage
         try:
             result = await chat_orchestrator.ainvoke({
                 "session_id": session_id, "user_id": user.business_user_id,
-                "client_request_id": request.client_request_id,
-                "messages": [HumanMessage(content=request.message)],
+                "client_request_id": body.client_request_id,
+                "messages": [HumanMessage(content=body.message)],
             })
         except (CheckpointError, ContextError):
             raise
@@ -554,7 +646,7 @@ async def chat(request: ChatRequest, user: UserContext = Depends(get_current_use
             raise HTTPException(status_code=503, detail="请求中断，可查询 checkpoint 后显式恢复") from exc
         return _chat_response(session_id, result)
 
-    await session_store.add_message(session_id, "user", request.message)
+    await session_store.add_message(session_id, "user", body.message)
 
     from langchain_core.messages import HumanMessage, AIMessage
 
@@ -567,7 +659,7 @@ async def chat(request: ChatRequest, user: UserContext = Depends(get_current_use
             messages.append(AIMessage(content=msg["content"]))
 
     if not messages:
-        messages = [HumanMessage(content=request.message)]
+        messages = [HumanMessage(content=body.message)]
 
     initial_state = {
         "messages": messages,
@@ -607,6 +699,70 @@ def _chat_response(session_id, result):
                         client_request_id=result.get("client_request_id"))
 
 
+def _harness_detail(response, fallback: str) -> str:
+    """A short, non-sensitive reason from the harness, when it sent one."""
+    try:
+        detail = response.json().get("detail")
+    except ValueError:
+        detail = None
+    if isinstance(detail, str) and 0 < len(detail) <= 200:
+        return detail
+    return fallback
+
+
+async def _pi_chat(user_token: str, body: ChatRequest, session_id: str, user: UserContext) -> ChatResponse:
+    """Forward one turn of a pi session to the harness and adapt its answer.
+
+    No failure path here reaches the legacy orchestrator: a pi session that
+    cannot be served by the harness answers 503 and the client retries.
+    """
+    client_request_id = body.client_request_id or str(uuid.uuid4())
+    try:
+        response = await forward_chat(
+            account_id=user.account_id,
+            business_user_id=user.business_user_id,
+            session_id=session_id,
+            client_request_id=client_request_id,
+            message=body.message,
+            user_token=user_token,
+        )
+    except HarnessUnavailable:
+        raise HTTPException(503, "pi harness unavailable") from None
+
+    if response.status_code in (409, 429):
+        # The harness is healthy and is refusing this turn on purpose (receipt
+        # conflict, unfinished run, session busy) — retryable, not a fallback.
+        raise HTTPException(response.status_code, _harness_detail(response, "pi harness refused the request"))
+    if response.status_code != 200:
+        raise HTTPException(502, "pi harness rejected the request")
+    try:
+        payload = response.json()
+    except ValueError:
+        raise HTTPException(502, "pi harness returned an invalid response") from None
+    return _pi_chat_response(session_id, client_request_id, payload)
+
+
+def _pi_chat_response(session_id: str, client_request_id: str, payload) -> ChatResponse:
+    """Adapt the harness's answer to the workbench's ChatResponse shape."""
+    message = payload.get("message") if isinstance(payload, dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str) or not content:
+        raise HTTPException(502, "pi harness returned an invalid response")
+    intent = payload.get("intent_label")
+    returned_request_id = payload.get("client_request_id")
+    return ChatResponse(
+        response=content,
+        session_id=session_id,
+        intent=intent if isinstance(intent, str) and intent else "unknown",
+        # The harness reviews compliance inside the turn (Phase 3): a final
+        # answer that reaches this point already passed the gate, or the
+        # extension replaced it with the safe fallback before it was stored.
+        compliance_passed=True,
+        client_request_id=returned_request_id if isinstance(returned_request_id, str) else client_request_id,
+        harness_version="pi",
+    )
+
+
 @app.get("/api/checkpoints/{session_id}")
 async def get_checkpoint(session_id: str, user: UserContext = Depends(get_current_user)):
     await _owned_session(session_id, user)
@@ -634,10 +790,34 @@ async def resume_checkpoint(session_id: str, request: ResumeRequest, user: UserC
     return _chat_response(session_id, result)
 
 
+async def _pi_harness_call(method: str, session_id: str, user: UserContext) -> dict:
+    """Signed call to the pi-harness internal channel for a pi-harness session."""
+    try:
+        response = await call_harness(
+            method,
+            f"/internal/history/{session_id}",
+            account_id=user.account_id,
+            business_user_id=user.business_user_id,
+            session_id=session_id,
+        )
+    except HarnessUnavailable:
+        raise HTTPException(503, "pi harness unavailable") from None
+    if response.status_code == 409:
+        raise CheckpointConflict("unfinished request cannot be deleted")
+    if response.status_code == 404:
+        raise HTTPException(404, "session not found")
+    if response.status_code != 200:
+        raise HTTPException(502, "pi harness rejected the request")
+    return response.json()
+
+
 @app.get("/api/history/{session_id}")
 async def get_history(session_id: str, user: UserContext = Depends(get_current_user)):
     """获取对话历史"""
-    await _owned_session(session_id, user)
+    session = await _owned_session(session_id, user)
+    if session.get("harness_version") == "pi":
+        payload = await _pi_harness_call("GET", session_id, user)
+        return {"session_id": session_id, "messages": payload.get("messages", [])}
     if checkpoint_store is not None:
         history = await checkpoint_store.history(session_id, user.business_user_id)
     else:
@@ -648,7 +828,12 @@ async def get_history(session_id: str, user: UserContext = Depends(get_current_u
 @app.delete("/api/history/{session_id}")
 async def clear_history(session_id: str, user: UserContext = Depends(get_current_user)):
     """清除会话消息和结构化状态。"""
-    await _owned_session(session_id, user)
+    session = await _owned_session(session_id, user)
+    if session.get("harness_version") == "pi":
+        # Harness owns the transcript: it refuses while a run is active, disposes
+        # the runtime, deletes the session file and marks memory provenance.
+        await _pi_harness_call("DELETE", session_id, user)
+        return {"session_id": session_id, "cleared": True}
     user_id = user.business_user_id
     if checkpoint_store is not None:
         async with checkpoint_store.session_lock(session_id):
