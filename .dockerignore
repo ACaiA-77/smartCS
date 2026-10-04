@@ -1,0 +1,10 @@
+# Never bake local state, dependencies or test output into the image.
+node_modules
+.runtime
+tests
+scripts
+docs
+*.md
+!package.json
+*.tsbuildinfo
+.git
