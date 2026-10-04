@@ -14,5 +14,5 @@
     "resolveJsonModule": true,
     "verbatimModuleSyntax": false
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts", "vitest.ci.config.ts"]
 }

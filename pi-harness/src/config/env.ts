@@ -5,8 +5,8 @@
  *  - Runtime cwd and Pi session dir are explicit; never derived from ~/.pi.
  *  - agentDir is explicit; the default ~/.pi/agent must not be a behaviour source.
  *
- * LLM credentials are read from the existing python-impl/.env (read-only
- * reference; this spike never writes to python-impl/).
+ * LLM credentials are read from the repository-root .env (read-only reference;
+ * this runtime never writes to it).
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -15,7 +15,17 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const PI_HARNESS_ROOT = resolve(HERE, "..", "..");
-export const WORKSPACE_ROOT = resolve(PI_HARNESS_ROOT, "..");
+
+/**
+ * The repository root, which is also the Python Business Runtime's root.
+ *
+ * Both runtimes live in ONE repository: `pi-harness/` is a subdirectory of the
+ * Python project's Git root, not a sibling of it. So the directory that used to
+ * be reached as `../python-impl` is now simply this package's parent — and the
+ * shared `.env`, `migrations/` and the Python `tests/` tree all resolve from
+ * there. (`PI_HARNESS_ROOT` is the harness package itself; this is one level up.)
+ */
+export const PYTHON_IMPL_ROOT = resolve(PI_HARNESS_ROOT, "..");
 
 /** Minimal .env parser: KEY=VALUE, `#` comments, optional surrounding quotes. */
 export function parseDotEnv(content: string): Record<string, string> {
@@ -49,7 +59,7 @@ export interface LlmConfig {
 const LLM_FIELDS = ["OPENAI_BASE_URL", "OPENAI_API_KEY", "MODEL_NAME"] as const;
 
 function llmConfigPath(envFile?: string): string {
-  return envFile ?? process.env.SMARTCS_PYTHON_ENV_FILE ?? resolve(WORKSPACE_ROOT, "python-impl", ".env");
+  return envFile ?? process.env.SMARTCS_PYTHON_ENV_FILE ?? resolve(PYTHON_IMPL_ROOT, ".env");
 }
 
 /** Why a real provider cannot be used; `null` when it can. Used for fail-fast. */
@@ -63,7 +73,7 @@ export function llmConfigGap(envFile?: string): string | null {
 
 /**
  * Read OPENAI_BASE_URL / OPENAI_API_KEY / MODEL_NAME from the existing
- * python-impl/.env. Returns null when the file or any field is missing, which
+ * the repository-root .env. Returns null when the file or any field is missing, which
  * lets callers fall back to the Faux provider instead of fabricating a key.
  */
 export function loadLlmConfigFromPythonEnv(envFile?: string): LlmConfig | null {
@@ -147,17 +157,17 @@ export function resolveProviderMode(raw = process.env[PROVIDER_MODE_ENV]): "open
 
 let pythonEnvCache: Record<string, string> | undefined;
 
-/** All key/values from python-impl/.env (cached). Used for shared secrets. */
+/** All key/values from the repository-root .env (cached). Used for shared secrets. */
 export function pythonEnv(): Record<string, string> {
   if (pythonEnvCache) return pythonEnvCache;
-  const file = process.env.SMARTCS_PYTHON_ENV_FILE ?? resolve(WORKSPACE_ROOT, "python-impl", ".env");
+  const file = process.env.SMARTCS_PYTHON_ENV_FILE ?? resolve(PYTHON_IMPL_ROOT, ".env");
   pythonEnvCache = existsSync(file) ? parseDotEnv(readFileSync(file, "utf-8")) : {};
   return pythonEnvCache;
 }
 
 /**
  * Runtime config lookup. `process.env` always wins so tests and deployments can
- * override; python-impl/.env is the shared source of truth for secrets that the
+ * override; the repository-root .env is the shared source of truth for secrets that the
  * Python runtime also needs (single place to rotate them).
  */
 export function envValue(name: string, fallback?: string): string | undefined {

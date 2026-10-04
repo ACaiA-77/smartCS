@@ -10,13 +10,18 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createConnection } from "mysql2/promise";
 import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDatabase, type Database } from "../../src/db/mysql.js";
-import { PI_HARNESS_ROOT, WORKSPACE_ROOT, pythonEnv, resolveMysqlConfig } from "../../src/config/env.js";
+import { PI_HARNESS_ROOT, PYTHON_IMPL_ROOT, pythonEnv, resolveMysqlConfig } from "../../src/config/env.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-export const PYTHON_IMPL = resolve(WORKSPACE_ROOT, "python-impl");
+/**
+ * The Python Business Runtime root. In the monorepo the two runtimes share the
+ * Git root, so this is the repository root — see `PYTHON_IMPL_ROOT` in
+ * `src/config/env.ts`.
+ */
+export const PYTHON_IMPL = PYTHON_IMPL_ROOT;
 export const MIGRATION_FILES = [
   join(PYTHON_IMPL, "migrations", "001_phase1_session_foundation.sql"),
   join(PYTHON_IMPL, "migrations", "002_phase3_memory_outbox.sql"),
@@ -50,7 +55,7 @@ export function childMysqlEnv(database: string = TEST_DATABASE): Record<string, 
     mysql = resolveMysqlConfig({ database });
   } catch (error) {
     throw new Error(
-      "test fixtures need MySQL credentials: export MYSQL_PASSWORD or set it in python-impl/.env",
+      "test fixtures need MySQL credentials: export MYSQL_PASSWORD or set it in the repository-root .env",
       { cause: error },
     );
   }

@@ -21,6 +21,7 @@ import sys
 import tempfile
 import time
 
+import httpx
 import pytest
 
 PYTHON_IMPL = pathlib.Path(__file__).resolve().parents[1]
@@ -161,3 +162,31 @@ async def test_an_unset_token_refuses_to_start():
                             capture_output=True, text=True, timeout=180)
     assert result.returncode != 0
     assert "SMARTCS_MCP_TOKEN" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Phase 11 §4.2 ③: `GET /health`, the readiness answer the harness probes.
+#
+# It sits INSIDE the token guard on purpose: a readiness answer the harness
+# cannot distinguish from "wrong token" would be useless, and a 200 that also
+# proves the guard is armed is strictly stronger than a bare port check.
+# ---------------------------------------------------------------------------
+
+
+def test_health_answers_an_authenticated_probe_without_searching(gateway):
+    response = httpx.get(
+        f"http://127.0.0.1:{gateway.port}/health",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        timeout=10,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    # "create_server returned" is exactly where the MCP server AND the retriever
+    # are built, so this is the honest statement — and no search was issued.
+    assert body == {"ok": True, "server": "initialized", "retriever": "initialized"}
+
+
+@pytest.mark.parametrize("headers", [{}, {"Authorization": f"Bearer {WRONG_TOKEN}"}], ids=["absent", "wrong"])
+def test_health_is_not_public(gateway, headers):
+    response = httpx.get(f"http://127.0.0.1:{gateway.port}/health", headers=headers, timeout=10)
+    assert response.status_code == 401

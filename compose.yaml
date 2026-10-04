@@ -42,7 +42,9 @@ services:
 
   smartcs-pi-harness:
     build:
-      context: ../pi-harness
+      # The harness is a subdirectory of this repository, not a sibling
+      # checkout: one Git root, two runtimes.
+      context: ./pi-harness
       dockerfile: Dockerfile
     image: ${SMARTCS_PI_IMAGE:-smartcs-pi-harness:local}
     container_name: smartcs-pi-harness
@@ -58,7 +60,7 @@ services:
       HOST: "0.0.0.0"
       # Where the harness finds the Business Runtime — same compose network.
       PYTHON_INTERNAL_BASE_URL: http://smartcs-api:8000
-      # Model credentials live in python-impl/.env (the file the process
+      # Model credentials live in the repository-root .env (the file the process
       # deployment reads). Without it the harness silently falls back to the
       # Faux provider — correct for tests, wrong for a served deployment — so a
       # containerized deployment must point at a real env file.
@@ -88,12 +90,26 @@ services:
       # Read-only: the shared env file both runtimes already treat as the source
       # of model credentials. Override with SMARTCS_ENV_FILE_HOST for a real
       # deployment (or bake credentials in another way).
-      - ${SMARTCS_ENV_FILE_HOST:-../python-impl/.env}:/app/runtime-env/.env:ro
+      - ${SMARTCS_ENV_FILE_HOST:-./.env}:/app/runtime-env/.env:ro
     depends_on:
       smartcs-api:
         condition: service_started
     networks:
       - smartcs-net
+    healthcheck:
+      # Readiness, not liveness: `/ready` is the probe that says "I can serve a
+      # user" (MySQL + Business Runtime, plus the MCP gateway when the transport
+      # is `mcp`). `/health` stays the cheap "the process is alive" check.
+      # No curl in node:22-slim, so probe with node itself.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:'+(process.env.PORT||8971)+'/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
 
   # Phase 10 §⑦ — the MCP demo entry.
   #

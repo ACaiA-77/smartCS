@@ -36,6 +36,24 @@ export interface MemoryDeliveryContext {
   sourceEventId: string;
 }
 
+/**
+ * The durable outbox state an operator needs, as a snapshot.
+ *
+ * Deliberately WITHOUT a `done` count: `pending` and `failed` are the small,
+ * actionable sets, and `idx_memory_outbox (memory_enqueue_status, updated_at)`
+ * answers them with a bounded index range scan. Counting `done` would scan the
+ * part of the index that grows without bound — the one thing this query must
+ * not do (plan §6.1).
+ */
+export interface MemoryOutboxStats {
+  pending: number;
+  failed: number;
+  /** Age of the oldest still-pending row, in whole seconds. 0 when none. */
+  oldestPendingAgeSeconds: number;
+  /** Highest attempt counter among pending rows — how close one is to parking. */
+  maxPendingAttempts: number;
+}
+
 export interface ReceiptRow {
   id: number;
   session_id: string;
@@ -210,6 +228,15 @@ export class ReceiptStore {
     return this.readById(receiptId);
   }
 
+  /**
+   * Liveness proof for the receipt store's connection. `SELECT 1` only — no
+   * migration, no write, no schema read — so a readiness probe can call it on
+   * every check. Throws when the pool cannot reach MySQL.
+   */
+  async ping(): Promise<void> {
+    await this.db.query<RowDataPacket>("SELECT 1 AS ok");
+  }
+
   /** Test/diagnostic helper: force a receipt into a given state. */
   async forceStatus(receiptId: number, status: ReceiptStatus): Promise<void> {
     await this.db.execute("UPDATE agent_run_receipt SET status = ? WHERE id = ?", [status, receiptId]);
@@ -231,6 +258,87 @@ export class ReceiptStore {
       `SELECT id, session_id, client_request_id, memory_attempts
          FROM agent_run_receipt
         WHERE status = 'completed' AND memory_enqueue_status = 'pending'
+        ORDER BY updated_at ASC
+        LIMIT ?`,
+      [limit],
+    );
+    return rows.map((row) => ({
+      receiptId: Number(row.id),
+      sessionId: String(row.session_id),
+      clientRequestId: String(row.client_request_id),
+      attempts: Number(row.memory_attempts ?? 0),
+    }));
+  }
+
+  /**
+   * One aggregate read of the durable outbox state (plan §6.1).
+   *
+   * Read-only and bounded: the `IN ('pending','failed')` predicate is a range
+   * scan on `idx_memory_outbox`, so the cost is proportional to the rows that
+   * still need attention, not to the number of receipts ever written. The age
+   * is computed by MySQL (`NOW(3)`) rather than by comparing a Node timestamp,
+   * which keeps it free of clock skew between the two hosts.
+   *
+   * This is the AUTHORITATIVE view. The dispatcher's own counters (see
+   * `MemoryOutboxDispatcher.stats()`) are observation only and reset on restart.
+   */
+  async memoryOutboxStats(): Promise<MemoryOutboxStats> {
+    const rows = await this.db.query<RowDataPacket>(
+      `SELECT memory_enqueue_status AS status,
+              COUNT(*)               AS n,
+              MAX(memory_attempts)   AS max_attempts,
+              GREATEST(TIMESTAMPDIFF(SECOND, MIN(updated_at), NOW(3)), 0) AS oldest_age_seconds
+         FROM agent_run_receipt
+        WHERE status = 'completed'
+          AND memory_enqueue_status IN ('pending', 'failed')
+        GROUP BY memory_enqueue_status`,
+    );
+    const stats: MemoryOutboxStats = {
+      pending: 0,
+      failed: 0,
+      oldestPendingAgeSeconds: 0,
+      maxPendingAttempts: 0,
+    };
+    for (const row of rows) {
+      const count = Number(row.n ?? 0);
+      if (row.status === "pending") {
+        stats.pending = count;
+        stats.oldestPendingAgeSeconds = Number(row.oldest_age_seconds ?? 0);
+        stats.maxPendingAttempts = Number(row.max_attempts ?? 0);
+      } else if (row.status === "failed") {
+        stats.failed = count;
+      }
+    }
+    return stats;
+  }
+
+  /**
+   * Hand a parked row back to the dispatcher (plan §9, the manual replay).
+   *
+   * `failed → pending` with the attempt counter reset to 0, and nothing else.
+   * The row is then picked up by the ordinary `listPendingMemory` scan, so the
+   * recovery path stays single: DB state → dispatcher → Python. This method
+   * must never call `pythonClient`, a model or a tool — it only moves a row.
+   *
+   * Returns whether a row actually moved (a receipt that is not `failed` is a
+   * no-op, not an error).
+   */
+  async requeueMemory(receiptId: number): Promise<boolean> {
+    const result = await this.db.execute(
+      `UPDATE agent_run_receipt
+          SET memory_enqueue_status = 'pending', memory_attempts = 0
+        WHERE id = ? AND status = 'completed' AND memory_enqueue_status = 'failed'`,
+      [receiptId],
+    );
+    return result.affectedRows === 1;
+  }
+
+  /** Every parked row, oldest first — the `--failed` replay selection. */
+  async listFailedMemory(limit = 10): Promise<Array<{ receiptId: number; sessionId: string; clientRequestId: string; attempts: number }>> {
+    const rows = await this.db.query<RowDataPacket>(
+      `SELECT id, session_id, client_request_id, memory_attempts
+         FROM agent_run_receipt
+        WHERE status = 'completed' AND memory_enqueue_status = 'failed'
         ORDER BY updated_at ASC
         LIMIT ?`,
       [limit],

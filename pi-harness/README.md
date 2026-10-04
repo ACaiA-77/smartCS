@@ -26,13 +26,13 @@ Concretely, this package:
 - never invents an outcome for a write. When the response to a write is lost it
   asks the ledger (`/internal/operation_status`) instead of retrying.
 
-Full rules: [`../python-impl/docs/runtime-boundaries.md`](../python-impl/docs/runtime-boundaries.md).
+Full rules: [`../docs/runtime-boundaries.md`](../docs/runtime-boundaries.md).
 
 ## Quick start
 
 ```bash
 npm ci                 # NOT `npm install`: the Pi version is lockfile-frozen
-cp ../python-impl/.env .env    # (optional) model credentials are read from there
+cp ../.env .env        # (optional) model credentials are read from the repo root
 npm run dev            # starts the HTTP edge on :8971
 npm test               # vitest
 npm run typecheck      # tsc --noEmit
@@ -58,8 +58,9 @@ extensions, skills, prompts and context files is switched off.
 | `src/history/` | harness-aware history projector for the web client |
 | `src/streaming/` | status channel, run output buffer, SSE framing |
 | `src/tracing/` | OpenTelemetry spans + the bounded audit queue/dispatcher |
-| `src/server/` | HTTP edge: `/api/chat`, `/api/chat/stream`, `/internal/history/*` |
-| `tests/` | vitest; `tests/python/` holds Python-side acceptance for `internal_api` |
+| `src/server/` | HTTP edge: `/api/chat`, `/api/chat/stream`, `/health`, `/ready`, `/internal/*` |
+| `src/cli/` | operator CLI: `outbox:status` / `outbox:retry` |
+| `tests/` | vitest. Python-side acceptance for `internal_api` lives in the Python tree (`tests/test_internal_api_*.py`), not here |
 
 ## The tool face
 
@@ -126,9 +127,56 @@ receipt.(session, request) → memory_source_event.business_user_id + event_id
 
 Nothing on that path reads Node process state, which is why delivery still
 happens after an idle eviction, a restart, or a `kill -9` between the receipt
-completing and the enqueue. A delivery failure is counted and retried, and is
-parked as `failed` after the attempt threshold; it never replays a model turn
-or a tool call.
+completing and the enqueue.
+
+**Delivery contract: at-least-once delivery + idempotent consumer.** A crash
+means the row is delivered *again*, not that the network hop was exactly-once.
+A repeat is harmless — the `memory_enqueue_status='pending'` CAS flips the row
+`done` at most once, and the runtime's candidate insert is idempotent on top of
+it — so the business effect is effectively-once.
+
+A delivery failure is counted and retried, and is parked as `failed` after the
+attempt threshold; it never replays a model turn or a tool call. Parked rows are
+recoverable by hand:
+
+```bash
+npm run outbox:status                       # pending / failed / oldest age
+npm run outbox:retry -- --receipt-id 123    # one row: failed -> pending
+npm run outbox:retry -- --failed --limit 10 # oldest first
+```
+
+The CLI only moves the row back to `pending` with `attempts = 0`; the running
+dispatcher does the delivery, so the recovery path stays single
+(`DB state → dispatcher → Python`). It cannot run a model or a tool because it
+imports neither.
+
+The same state is observable over the internal channel, read-only, behind the
+service credential:
+
+```text
+GET /internal/ops/memory-outbox
+  durable     pending / failed / oldest_pending_age_seconds / max_attempts
+  dispatcher  passes / delivered / delivery_failures / parked / last_* timestamps
+```
+
+`durable` is authoritative (the receipt rows). `dispatcher` is this process's
+own counters since it started — useful for "is the loop moving?", never for
+"how much is outstanding".
+
+## Probes
+
+```text
+GET /health   liveness  — the Node process and its event loop are alive
+GET /ready    readiness — this instance can serve a user
+```
+
+`/ready` checks MySQL (`SELECT 1`), the Business Runtime's `/internal/ready`,
+and — **only** when `SMARTCS_KNOWLEDGE_TRANSPORT=mcp` — the MCP gateway's
+`/health`. Anything unreachable ⇒ `503`. A memory backlog is not an outage:
+`pending > 0` answers `ready: true, degraded: true, warnings:
+["memory_outbox_backlog"]`, because chat, orders, refunds and RAG keep working
+while the outbox drains. Neither probe returns a URL, a credential or a driver
+message.
 
 ## Provider modes
 
@@ -170,10 +218,10 @@ suites must run one at a time.
 The suite runs fully offline: anything that drives the agent loop uses the Faux
 provider, and a test that reaches a real model endpoint is a bug.
 
-Python-side acceptance for `internal_api` lives outside `python-impl/tests/`:
+The Python side keeps its own suite; run it from the repository root:
 
 ```bash
-cd ../python-impl && python -m pytest ../pi-harness/tests/python/test_internal_api_auth.py -q
+cd .. && python -m pytest tests/test_internal_api_auth.py -q
 ```
 
 ## Historical Migration Record
@@ -182,4 +230,8 @@ cd ../python-impl && python -m pytest ../pi-harness/tests/python/test_internal_a
 of the Python → Pi migration. They are kept verbatim, including the deviations
 they reported at the time; later phases closed some of them. They describe how
 the system got here, not how it works now — read this README and
-`../python-impl/docs/architecture.md` for the current state.
+`../docs/architecture.md` for the current state.
+
+Their path references are the ones in force when they were written (the two
+runtimes were separate checkouts then); they are historical records and are
+kept verbatim.

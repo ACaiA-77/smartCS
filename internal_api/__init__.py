@@ -1,6 +1,7 @@
 """Internal service-to-service API (Phase 1: auth; Phase 2: read tools;
 Phase 3: context snapshot, memory outbox, compliance review; Phase 5: write
-enable + recovery authority; Phase 6: audit ingest + trace propagation).
+enable + recovery authority; Phase 6: audit ingest + trace propagation;
+Phase 11: readiness).
 
 Mounted under /internal by api.main. These endpoints are NOT the public API:
 they authenticate the caller with an Internal Service JWT (a separate secret
@@ -16,6 +17,7 @@ from internal_api.compliance import router as compliance_router
 from internal_api.context import router as context_router
 from internal_api.memory import router as memory_router
 from internal_api.operation_status import router as operation_status_router
+from internal_api.ready import router as ready_router
 from internal_api.tools import router as tools_router
 
 internal_router = APIRouter()
@@ -30,5 +32,8 @@ internal_router.include_router(memory_router, dependencies=_TRACE)
 internal_router.include_router(compliance_router, dependencies=_TRACE)
 internal_router.include_router(operation_status_router, dependencies=_TRACE)
 internal_router.include_router(audit_router, dependencies=_TRACE)
+# Phase 11: readiness for the harness's own /ready. No turn identity — see
+# internal_api.ready.
+internal_router.include_router(ready_router, dependencies=_TRACE)
 
 __all__ = ["internal_router"]

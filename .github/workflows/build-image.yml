@@ -48,6 +48,43 @@ jobs:
       - name: Run offline evaluation
         run: python -m evals.runner --json
 
+  # The repository contains two runtimes, so it needs two jobs. This one covers
+  # the Pi Harness (Node 22 / TypeScript). It runs the OFFLINE subset only:
+  # `npm test` needs a real MySQL on :3307 and boots the real Python
+  # `internal_api`, neither of which exists on a hosted runner. The subset is
+  # declared once in pi-harness/vitest.ci.config.ts, where each file's
+  # justification lives — so a suite that needs a dependency can never be
+  # silently skipped at runtime to make this job green.
+  harness:
+    name: Run Pi Harness tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: pi-harness
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: pi-harness/package-lock.json
+
+      - name: Install dependencies
+        # `npm ci`, never `npm install`: the Pi version (1.0.1) and its
+        # transitive dependencies are frozen by package-lock.json.
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run offline suite
+        run: npm run test:ci
+
   build-and-publish:
     name: Build and publish image
     needs: test

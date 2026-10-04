@@ -1,15 +1,21 @@
-# SmartCS — Business Runtime（业务运行时）
+# SmartCS
 
-SmartCS 是一个**双层**智能客服系统，本仓库是其 Python 侧：**Business Runtime**。
-Agent 运行时（Agent Harness）是 `../pi-harness`（Node 22 / TypeScript / Pi SDK）。
+SmartCS 是一个**双层**智能客服系统：**一个仓库，两套运行时**。
+
+- `pi-harness/`（Node 22 / TypeScript / Pi SDK）——**Agent Harness**，跑 Agent 循环，
+  决定「想做什么」；
+- 仓库其余部分（FastAPI）——**Business Runtime**，持有全部业务状态与授权，
+  决定「是否允许发生」。
 
 ```text
-        Agent Harness (pi-harness, TS/Pi)          ← 决定「想做什么」
+        pi-harness/  (Agent Harness, TS / Pi)      ← 决定「想做什么」
                     ↓
         内部 HTTP + 每轮 Service JWT（身份信封）
                     ↓
-        Business Runtime (python-impl, FastAPI)    ← 决定「是否允许发生」
+        Python Business Runtime (FastAPI)          ← 决定「是否允许发生」
 ```
+
+两半的入口分别是 [`pi-harness/README.md`](pi-harness/README.md) 与本文档。
 
 **边界规则（由设计保证，不靠约定）**：Agent 可以提出工具调用；业务写操作是否真正执行，
 由本仓库的确定性授权与执行层最终决定。Harness 不持久化业务状态、不自铸可信身份、
@@ -29,7 +35,7 @@ Agent 运行时（Agent Harness）是 `../pi-harness`（Node 22 / TypeScript / P
 > 是**历史迁移记录**，保留原样以维持证据链。它们描述的是各阶段当时的验收结果，
 > **不是当前架构入口**，也不与后续数字相加。当前架构请从
 > [docs/architecture.md](docs/architecture.md) 读起；
-> 各阶段报告位于 `../pi-harness/PHASEn_REPORT.md`，原始验收产物位于 `artifacts/`。
+> 各阶段报告位于 `pi-harness/PHASEn_REPORT.md`，原始验收产物位于 `artifacts/`。
 
 ## Verified Local Status（Checkpoint 历史基线）
 
@@ -78,7 +84,7 @@ CLI 登录和 cookie 写请求需显式发送与服务地址一致的 `Origin`�
 
 ## Architecture at a glance（当前主链路）
 
-主链路的 Agent 循环在 `pi-harness` 中；本仓库提供它调用的**全部业务能力**，
+主链路的 Agent 循环在 `pi-harness/` 中；Python 侧提供它调用的**全部业务能力**，
 以及所有权威状态的落点。
 
 ```text
@@ -86,7 +92,7 @@ Customer Browser / authenticated API client
         ↓
 pi-harness: Pi Session → Main Agent → Tool Selection
         ↓  （内部 HTTP，每轮一枚短期 Service JWT）
-python-impl /internal/*  ← 服务间通道，不对公网暴露
+Python Business Runtime /internal/*  ← 服务间通道，不对公网暴露
    ├─ /internal/auth/verify        身份解析，account → business_user 唯一权威
    ├─ /internal/tools/execute      READ 工具；剥离模型传入的身份字段，
    │                               从可信 claims 重新绑定 user_id
@@ -132,6 +138,32 @@ Knowledge：HybridRetriever = Dense(FAISS) + Sparse(BM25) → RRF → Cross-Enco
 - 崩溃恢复见 [docs/recovery.md](docs/recovery.md)：收据（`agent_run_receipt`）与
   长期记忆 outbox 都从**持久状态**恢复，不依赖任何进程内状态。
 - Eval 检查路由、无副作用、安全边界和故障收敛等不变量，不使用 LLM-as-judge。
+
+### 探针与运维入口
+
+两个探针语义不同，不要混用：
+
+```text
+GET /health   （Harness）活着——Node 进程与事件循环在跑，不检查依赖
+GET /ready    （Harness）能服务——MySQL + Business Runtime /internal/ready，
+              仅当 SMARTCS_KNOWLEDGE_TRANSPORT=mcp 时再查 MCP Gateway /health；
+              任一不可达 → 503
+```
+
+**记忆 backlog 不等于不可用**：`pending > 0` 只让 `/ready` 返回
+`degraded: true` 并带 `memory_outbox_backlog` 警告，实例仍留在轮转中——
+记忆是异步能力，聊天、订单、退款和 RAG 照常工作。
+
+outbox 的观测与人工恢复（只观察、只把行改回 `pending`，投递仍由 dispatcher 完成）：
+
+```text
+GET /internal/ops/memory-outbox   （Service JWT 保护，只读）
+npm run outbox:status             （在 pi-harness/ 下）
+npm run outbox:retry -- --receipt-id <id> | --failed --limit <n>
+```
+
+投递语义是 **at-least-once delivery + idempotent consumer**：崩溃会导致重复投递，
+重复不会产生重复记忆结果。详见 [docs/recovery.md](docs/recovery.md)。
 
 简历表达、面试问答和演示脚本见 [docs/resume_interview.md](docs/resume_interview.md)。
 
@@ -187,8 +219,14 @@ python -m api.main
 ## 项目结构
 
 ```
-python-impl/
-├── agents/                     # Agent 实现
+python-impl/                    # 仓库根（Git root）
+├── pi-harness/                 # Agent Harness：Node 22 / TypeScript / Pi SDK（主链路）
+│   ├── src/                    # agent / session / business / streaming / server / tracing
+│   ├── tests/                  # vitest（离线，Faux provider）
+│   ├── skills/                 # 技能披露
+│   ├── docs/                   # subagent 评估、MCP 可行性
+│   └── PHASEn_REPORT.md        # Python → Pi 迁移的历史验收记录
+├── agents/                     # Agent 实现（legacy 路径）
 │   ├── orchestrator.py         # 显式请求编排
 │   ├── intent_router.py        # 意图路由 Agent
 │   ├── knowledge_rag.py        # RAG 知识检索 Agent
@@ -220,8 +258,8 @@ python-impl/
 ├── tui/                        # 轻量终端聊天入口
 ├── requirements.txt
 ├── Dockerfile
-├── compose.yaml                # API、Redis 与自动更新服务编排
-├── .github/workflows/build-image.yml # PR 质量门禁，main push / dispatch 构建发布
+├── compose.yaml                # API、Harness、Redis 与自动更新服务编排
+├── .github/workflows/build-image.yml # PR 质量门禁（Python + Harness 两个 job），main push / dispatch 构建发布
 ├── .env.example                 # 本机运行环境变量示例
 └── .env.docker.example          # Docker 运行环境变量示例
 ```
@@ -764,19 +802,34 @@ docker stop lucid_johnson
 
 ### GitHub Actions 工作流配置
 
-仓库包含 `.github/workflows/build-image.yml`。工作流配置为：
+仓库包含 `.github/workflows/build-image.yml`。仓库里有两套运行时，所以有两个 job：
 
 ```text
-Pull Request
+test（Python Business Runtime）
     -> repository readiness
     -> pytest
     -> offline Eval
+
+harness（Pi Harness，Node 22）
+    -> npm ci
+    -> npm run typecheck
+    -> npm run test:ci        # 纯离线子集
+
+Pull Request
+    -> 上述两个 job
     -> 不构建和发布镜像
 
 main push / workflow_dispatch
     -> 同一质量门禁
     -> image build / publish
 ```
+
+`npm run test:ci` **不是** `npm test` 的降级别名。绝大多数 Harness 套件按设计就是
+集成测试：它们会重建真实 MySQL 库并在子进程里拉起真实 Python `internal_api`，
+GitHub Runner 上都没有。所以 CI 只跑子集，而子集成员**逐个列在**
+`pi-harness/vitest.ci.config.ts` 里，并附上每个文件为何离线的说明——成员资格是
+静态声明，不是运行时"失败就跳过"，因此 CI 不会假绿。本地全量绿仍然以 `npm test`
+（需真实 MySQL + Python）为准。
 
 镜像仓库名为：
 

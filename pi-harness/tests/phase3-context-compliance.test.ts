@@ -248,7 +248,7 @@ describe("Phase 3 acceptance", () => {
     expect(textOf(assistant.at(-1)!)).toBe(delivered);
   }, 120_000);
 
-  it("P3-3: the outbox delivers exactly once, and survives a dispatcher restart", async () => {
+  it("P3-3: the outbox is at-least-once and idempotent, and survives a dispatcher restart", async () => {
     // No identity is supplied: the dispatcher rebuilds it from the durable
     // session + provenance rows (Phase 10 §①). A dispatcher constructed here
     // shares no memory with the one that wrote the receipt.

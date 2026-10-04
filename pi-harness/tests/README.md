@@ -4,6 +4,12 @@ Short version: **these suites reset a real MySQL database.** Before running one,
 say so in the terminal; if a second runner is active, coordinate instead of
 racing.
 
+`npm test` runs everything and needs that database. `npm run test:ci` runs only
+the suites that were measured to pass with every external dependency
+unreachable — the list, and the justification for each file, is in
+`vitest.ci.config.ts`. CI uses the latter; a local "all green" claim must come
+from the former.
+
 ## The shared database
 
 Both suites talk to a real MySQL instance and both reset it with
@@ -104,7 +110,7 @@ performs them.
 
 Fixtures never assume the caller's shell is configured. `MYSQL_*` is resolved
 the same way the application resolves it — process environment first, then
-`python-impl/.env` — and handed to spawned services explicitly
+the repository-root `.env` — and handed to spawned services explicitly
 (`childMysqlEnv()` in `tests/helpers/phase1.ts`). A missing password fails in
 the fixture with a message naming the variable, instead of starting a runtime
 that cannot reach its platform database.

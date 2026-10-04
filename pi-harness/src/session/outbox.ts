@@ -3,9 +3,12 @@
  *
  * The user's raw message is already durable in `memory_source_event` before the
  * model ever runs; this loop is what eventually turns those rows into memory
- * candidates. Because the state lives on the receipt, a crash (including
+ * candidates. The delivery contract is **at-least-once delivery + idempotent
+ * consumer**: because the state lives on the receipt, a crash (including
  * kill -9) simply means the row is still `pending` when the next process scans,
- * so delivery happens exactly once even across restarts.
+ * so it is delivered again — and the runtime's candidate insert is idempotent
+ * on top of the CAS that marks the row `done`, so a repeated delivery does not
+ * produce a repeated memory result. The network hop is never exactly-once.
  *
  * IDENTITY IS RECOVERED FROM DURABLE ROWS, NEVER FROM PROCESS MEMORY.
  *
@@ -28,6 +31,11 @@ import type { ReceiptStore } from "../db/receipts.js";
 import type { PythonInternalClient } from "../business/python-client.js";
 import type { TurnIdentity } from "../business/turn-context.js";
 
+/** Process-local epoch millis → the ISO string the ops endpoint reports. */
+function iso(at: number | undefined): string | null {
+  return at === undefined ? null : new Date(at).toISOString();
+}
+
 export interface OutboxDeps {
   receipts: ReceiptStore;
   pythonClient: PythonInternalClient;
@@ -46,11 +54,50 @@ export interface DispatchSummary {
   parked: number;
 }
 
+/**
+ * Process-local observation of the dispatcher (plan §6.2).
+ *
+ * Explicitly NOT authoritative: the durable truth is the receipt's own
+ * `memory_enqueue_status` (see `ReceiptStore.memoryOutboxStats`). These numbers
+ * describe what THIS process has seen since it started, and start over on
+ * restart — which is exactly what makes them useful for "is the loop running
+ * and making progress right now?".
+ */
+export interface OutboxProcessStats {
+  passes: number;
+  delivered: number;
+  deliveryFailures: number;
+  parked: number;
+  lastDispatchAt: string | null;
+  lastSuccessAt: string | null;
+  lastErrorAt: string | null;
+}
+
 export class MemoryOutboxDispatcher {
   private timer: NodeJS.Timeout | undefined;
   private inFlight: Promise<DispatchSummary> | undefined;
+  private passes = 0;
+  private delivered = 0;
+  private deliveryFailures = 0;
+  private parkedTotal = 0;
+  private lastDispatchAt: number | undefined;
+  private lastSuccessAt: number | undefined;
+  private lastErrorAt: number | undefined;
 
   constructor(private readonly deps: OutboxDeps) {}
+
+  /** A snapshot of this process's counters. Never reads the database. */
+  stats(): OutboxProcessStats {
+    return {
+      passes: this.passes,
+      delivered: this.delivered,
+      deliveryFailures: this.deliveryFailures,
+      parked: this.parkedTotal,
+      lastDispatchAt: iso(this.lastDispatchAt),
+      lastSuccessAt: iso(this.lastSuccessAt),
+      lastErrorAt: iso(this.lastErrorAt),
+    };
+  }
 
   /**
    * One bounded pass. Safe to call directly from tests.
@@ -60,7 +107,15 @@ export class MemoryOutboxDispatcher {
    */
   async dispatchOnce(): Promise<DispatchSummary> {
     const summary: DispatchSummary = { scanned: 0, enqueued: 0, failed: 0, parked: 0 };
-    const batch = await this.deps.receipts.listPendingMemory(this.deps.batchSize ?? 20);
+    let batch;
+    try {
+      batch = await this.deps.receipts.listPendingMemory(this.deps.batchSize ?? 20);
+    } catch (error) {
+      // A pass that could not even read the queue is not a completed pass, but
+      // it IS the failure an operator needs to see.
+      this.lastErrorAt = Date.now();
+      throw error;
+    }
     summary.scanned = batch.length;
 
     for (const item of batch) {
@@ -80,6 +135,7 @@ export class MemoryOutboxDispatcher {
           );
           summary.failed += 1;
           if (outcome.status === "failed") summary.parked += 1;
+          this.lastErrorAt = Date.now();
           this.deps.onError?.(new Error(`no durable memory provenance for receipt ${item.receiptId}`));
           continue;
         }
@@ -107,6 +163,7 @@ export class MemoryOutboxDispatcher {
           // idempotent on top of that.
           await this.deps.receipts.markMemoryDone(item.receiptId);
           summary.enqueued += 1;
+          this.lastSuccessAt = Date.now();
         } else {
           const outcome = await this.deps.receipts.recordMemoryFailure(
             item.receiptId,
@@ -114,6 +171,7 @@ export class MemoryOutboxDispatcher {
           );
           summary.failed += 1;
           if (outcome.status === "failed") summary.parked += 1;
+          this.lastErrorAt = Date.now();
         }
       } catch (error) {
         const outcome = await this.deps.receipts
@@ -121,9 +179,15 @@ export class MemoryOutboxDispatcher {
           .catch(() => undefined);
         summary.failed += 1;
         if (outcome?.status === "failed") summary.parked += 1;
+        this.lastErrorAt = Date.now();
         this.deps.onError?.(error);
       }
     }
+    this.passes += 1;
+    this.delivered += summary.enqueued;
+    this.deliveryFailures += summary.failed;
+    this.parkedTotal += summary.parked;
+    this.lastDispatchAt = Date.now();
     return summary;
   }
 

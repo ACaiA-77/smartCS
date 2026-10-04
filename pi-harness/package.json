@@ -9,8 +9,11 @@
   },
   "scripts": {
     "test": "vitest run",
+    "test:ci": "vitest run --config vitest.ci.config.ts",
     "typecheck": "tsc --noEmit",
     "dev": "tsx src/server/main.ts",
+    "outbox:status": "tsx src/cli/outbox.ts status",
+    "outbox:retry": "tsx src/cli/outbox.ts retry",
     "spike": "tsx src/spike/run-spike.ts",
     "spike:sse": "tsx src/spike/run-sse-server.ts"
   },

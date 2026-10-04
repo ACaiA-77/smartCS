@@ -4,10 +4,13 @@
  * Public (browser-facing):
  *   POST /api/chat          JSON final
  *   POST /api/chat/stream   SSE frames: status* -> final -> done
+ * Probes (no credential, orchestration surface):
+ *   GET    /health          liveness  — "this process is alive"
+ *   GET    /ready           readiness — "this instance can serve a user"
  * Internal (Python Business Runtime only, service JWT):
  *   GET    /internal/history/{session_id}
  *   DELETE /internal/history/{session_id}
- *   GET    /health
+ *   GET    /internal/ops/memory-outbox   (Phase 11: observe only)
  *
  * Phase 7 unified entry: the Business Runtime forwards a pi session's turns
  * here, carrying the caller's own user JWT verbatim plus a service signature
@@ -36,14 +39,29 @@ import { SessionRegistry } from "../session/registry.js";
 import { openOrCreatePiSession } from "../session/pi-session.js";
 import { projectHistory } from "../history/projector.js";
 import { formatSseFrame } from "../streaming/status.js";
+import type { OutboxProcessStats } from "../session/outbox.js";
+import { resolveKnowledgeTransport } from "../agent/mcp/knowledge-mcp.js";
 import { HttpError } from "./http-error.js";
 import { runChat, type ChatPipelineDeps } from "./chat-pipeline.js";
 import { authenticateRequest, AuthError } from "./user-auth.js";
+import { createReadinessProbe, type ReadinessProbe, type ReadinessReport } from "./readiness.js";
 
 export interface HarnessServerDeps extends Omit<ChatPipelineDeps, "registry"> {
   paths: SmartCsPaths;
   /** Optional: defaults to the real 先查后建 Pi session factory. */
   registry?: SessionRegistry;
+  /**
+   * Optional: defaults to a probe over `receipts` (MySQL ping + outbox backlog)
+   * and `pythonClient` (`/internal/ready`). Tests override it to drive the
+   * failure paths without breaking a real dependency.
+   */
+  readiness?: ReadinessProbe;
+  /**
+   * Optional: the running dispatcher's process-local counters, surfaced by
+   * `/internal/ops/memory-outbox`. Absent when no dispatcher was started (the
+   * endpoint then reports the durable state only).
+   */
+  outboxStats?: () => OutboxProcessStats;
 }
 
 export interface HarnessServer {
@@ -128,6 +146,34 @@ function requireServiceIdentity(req: IncomingMessage): { accountId: number; sess
 }
 
 /**
+ * Verify a service token that carries no turn identity (Phase 11 ops surface).
+ *
+ * `/internal/ops/memory-outbox` belongs to no turn: it is the deployment's
+ * operator (or its peer service) asking about durable state, so there is no
+ * `account_id` / `session_id` to require — but it is emphatically not public.
+ * Tolerating this shape at the two per-turn call sites would weaken them, so it
+ * gets its own named verifier rather than a relaxed flag on theirs.
+ */
+function requireOpsServiceIdentity(req: IncomingMessage): void {
+  const header = req.headers.authorization;
+  if (!header) throw new HttpError(401, "service authentication required");
+  const parts = header.split(/\s+/);
+  if (parts.length !== 2 || parts[0]?.toLowerCase() !== "bearer" || !parts[1]) {
+    throw new HttpError(401, "invalid service authentication");
+  }
+  try {
+    verifyHs256(parts[1], {
+      secret: serviceJwtSecret(),
+      issuer: RUNTIME_TOKEN_ISSUER,
+      audience: RUNTIME_TOKEN_AUDIENCE,
+      maxTtlSeconds: SERVICE_JWT_MAX_TTL_SECONDS,
+    });
+  } catch {
+    throw new HttpError(401, "invalid service authentication");
+  }
+}
+
+/**
  * Phase 7: verify the forwarding runtime's signature when it is present.
  *
  * The runtime forwards a turn with `X-SmartCS-Service-Token: Bearer <jwt>`, the
@@ -182,6 +228,17 @@ export function createHarnessServer(deps: HarnessServerDeps): HarnessServer {
     classifyIntent: deps.classifyIntent,
   };
 
+  const readiness =
+    deps.readiness ??
+    createReadinessProbe({
+      pingMysql: () => deps.receipts.ping(),
+      checkBusinessRuntime: () => deps.pythonClient.checkReady(),
+      // Resolved once, here: a malformed switch must fail at construction, not
+      // silently decide that the gateway is out of scope for readiness.
+      knowledgeTransport: resolveKnowledgeTransport(),
+      outboxStats: () => deps.receipts.memoryOutboxStats(),
+    });
+
   const server = createServer((req, res) => {
     void handle(req, res).catch((error) => {
       if (!res.headersSent) sendError(res, error);
@@ -198,8 +255,19 @@ export function createHarnessServer(deps: HarnessServerDeps): HarnessServer {
       return;
     }
 
+    if (path === "/ready" && req.method === "GET") {
+      await handleReady(res);
+      return;
+    }
+
     if ((path === "/api/chat" || path === "/api/chat/stream") && req.method === "POST") {
       await handleChat(req, res, path.endsWith("/stream"));
+      return;
+    }
+
+    if (path === "/internal/ops/memory-outbox" && req.method === "GET") {
+      requireOpsServiceIdentity(req);
+      await handleMemoryOutboxOps(res);
       return;
     }
 
@@ -218,6 +286,72 @@ export function createHarnessServer(deps: HarnessServerDeps): HarnessServer {
     }
 
     sendJson(res, 404, { detail: "not found" });
+  }
+
+  /**
+   * `/ready` — the probe that says "this instance can serve a user".
+   *
+   * Unauthenticated like `/health`: an orchestrator's healthcheck carries no
+   * credential, and the body is booleans plus a warning code — no URL, no
+   * secret, no driver text. A probe that throws is a programming error, not a
+   * dependency outage, but the honest answer is still "nothing is proven, so
+   * not ready" rather than a 500 an orchestrator would read as a crash-loop.
+   */
+  async function handleReady(res: ServerResponse): Promise<void> {
+    let report: ReadinessReport;
+    try {
+      report = await readiness();
+    } catch {
+      report = {
+        ready: false,
+        degraded: false,
+        warnings: [],
+        checks: { mysql: { ok: false }, business_runtime: { ok: false }, mcp: { enabled: false, ok: false } },
+      };
+    }
+    sendJson(res, report.ready ? 200 : 503, report);
+  }
+
+  /**
+   * `/internal/ops/memory-outbox` — observe only (plan §7).
+   *
+   * Returns the durable aggregate (authoritative) and this process's dispatcher
+   * counters (observation). It changes no receipt, retries nothing and never
+   * reaches the Business Runtime: the manual replay lives in the CLI and its
+   * only effect is moving one row back to `pending` for the normal dispatcher.
+   */
+  async function handleMemoryOutboxOps(res: ServerResponse): Promise<void> {
+    let durable;
+    try {
+      durable = await deps.receipts.memoryOutboxStats();
+    } catch {
+      // An unreachable store is the one thing an operator must learn here; the
+      // reason stays in the runtime's logs.
+      sendJson(res, 503, { detail: "outbox state unavailable" });
+      return;
+    }
+    // Wire format is snake_case throughout, matching the `durable` block and the
+    // internal channel's conventions; the TypeScript types stay camelCase.
+    const dispatcher = deps.outboxStats?.();
+    sendJson(res, 200, {
+      durable: {
+        pending: durable.pending,
+        failed: durable.failed,
+        oldest_pending_age_seconds: durable.oldestPendingAgeSeconds,
+        max_attempts: durable.maxPendingAttempts,
+      },
+      dispatcher: dispatcher
+        ? {
+            passes: dispatcher.passes,
+            delivered: dispatcher.delivered,
+            delivery_failures: dispatcher.deliveryFailures,
+            parked: dispatcher.parked,
+            last_dispatch_at: dispatcher.lastDispatchAt,
+            last_success_at: dispatcher.lastSuccessAt,
+            last_error_at: dispatcher.lastErrorAt,
+          }
+        : null,
+    });
   }
 
   async function handleChat(req: IncomingMessage, res: ServerResponse, stream: boolean): Promise<void> {

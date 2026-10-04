@@ -111,7 +111,7 @@ async function main(): Promise<void> {
   };
   const internal = new PythonInternalClient({ baseUrl: python.url, fetchImpl: recordingFetch });
 
-  // REAL provider: resolveProviderMode() reads python-impl/.env -> openai.
+  // REAL provider: resolveProviderMode() reads the repository-root .env -> openai.
   const registry = new SessionRegistry(async (sessionId) => {
     const handle = await openOrCreatePiSession(paths, sessionId, {
       provider: "openai",

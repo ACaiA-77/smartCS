@@ -43,6 +43,31 @@ export function mintServiceToken(input: ServiceTokenInput, ttlSeconds = SERVICE_
   return signHs256(claims, serviceJwtSecret());
 }
 
+/**
+ * A service token for a call that belongs to NO turn (Phase 11 readiness).
+ *
+ * Same secret, issuer, audience and TTL as every other internal call — the
+ * caller is still provably the peer service — but with no `account_id` /
+ * `session_id` / `client_request_id`, because there is no turn to bind. The
+ * runtime verifies it with `decode_ops_service_token`, which requires exactly
+ * these claims and no more.
+ */
+export function mintOpsServiceToken(ttlSeconds = SERVICE_JWT_MAX_TTL_SECONDS): string {
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds <= 0 || ttlSeconds > SERVICE_JWT_MAX_TTL_SECONDS) {
+    throw new Error("service token ttl out of range");
+  }
+  const now = Math.floor(Date.now() / 1000);
+  return signHs256(
+    {
+      iss: SERVICE_TOKEN_ISSUER,
+      aud: SERVICE_TOKEN_AUDIENCE,
+      iat: now,
+      exp: now + ttlSeconds,
+    },
+    serviceJwtSecret(),
+  );
+}
+
 export interface VerifiedIdentity {
   account_id: number;
   business_user_id: string;
@@ -265,6 +290,38 @@ export class PythonInternalClient {
       throw new PythonInternalError(502, "malformed tool response");
     }
     return { ok: body.ok === true, content: body.content, details: body.details ?? null };
+  }
+
+  /**
+   * GET /internal/ready — is the Business Runtime able to serve a turn?
+   *
+   * Deliberately separate from `verifyIdentity`: readiness runs on a timer and
+   * must be cheap, so this asks the runtime's own dependency probe rather than
+   * exercising a real request. A non-2xx answer, a malformed body, a timeout or
+   * a connection refusal all mean the same thing to the caller — "not ready" —
+   * so the reason stays in the runtime's logs and never reaches the probe
+   * response.
+   */
+  async checkReady(signal?: AbortSignal): Promise<boolean> {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}/internal/ready`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${mintOpsServiceToken()}` },
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(this.timeoutMs)])
+          : AbortSignal.timeout(this.timeoutMs),
+      });
+    } catch {
+      return false;
+    }
+    if (!response.ok) return false;
+    try {
+      const body = (await response.json()) as { ok?: unknown };
+      return body.ok === true;
+    } catch {
+      return false;
+    }
   }
 
   /** Shared signed POST used by the Phase 3+ endpoints (and Phase 6 audit). */

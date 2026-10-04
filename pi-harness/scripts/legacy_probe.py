@@ -16,7 +16,7 @@ only observe. That matters because the whole point of Phase 4 is to compare the
 Pi harness against the legacy behaviour as it actually is.
 
 Usage:
-    python -m scripts.legacy_probe < scenarios.json   (run from python-impl)
+    python -m scripts.legacy_probe < scenarios.json   (run from the repository root)
     OR  python pi-harness/scripts/legacy_probe.py < scenarios.json   (sets sys.path)
 
 stdin : {"scenarios": [{"id","user_id","turns":["...","..."]}, ...]}
@@ -31,7 +31,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-PYTHON_IMPL = Path(__file__).resolve().parents[2] / "python-impl"
+# scripts/ -> pi-harness/ -> repository root, which IS the Python runtime root.
+PYTHON_IMPL = Path(__file__).resolve().parents[2]
 if str(PYTHON_IMPL) not in sys.path:
     sys.path.insert(0, str(PYTHON_IMPL))
 

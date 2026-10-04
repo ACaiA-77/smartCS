@@ -7,8 +7,8 @@
 
 - 边界规则（模型能做什么、Python 允许什么）→ [runtime-boundaries.md](runtime-boundaries.md)
 - 崩溃与恢复语义 → [recovery.md](recovery.md)
-- Harness 自身的结构 → [`../../pi-harness/README.md`](../../pi-harness/README.md)
-- 历史迁移过程（各阶段报告）→ `../../pi-harness/PHASEn_REPORT.md`
+- Harness 自身的结构 → [`../pi-harness/README.md`](../pi-harness/README.md)
+- 历史迁移过程（各阶段报告）→ `../pi-harness/PHASEn_REPORT.md`
 
 ## 1. 双层架构
 

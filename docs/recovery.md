@@ -67,7 +67,13 @@ Harness 不猜。
    pending → done
 ```
 
-崩溃在任何位置都只是让这行保持 `pending`，下一个进程自然补投——**恰好一次**。
+崩溃在任何位置都只是让这行保持 `pending`，下一个进程自然补投。
+
+投递语义是 **At-least-once delivery + idempotent consumer**：崩溃意味着这一行会被
+**再投一次**，而不是"网络层只投一次"。重复投递不会产生重复的记忆结果——落库那一步
+以 `memory_enqueue_status='pending'` 为条件的 CAS 只会成功一次，消费端（
+`/internal/memory/enqueue` 的候选写入）本身也是幂等的。最终业务效果是 effectively-once，
+但**不要把它描述成网络投递的 exactly-once**。
 
 ### 恢复不能依赖进程内状态
 

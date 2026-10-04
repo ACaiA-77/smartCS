@@ -133,6 +133,10 @@ async function main(): Promise<void> {
     memorySource: new MemorySourceStore(db),
     pythonClient,
     idleEvictionMs: IDLE_EVICTION_MS,
+    // Phase 11 §6.2: the running loop's own counters, for
+    // /internal/ops/memory-outbox. Observation only — the receipt row is the
+    // authority for what is pending, delivered or parked.
+    outboxStats: () => memoryOutbox.stats(),
   });
 
   const { port } = await harness.listen(PORT, HOST);

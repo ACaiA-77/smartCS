@@ -53,6 +53,8 @@ DEFAULT_PORT = 8972
 MIN_TOKEN_BYTES = 16
 #: Streamable HTTP endpoint FastMCP serves by default; the TS client appends it.
 MCP_PATH = "/mcp"
+#: Phase 11 readiness probe, served INSIDE the token guard (see HealthEndpoint).
+HEALTH_PATH = "/health"
 
 
 def _ensure_repo_importable() -> None:
@@ -206,10 +208,52 @@ class BearerTokenGuard:
         await self.app(scope, receive, send)
 
 
+class HealthEndpoint:
+    """Answer `GET /health` for the harness's readiness check; delegate the rest.
+
+    Mounted INSIDE `BearerTokenGuard` on purpose. A readiness answer the harness
+    cannot distinguish from "wrong token" would be useless, and an unauthenticated
+    health route would widen the gateway's public surface for no gain: with the
+    guard in front, a 200 proves the token is right AND the ASGI app is up AND
+    `create_server` finished — which is where the MCP server and the retriever
+    are actually built. Nothing is searched, so the probe stays cheap.
+    """
+
+    def __init__(self, app: Any, *, ready: bool):
+        self.app = app
+        self._ready = bool(ready)
+
+    async def __call__(self, scope, receive, send):
+        if (
+            scope["type"] == "http"
+            and scope.get("path") == HEALTH_PATH
+            and scope.get("method") == "GET"
+        ):
+            body = json.dumps(
+                {"ok": self._ready, "server": "initialized", "retriever": "initialized" if self._ready else "unavailable"}
+            ).encode("utf-8")
+            await send({
+                "type": "http.response.start",
+                "status": 200 if self._ready else 503,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                    (b"cache-control", b"no-store"),
+                ],
+            })
+            await send({"type": "http.response.body", "body": body})
+            return
+        await self.app(scope, receive, send)
+
+
 def create_app(token: str | None = None, retriever: Any = None) -> Any:
     """The ASGI app: FastMCP's streamable HTTP app behind the token guard."""
-    server = create_server(retriever, token=token)
-    return BearerTokenGuard(server.streamable_http_app(), token or require_token())
+    shared_retriever = retriever if retriever is not None else build_retriever()
+    server = create_server(shared_retriever, token=token)
+    # `shared_retriever` is the one `create_server` serves with, so this reflects
+    # what would actually answer a search — not a second, separate probe.
+    inner = HealthEndpoint(server.streamable_http_app(), ready=shared_retriever is not None)
+    return BearerTokenGuard(inner, token or require_token())
 
 
 def main() -> None:

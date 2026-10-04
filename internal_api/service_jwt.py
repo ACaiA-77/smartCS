@@ -14,6 +14,10 @@ Claim contract (plan v2 §7):
 every other internal endpoint (Phase 2 D5: tool calls must carry the resolved
 identity so the runtime can force-bind it). Callers choose via
 `require_business_user_id`.
+
+One exception: endpoints that belong to no turn at all (Phase 11 readiness,
+`/internal/ready`) verify the same secret/audience/issuer without the turn
+claims — see `decode_ops_service_token`.
 """
 
 from __future__ import annotations
@@ -56,6 +60,39 @@ def get_service_secret() -> str:
 
 def _positive_int(value: object) -> bool:
     return type(value) is int and 0 < value <= 2**63 - 1
+
+
+def decode_ops_service_token(token: str) -> None:
+    """Verify a peer-service token that carries NO turn identity.
+
+    `/internal/ready` (Phase 11 §4.2) is not part of a turn: nobody is asking on
+    behalf of a user, so there is no `account_id` / `session_id` to bind. It is
+    still not a public endpoint — the caller must prove it holds the same
+    internal service secret, audience and issuer every other internal call uses.
+    Inventing a fake turn identity just to satisfy `decode_service_token` would
+    be worse than naming the case: this is the deployment's own peer service.
+
+    Raises pyjwt.InvalidTokenError for anything invalid; ServiceAuthUnavailable
+    when the deployment secret itself is unusable.
+    """
+    secret = get_service_secret()
+    if not isinstance(token, str) or not 1 <= len(token) <= 4096:
+        raise pyjwt.InvalidTokenError("invalid service token")
+    claims = pyjwt.decode(
+        token,
+        secret,
+        algorithms=[ALGORITHM],
+        audience=AUDIENCE,
+        issuer=ISSUER,
+        options={"require": ["aud", "iss", "iat", "exp"]},
+    )
+    iat, exp = claims.get("iat"), claims.get("exp")
+    if type(iat) is not int or type(exp) is not int:
+        raise pyjwt.InvalidTokenError("invalid service token timestamps")
+    if not 0 < exp - iat <= MAX_TTL_SECONDS:
+        raise pyjwt.InvalidTokenError("service token ttl out of range")
+    if exp < int(time.time()):
+        raise pyjwt.InvalidTokenError("service token expired")
 
 
 def decode_service_token(token: str, *, require_business_user_id: bool = False) -> ServiceIdentity:
