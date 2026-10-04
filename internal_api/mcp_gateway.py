@@ -92,6 +92,26 @@ def _load_fastmcp():
     return FastMCP
 
 
+def _load_rag_timing() -> Any:
+    """Load `rag_timing` WITHOUT importing the `internal_api` package.
+
+    `from internal_api.rag_timing import ...` would execute
+    `internal_api/__init__.py`, which imports the internal routers and, through
+    them, this repository's own `mcp/` package — after which the official MCP
+    SDK can no longer be imported in this process (see the module docstring).
+    The timing module is stdlib-only, so it is loaded straight from its file.
+    """
+    import importlib.util
+
+    path = pathlib.Path(__file__).resolve().parent / "rag_timing.py"
+    spec = importlib.util.spec_from_file_location("smartcs_rag_timing", path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def build_retriever() -> Any:
     """The same retriever the HTTP tool path uses (same env, same index)."""
     _ensure_repo_importable()
@@ -107,6 +127,11 @@ def create_server(retriever: Any = None, *, token: str | None = None):
     _ensure_repo_importable()
     FastMCP = _load_fastmcp()
     shared_retriever = retriever if retriever is not None else build_retriever()
+    # Phase 10 §⑤: optional segment timing. Off unless explicitly switched on,
+    # and pass-through when on — it records durations, it never changes results.
+    timing = _load_rag_timing()
+    if timing is not None and timing.rag_timing_enabled():
+        timing.install_retriever_timing(shared_retriever)
     server = FastMCP("smartcs-knowledge")
 
     @server.tool(

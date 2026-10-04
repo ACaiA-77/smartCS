@@ -68,6 +68,16 @@ services:
       SMARTCS_TOOL_TIMEOUT_MS: "${SMARTCS_TOOL_TIMEOUT_MS:-90000}"
       SMARTCS_SKILLS: "${SMARTCS_SKILLS:-on}"
       SMARTCS_WRITE_MODE: "${SMARTCS_WRITE_MODE:-live}"
+      # Phase 10 §④: explicit, never inferred. With `openai` a missing model
+      # credential refuses to start instead of quietly serving Faux answers.
+      SMARTCS_PROVIDER_MODE: "${SMARTCS_PROVIDER_MODE:-openai}"
+      # Phase 10 §⑦: knowledge over MCP. Default `http` is the Phase 0-7
+      # behaviour and needs no gateway; see the `mcp` profile below.
+      SMARTCS_KNOWLEDGE_TRANSPORT: "${SMARTCS_KNOWLEDGE_TRANSPORT:-http}"
+      SMARTCS_MCP_URL: "${SMARTCS_MCP_URL:-http://smartcs-mcp-gateway:8972/mcp}"
+      SMARTCS_MCP_TOKEN: "${SMARTCS_MCP_TOKEN:-}"
+      # Phase 10 §⑤: opt-in RAG segment timing (off unless set to 1).
+      SMARTCS_RAG_TIMING: "${SMARTCS_RAG_TIMING:-0}"
     ports:
       # Internal-only in production; published on loopback for local inspection.
       - "127.0.0.1:${SMARTCS_PI_HOST_PORT:-8971}:8971"
@@ -84,6 +94,68 @@ services:
         condition: service_started
     networks:
       - smartcs-net
+
+  # Phase 10 §⑦ — the MCP demo entry.
+  #
+  # `knowledge_search` is the one tool that can live behind MCP: it searches a
+  # shared corpus with no per-user identity, so the channel only needs a
+  # server-level credential. The identity-bound tools (order/ticket/refund/
+  # risk) stay on the internal HTTP envelope, where a per-turn identity is
+  # expressible — that split is the deliberate final boundary, not a gap.
+  #
+  # One-click demo:
+  #   SMARTCS_MCP_TOKEN=$(openssl rand -hex 24) \
+  #   SMARTCS_KNOWLEDGE_TRANSPORT=mcp \
+  #   docker compose --profile mcp up -d
+  #
+  # Both switches are explicit on purpose: the profile starts the gateway, the
+  # transport variable is what makes the harness use it. Neither implies the
+  # other, so a deployment can never end up talking to a gateway it did not
+  # start (or silently stop using one it did).
+  smartcs-mcp-gateway:
+    image: ${SMARTCS_IMAGE:-ghcr.io/acaia-77/smartcs:latest}
+    container_name: smartcs-mcp-gateway
+    restart: unless-stopped
+    profiles:
+      - mcp
+    env_file:
+      - .env.docker
+    environment:
+      SMARTCS_MCP_HOST: "0.0.0.0"
+      SMARTCS_MCP_PORT: "8972"
+      # No default. The gateway refuses to start without a >=16-byte token,
+      # which is the correct place for that refusal to happen.
+      SMARTCS_MCP_TOKEN: "${SMARTCS_MCP_TOKEN:-}"
+    # Run as a FILE, not `-m internal_api.mcp_gateway`: importing the
+    # `internal_api` package pulls in this repo's own `mcp/` package, which
+    # would shadow the official MCP SDK the gateway must serve with.
+    command: ["python", "internal_api/mcp_gateway.py"]
+    volumes:
+      - ./data:/app/data
+      - ./vector_store:/app/vector_store
+      - ./artifacts/rag_jieba:/app/artifacts/rag_jieba:ro
+      - smartcs-hf-cache:/home/app/.cache/huggingface
+      - smartcs-st-cache:/home/app/.cache/sentence-transformers
+    networks:
+      - smartcs-net
+    healthcheck:
+      # `/mcp` is behind the token guard, so a healthy gateway answers 401 —
+      # a 401 here proves the ASGI app is up AND the guard is armed.
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import urllib.request, urllib.error
+          try:
+              urllib.request.urlopen("http://127.0.0.1:8972/mcp", timeout=5)
+              raise SystemExit(1)
+          except urllib.error.HTTPError as exc:
+              raise SystemExit(0 if exc.code == 401 else 1)
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
 
   smartcs-redis:
     image: redis:7-alpine
