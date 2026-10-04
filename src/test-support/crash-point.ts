@@ -33,6 +33,13 @@ export const CRASH_POINTS = [
   "after_write_success",
   /** `final` exists; the receipt is still `processing`. */
   "before_receipt_complete",
+  /**
+   * F15: the receipt is `completed` and the provenance row is durable, but the
+   * memory outbox has not yet reached the runtime. Killing here is the exact
+   * window the outbox exists to survive — nothing is lost, because the row
+   * stays `pending` and the next process delivers it from durable state alone.
+   */
+  "before_memory_enqueue",
 ] as const;
 
 export type CrashPoint = (typeof CRASH_POINTS)[number];

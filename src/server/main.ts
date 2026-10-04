@@ -18,7 +18,9 @@ import { createHarnessServer } from "./app.js";
 import { createFauxProvider } from "../agent/create-smartcs-agent.js";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { AuditDispatcher, AuditQueue } from "../tracing/audit-queue.js";
+import { MemoryOutboxDispatcher } from "../session/outbox.js";
 import { initTracing } from "../tracing/provider.js";
+import { resolveWriteMode } from "../agent/write-mode.js";
 
 const PORT = Number(process.env.PORT ?? 8971);
 const HOST = process.env.HOST ?? "127.0.0.1";
@@ -26,11 +28,18 @@ const IDLE_EVICTION_MS = Number(process.env.SMARTCS_IDLE_EVICTION_MS ?? 15 * 60_
 const AUDIT_QUEUE_CAPACITY = Number(process.env.SMARTCS_AUDIT_QUEUE_CAPACITY ?? 1_000);
 const AUDIT_BATCH_SIZE = Number(process.env.SMARTCS_AUDIT_BATCH_SIZE ?? 50);
 const AUDIT_INTERVAL_MS = Number(process.env.SMARTCS_AUDIT_INTERVAL_MS ?? 1_000);
+const MEMORY_BATCH_SIZE = Number(process.env.SMARTCS_MEMORY_BATCH_SIZE ?? 20);
+const MEMORY_INTERVAL_MS = Number(process.env.SMARTCS_MEMORY_INTERVAL_MS ?? 5_000);
+/** Upper bound on the final drain so shutdown can never hang on a dead runtime. */
+const SHUTDOWN_FLUSH_MS = Number(process.env.SMARTCS_SHUTDOWN_FLUSH_MS ?? 15_000);
 
 async function main(): Promise<void> {
   const paths = resolveSmartCsPaths();
   const db = createDatabase();
   const providerMode = resolveProviderMode();
+  // Resolved once, at startup: an invalid value is a hard error before the
+  // port is bound rather than a surprise on the first write.
+  const writeMode = resolveWriteMode();
 
   // Offline mode exists so a real OS process can be started, killed and
   // restarted in tests (F12) without reaching a live model. The queue is
@@ -83,6 +92,21 @@ async function main(): Promise<void> {
   });
   auditDispatcher.start();
 
+  // Phase 10 §①: the memory outbox is now started by the process that produces
+  // the receipts. Without this the whole chain (receipt → pending → dispatcher →
+  // /internal/memory/enqueue) existed but had no producer, so completed runs sat
+  // at `pending` forever. Delivery identity is rebuilt per row from durable
+  // rows, so a restart, an idle eviction, or a kill -9 in between is a no-op
+  // rather than a lost memory.
+  const memoryOutbox = new MemoryOutboxDispatcher({
+    receipts,
+    pythonClient,
+    batchSize: MEMORY_BATCH_SIZE,
+    intervalMs: MEMORY_INTERVAL_MS,
+    onError: () => undefined, // the receipt's own attempt counter is the signal
+  });
+  memoryOutbox.start();
+
   const registry = new SessionRegistry(async (sessionId) => {
     const handle = await openOrCreatePiSession(paths, sessionId, {
       provider: providerMode,
@@ -120,17 +144,33 @@ async function main(): Promise<void> {
       runtimeCwd: paths.runtimeCwd,
       agentDir: paths.agentDir,
       providerMode,
+      // The switches that decide what the model is ALLOWED to ask for. They
+      // were invisible in the startup line, which is how a restart can quietly
+      // come back with writes off and nothing say so (Phase 10 §④'s lesson).
+      writeMode,
+      skills: process.env.SMARTCS_SKILLS ?? "off",
+      knowledgeTransport: process.env.SMARTCS_KNOWLEDGE_TRANSPORT ?? "http",
       idleEvictionMs: IDLE_EVICTION_MS,
       tracingMode,
       auditQueue: { capacity: AUDIT_QUEUE_CAPACITY, dropped: auditQueue.dropped, enqueued: auditQueue.enqueued },
+      memoryOutbox: { batchSize: MEMORY_BATCH_SIZE, intervalMs: MEMORY_INTERVAL_MS },
     }),
   );
 
   const shutdown = async () => {
-    // Best-effort: a final drain is attempted, but a failure here must not
-    // delay or block the shutdown itself.
+    // The audit queue is best-effort by contract; the memory outbox is not.
+    // Both get a final bounded drain, and neither may hold shutdown open: a
+    // dead runtime must not turn SIGTERM into a hang. Anything undelivered
+    // stays `pending` on the receipt, so the next start picks it up.
     auditDispatcher.stop();
-    void auditDispatcher.flushOnce().catch(() => undefined);
+    memoryOutbox.stop();
+    await Promise.race([
+      Promise.allSettled([
+        auditDispatcher.flushOnce().catch(() => undefined),
+        memoryOutbox.flush().catch(() => undefined),
+      ]),
+      new Promise((resolve) => setTimeout(resolve, SHUTDOWN_FLUSH_MS).unref?.()),
+    ]);
     await harness.close();
     await db.close();
     faux?.unregister();

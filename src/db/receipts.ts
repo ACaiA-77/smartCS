@@ -22,6 +22,20 @@ import type { Database } from "./mysql.js";
 
 export type ReceiptStatus = "processing" | "completed" | "failed_recoverable";
 
+/**
+ * Everything the memory outbox needs to deliver one receipt, recovered from
+ * durable rows (see `ReceiptStore.resolveMemoryContext`). No field here may
+ * ever be sourced from a Node-side cache.
+ */
+export interface MemoryDeliveryContext {
+  /** From `conversation_session.account_id` — the owner the runtime bound. */
+  accountId: number;
+  /** From `memory_source_event.business_user_id` — recorded before the model ran. */
+  businessUserId: string;
+  /** The provenance row's event id, the runtime's own verification key. */
+  sourceEventId: string;
+}
+
 export interface ReceiptRow {
   id: number;
   session_id: string;
@@ -236,6 +250,52 @@ export class ReceiptStore {
       [sessionId, clientRequestId],
     );
     return rows.length ? String(rows[0]!.event_id) : undefined;
+  }
+
+  /**
+   * Recover everything a memory delivery needs, from durable rows only.
+   *
+   * The outbox used to read the identity out of the resident `TurnContext`,
+   * which is gone the moment the turn ends — and therefore gone after an idle
+   * eviction, a restart, or a `kill -9` between completion and enqueue. This is
+   * the replacement, and it deliberately touches no Node process state:
+   *
+   *   receipt.session_id          → conversation_session.account_id
+   *   receipt.(session,request)   → memory_source_event.business_user_id + event_id
+   *
+   * The account is the one the runtime bound the session to when it created it;
+   * the business user is the one recorded on the provenance ledger before the
+   * model ever ran. Both are authority owned by the runtime, not by this
+   * process, so a fresh service token minted from them says exactly what the
+   * original turn said.
+   *
+   * A cleared provenance row is excluded here for the same reason the runtime
+   * excludes it: the user asked for that text to be forgotten.
+   */
+  async resolveMemoryContext(
+    sessionId: string,
+    clientRequestId: string,
+  ): Promise<MemoryDeliveryContext | undefined> {
+    const rows = await this.db.query<RowDataPacket>(
+      `SELECT cs.account_id       AS account_id,
+              mse.business_user_id AS business_user_id,
+              mse.event_id         AS event_id
+         FROM agent_run_receipt r
+         JOIN conversation_session cs ON cs.session_id = r.session_id
+         JOIN memory_source_event mse
+              ON mse.session_id = r.session_id AND mse.client_request_id = r.client_request_id
+        WHERE r.session_id = ? AND r.client_request_id = ?
+          AND mse.cleared_at IS NULL
+        LIMIT 1`,
+      [sessionId, clientRequestId],
+    );
+    if (!rows.length) return undefined;
+    const row = rows[0]!;
+    return {
+      accountId: Number(row.account_id),
+      businessUserId: String(row.business_user_id),
+      sourceEventId: String(row.event_id),
+    };
   }
 
   async markMemoryDone(receiptId: number): Promise<boolean> {
