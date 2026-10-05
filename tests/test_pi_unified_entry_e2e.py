@@ -50,7 +50,7 @@ from tests.internal_api_helpers import (
 )
 
 PYTHON_IMPL = Path(__file__).resolve().parents[1]
-PI_HARNESS = PYTHON_IMPL.parent / "pi-harness"
+PI_HARNESS = PYTHON_IMPL / "pi-harness"
 TSX_CLI = PI_HARNESS / "node_modules" / "tsx" / "dist" / "cli.mjs"
 MATRIX_HARNESS = PI_HARNESS / "tests" / "fixtures" / "matrix-harness.ts"
 
