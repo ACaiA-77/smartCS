@@ -18,6 +18,11 @@ artifacts/
 evals/
 nul
 
+# The other runtime. It is a subdirectory of this repository (not a sibling
+# checkout) and is built from its own context — the compose service
+# `smartcs-pi-harness` — so the Python image must not carry it.
+pi-harness/
+
 requirements-dev.txt
 
 knowledge_sources/raw_html/

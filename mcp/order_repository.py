@@ -29,6 +29,15 @@ class OrderRepository:
             self._seed_order_details(connection)
             return int(connection.execute("SELECT COUNT(*) FROM orders").fetchone()[0])
 
+    def ping(self) -> None:
+        """Cheapest connectivity proof for the order store: one `SELECT 1`.
+
+        Deliberately not `count_orders()`: a readiness probe must not get slower
+        as the business data grows.
+        """
+        with self._connect() as connection:
+            connection.execute("SELECT 1")
+
     def count_orders(self) -> int:
         with self._connect() as connection:
             return int(connection.execute("SELECT COUNT(*) FROM orders").fetchone()[0])

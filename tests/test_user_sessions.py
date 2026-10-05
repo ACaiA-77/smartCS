@@ -121,7 +121,7 @@ async def test_real_jwt_identity_spoof_orders_refunds_and_tool_policy(authentica
     assert "退款申请已提交" not in confirmed.json()["response"]
     assert repository.get_order("ORD-20260801-0002")["refunds"] == before
     assert (await bob.get("/api/metrics")).status_code == 403
-    assert set((await bob.get("/api/metrics/runtime")).json()) == {"requests", "tools", "recovery"}
+    assert set((await bob.get("/api/metrics/runtime")).json()) == {"requests", "tools", "recovery", "context"}
 
 
 async def test_real_jwt_ticket_query_isolation_and_identity_spoof(authenticated_runtime):

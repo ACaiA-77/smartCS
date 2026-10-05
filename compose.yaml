@@ -5,6 +5,11 @@ services:
     restart: unless-stopped
     env_file:
       - .env.docker
+    environment:
+      # Phase 7 unified entry: pi sessions are forwarded to the harness service.
+      # Grayscale switch stays explicit here; 0 (all legacy) unless overridden.
+      PI_HARNESS_BASE_URL: http://smartcs-pi-harness:8971
+      SMARTCS_PI_ROLLOUT_PERCENT: "${SMARTCS_PI_ROLLOUT_PERCENT:-0}"
     ports:
       - "${SMARTCS_HOST_PORT:-8001}:8000"
     volumes:
@@ -33,6 +38,139 @@ services:
       interval: 30s
       timeout: 5s
       start_period: 30s
+      retries: 3
+
+  smartcs-pi-harness:
+    build:
+      # The harness is a subdirectory of this repository, not a sibling
+      # checkout: one Git root, two runtimes.
+      context: ./pi-harness
+      dockerfile: Dockerfile
+    image: ${SMARTCS_PI_IMAGE:-smartcs-pi-harness:local}
+    container_name: smartcs-pi-harness
+    restart: unless-stopped
+    # Reuses the runtime's env file for everything both services must agree on
+    # (MYSQL_*, model credentials, AUTH_JWT_SECRET, INTERNAL_SERVICE_JWT_SECRET).
+    env_file:
+      - .env.docker
+    environment:
+      # `.env.docker` is the API's env file: it also carries PORT/HOST for the
+      # Business Runtime, so the harness pins its own explicitly here.
+      PORT: "8971"
+      HOST: "0.0.0.0"
+      # Where the harness finds the Business Runtime — same compose network.
+      PYTHON_INTERNAL_BASE_URL: http://smartcs-api:8000
+      # Model credentials live in the repository-root .env (the file the process
+      # deployment reads). Without it the harness silently falls back to the
+      # Faux provider — correct for tests, wrong for a served deployment — so a
+      # containerized deployment must point at a real env file.
+      SMARTCS_PYTHON_ENV_FILE: /app/runtime-env/.env
+      # Read tools (RAG retrieval) need a timeout that matches this deployment's
+      # real retrieval latency; see PHASE9_REPORT.md.
+      SMARTCS_TOOL_TIMEOUT_MS: "${SMARTCS_TOOL_TIMEOUT_MS:-90000}"
+      SMARTCS_SKILLS: "${SMARTCS_SKILLS:-on}"
+      SMARTCS_WRITE_MODE: "${SMARTCS_WRITE_MODE:-live}"
+      # Phase 10 §④: explicit, never inferred. With `openai` a missing model
+      # credential refuses to start instead of quietly serving Faux answers.
+      SMARTCS_PROVIDER_MODE: "${SMARTCS_PROVIDER_MODE:-openai}"
+      # Phase 10 §⑦: knowledge over MCP. Default `http` is the Phase 0-7
+      # behaviour and needs no gateway; see the `mcp` profile below.
+      SMARTCS_KNOWLEDGE_TRANSPORT: "${SMARTCS_KNOWLEDGE_TRANSPORT:-http}"
+      SMARTCS_MCP_URL: "${SMARTCS_MCP_URL:-http://smartcs-mcp-gateway:8972/mcp}"
+      SMARTCS_MCP_TOKEN: "${SMARTCS_MCP_TOKEN:-}"
+      # Phase 10 §⑤: opt-in RAG segment timing (off unless set to 1).
+      SMARTCS_RAG_TIMING: "${SMARTCS_RAG_TIMING:-0}"
+    ports:
+      # Internal-only in production; published on loopback for local inspection.
+      - "127.0.0.1:${SMARTCS_PI_HOST_PORT:-8971}:8971"
+    volumes:
+      # Durable Pi transcripts + runtime dirs. Losing this loses conversation
+      # history; it is the one stateful thing this container owns.
+      - smartcs-pi-runtime:/app/.runtime
+      # Read-only: the shared env file both runtimes already treat as the source
+      # of model credentials. Override with SMARTCS_ENV_FILE_HOST for a real
+      # deployment (or bake credentials in another way).
+      - ${SMARTCS_ENV_FILE_HOST:-./.env}:/app/runtime-env/.env:ro
+    depends_on:
+      smartcs-api:
+        condition: service_started
+    networks:
+      - smartcs-net
+    healthcheck:
+      # Readiness, not liveness: `/ready` is the probe that says "I can serve a
+      # user" (MySQL + Business Runtime, plus the MCP gateway when the transport
+      # is `mcp`). `/health` stays the cheap "the process is alive" check.
+      # No curl in node:22-slim, so probe with node itself.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:'+(process.env.PORT||8971)+'/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  # Phase 10 §⑦ — the MCP demo entry.
+  #
+  # `knowledge_search` is the one tool that can live behind MCP: it searches a
+  # shared corpus with no per-user identity, so the channel only needs a
+  # server-level credential. The identity-bound tools (order/ticket/refund/
+  # risk) stay on the internal HTTP envelope, where a per-turn identity is
+  # expressible — that split is the deliberate final boundary, not a gap.
+  #
+  # One-click demo:
+  #   SMARTCS_MCP_TOKEN=$(openssl rand -hex 24) \
+  #   SMARTCS_KNOWLEDGE_TRANSPORT=mcp \
+  #   docker compose --profile mcp up -d
+  #
+  # Both switches are explicit on purpose: the profile starts the gateway, the
+  # transport variable is what makes the harness use it. Neither implies the
+  # other, so a deployment can never end up talking to a gateway it did not
+  # start (or silently stop using one it did).
+  smartcs-mcp-gateway:
+    image: ${SMARTCS_IMAGE:-ghcr.io/acaia-77/smartcs:latest}
+    container_name: smartcs-mcp-gateway
+    restart: unless-stopped
+    profiles:
+      - mcp
+    env_file:
+      - .env.docker
+    environment:
+      SMARTCS_MCP_HOST: "0.0.0.0"
+      SMARTCS_MCP_PORT: "8972"
+      # No default. The gateway refuses to start without a >=16-byte token,
+      # which is the correct place for that refusal to happen.
+      SMARTCS_MCP_TOKEN: "${SMARTCS_MCP_TOKEN:-}"
+    # Run as a FILE, not `-m internal_api.mcp_gateway`: importing the
+    # `internal_api` package pulls in this repo's own `mcp/` package, which
+    # would shadow the official MCP SDK the gateway must serve with.
+    command: ["python", "internal_api/mcp_gateway.py"]
+    volumes:
+      - ./data:/app/data
+      - ./vector_store:/app/vector_store
+      - ./artifacts/rag_jieba:/app/artifacts/rag_jieba:ro
+      - smartcs-hf-cache:/home/app/.cache/huggingface
+      - smartcs-st-cache:/home/app/.cache/sentence-transformers
+    networks:
+      - smartcs-net
+    healthcheck:
+      # `/mcp` is behind the token guard, so a healthy gateway answers 401 —
+      # a 401 here proves the ASGI app is up AND the guard is armed.
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import urllib.request, urllib.error
+          try:
+              urllib.request.urlopen("http://127.0.0.1:8972/mcp", timeout=5)
+              raise SystemExit(1)
+          except urllib.error.HTTPError as exc:
+              raise SystemExit(0 if exc.code == 401 else 1)
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
       retries: 3
 
   smartcs-redis:
@@ -68,6 +206,7 @@ networks:
     external: true
 
 volumes:
+  smartcs-pi-runtime:
   smartcs-hf-cache:
   smartcs-st-cache:
   smartcs-redis-data:

@@ -12,20 +12,30 @@ class Sessions:
     def __init__(self, db: PlatformDatabase):
         self.db = db
 
-    async def create(self, account_id: int, title: str = "", client_request_id: str | None = None) -> dict:
+    async def create(
+        self,
+        account_id: int,
+        title: str = "",
+        client_request_id: str | None = None,
+        harness_version: str = "legacy",
+    ) -> dict:
         if type(account_id) is not int or account_id <= 0:
             raise ValueError("invalid account_id")
         if not isinstance(title, str) or len(title) > 200 or "\x00" in title:
             raise ValueError("invalid session title")
+        if harness_version not in ("legacy", "pi"):
+            raise ValueError("invalid harness_version")
         if client_request_id is not None:
             _identity(client_request_id, "client_request_id")
         session_id = str(uuid.uuid4())
         def insert(_connection, cursor):
             # DB uniqueness also handles concurrent retries of a lost initial chat response.
+            # harness_version is written once, here: the ON DUPLICATE KEY branch
+            # keeps the row a retry lands on (and therefore its harness) as-is.
             cursor.execute("""INSERT INTO conversation_session
-                (session_id,account_id,title,client_request_id) VALUES (%s,%s,%s,%s)
+                (session_id,account_id,title,client_request_id,harness_version) VALUES (%s,%s,%s,%s,%s)
                 ON DUPLICATE KEY UPDATE session_id=session_id""",
-                           (session_id, account_id, title, client_request_id))
+                           (session_id, account_id, title, client_request_id, harness_version))
             if client_request_id is not None:
                 cursor.execute("""SELECT * FROM conversation_session
                     WHERE account_id=%s AND client_request_id=%s""", (account_id, client_request_id))

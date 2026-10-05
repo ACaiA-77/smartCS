@@ -22,9 +22,30 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    services:
+      mysql:
+        image: mysql:8.0
+        ports:
+          - 3307:3306
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: smartcs_checkpoint
+          MYSQL_USER: smartcs
+          MYSQL_PASSWORD: smartcs_ci
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     env:
       OTEL_SDK_DISABLED: "true"
       EMBEDDING_BACKEND: "hash"
+      MYSQL_HOST: "127.0.0.1"
+      MYSQL_PORT: "3307"
+      MYSQL_USER: "smartcs"
+      MYSQL_PASSWORD: "smartcs_ci"
+      MYSQL_DATABASE: "smartcs_checkpoint"
+      SMARTCS_TEST_DATABASE: "smartcs_phase1_test"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -39,6 +60,12 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements-dev.txt
 
+      - name: Grant test schema access
+        run: >-
+          mysql -h 127.0.0.1 -P 3307 -u root -proot -e
+          "CREATE DATABASE IF NOT EXISTS smartcs_phase1_test;
+          GRANT ALL PRIVILEGES ON smartcs_phase1_test.* TO 'smartcs'@'%'; FLUSH PRIVILEGES;"
+
       - name: Check repository readiness
         run: python -m scripts.check_repository_readiness
 
@@ -47,6 +74,43 @@ jobs:
 
       - name: Run offline evaluation
         run: python -m evals.runner --json
+
+  # The repository contains two runtimes, so it needs two jobs. This one covers
+  # the Pi Harness (Node 22 / TypeScript). It runs the OFFLINE subset only:
+  # `npm test` needs a real MySQL on :3307 and boots the real Python
+  # `internal_api`, neither of which exists on a hosted runner. The subset is
+  # declared once in pi-harness/vitest.ci.config.ts, where each file's
+  # justification lives — so a suite that needs a dependency can never be
+  # silently skipped at runtime to make this job green.
+  harness:
+    name: Run Pi Harness tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: pi-harness
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: pi-harness/package-lock.json
+
+      - name: Install dependencies
+        # `npm ci`, never `npm install`: the Pi version (1.0.1) and its
+        # transitive dependencies are frozen by package-lock.json.
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run offline suite
+        run: npm run test:ci
 
   build-and-publish:
     name: Build and publish image

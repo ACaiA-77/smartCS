@@ -34,6 +34,20 @@ class PlatformDatabase:
                    user=os.getenv("MYSQL_USER", "smartcs"),
                    password=os.getenv("MYSQL_PASSWORD", ""))
 
+    async def ping(self) -> None:
+        """Cheapest possible liveness proof: one connection, one `SELECT 1`.
+
+        No DDL, no writes, no schema reads, so a readiness probe may call it on
+        every check. Raises `PlatformUnavailable` when MySQL cannot be reached;
+        the driver error is never surfaced (see `_call`).
+        """
+
+        def probe(_connection, cursor):
+            cursor.execute("SELECT 1")
+            return True
+
+        await self._call(probe)
+
     async def _call(self, function):
         def work():
             try:
