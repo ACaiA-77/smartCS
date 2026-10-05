@@ -267,6 +267,7 @@ def test_onnx_reranker_requires_a_local_artifact(tmp_path):
 
 
 def test_onnx_reranker_reports_a_missing_graph_before_building_a_session(tmp_path):
+    pytest.importorskip("onnxruntime", reason="opt-in ONNX backend not installed")
     directory = tmp_path / "onnx"
     directory.mkdir()
     (directory / "manifest.json").write_text(json.dumps({"model_id": "stub"}), encoding="utf-8")
