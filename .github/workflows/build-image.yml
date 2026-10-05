@@ -22,9 +22,30 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    services:
+      mysql:
+        image: mysql:8.0
+        ports:
+          - 3307:3306
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: smartcs_checkpoint
+          MYSQL_USER: smartcs
+          MYSQL_PASSWORD: smartcs_ci
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     env:
       OTEL_SDK_DISABLED: "true"
       EMBEDDING_BACKEND: "hash"
+      MYSQL_HOST: "127.0.0.1"
+      MYSQL_PORT: "3307"
+      MYSQL_USER: "smartcs"
+      MYSQL_PASSWORD: "smartcs_ci"
+      MYSQL_DATABASE: "smartcs_checkpoint"
+      SMARTCS_TEST_DATABASE: "smartcs_phase1_test"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -38,6 +59,12 @@ jobs:
 
       - name: Install dependencies
         run: python -m pip install -r requirements-dev.txt
+
+      - name: Grant test schema access
+        run: >-
+          mysql -h 127.0.0.1 -P 3307 -u root -proot -e
+          "CREATE DATABASE IF NOT EXISTS smartcs_phase1_test;
+          GRANT ALL PRIVILEGES ON smartcs_phase1_test.* TO 'smartcs'@'%'; FLUSH PRIVILEGES;"
 
       - name: Check repository readiness
         run: python -m scripts.check_repository_readiness
