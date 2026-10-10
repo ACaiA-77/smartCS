@@ -1,0 +1,62 @@
+{
+  "error_type": "ValueError",
+  "error": "embedded null character",
+  "health_poll_attempts": [
+    {
+      "elapsed_seconds": 0,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 5,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 10,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 15,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 20,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 25,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 30,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 35,
+      "container_health": "starting",
+      "http_status": 200
+    },
+    {
+      "elapsed_seconds": 40,
+      "container_health": "starting",
+      "http_status": 200
+    },
+    {
+      "elapsed_seconds": 45,
+      "container_health": "starting",
+      "http_status": 200
+    },
+    {
+      "elapsed_seconds": 50,
+      "container_health": "healthy",
+      "http_status": 200
+    }
+  ],
+  "rollback_started": true
+}

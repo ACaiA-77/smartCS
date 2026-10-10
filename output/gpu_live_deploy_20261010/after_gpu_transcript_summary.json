@@ -1,0 +1,89 @@
+{
+  "session_id": "0dfcdcdf-4da9-40ae-b251-37520160b0cc",
+  "transcript_file": "/app/.runtime/pi-sessions/2026-10-10T11-01-35-545Z_0dfcdcdf-4da9-40ae-b251-37520160b0cc.jsonl",
+  "models": [
+    {
+      "entry_at": "2026-10-10T11:01:39.380Z",
+      "message_at": 1791630095705,
+      "model": "kimi-k2.7-code",
+      "provider": "smartcs-openai-compat",
+      "stop_reason": "toolUse",
+      "usage": {
+        "input": 1532,
+        "output": 154,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 118,
+        "totalTokens": 1686,
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0
+        }
+      },
+      "tool_names": [
+        "knowledge_search"
+      ]
+    },
+    {
+      "entry_at": "2026-10-10T11:01:52.987Z",
+      "message_at": 1791630105573,
+      "model": "kimi-k2.7-code",
+      "provider": "smartcs-openai-compat",
+      "stop_reason": "stop",
+      "usage": {
+        "input": 950,
+        "output": 387,
+        "cacheRead": 1280,
+        "cacheWrite": 0,
+        "reasoning": 296,
+        "totalTokens": 2617,
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0
+        }
+      },
+      "tool_names": []
+    }
+  ],
+  "tools": [
+    {
+      "name": "knowledge_search",
+      "call_id": "knowledge_search_0_ff8b7211",
+      "is_error": false,
+      "call_entry_at": "2026-10-10T11:01:39.380Z",
+      "result_entry_at": "2026-10-10T11:01:45.568Z",
+      "args": {
+        "query": "Apple 账户恢复等待时间，联系客服能否缩短等待",
+        "top_k": 3
+      },
+      "wall_ms_approx": 6188,
+      "result_chunk_ids": [
+        "4e93c0b61f31fc9ba0084371",
+        "9b925299b53c5e4dfb82e9c8",
+        "831a8581615b3e86914f36be"
+      ],
+      "detail_keys": [
+        "tool",
+        "result",
+        "status",
+        "success",
+        "errorCode",
+        "error",
+        "attempts",
+        "operationType",
+        "riskLevel",
+        "requiresConfirmation",
+        "contentTruncated",
+        "audit"
+      ],
+      "content_preview": "[3 items]\n[0].chunk_id=4e93c0b61f31fc9ba0084371\n[0].chunk_index=9\n[0].content=Apple 官方页面说明，出于安全原因，账户恢复可能需要等待数天或更长时间。联系 Apple 支持无法缩短等待时间。\n\n开始账户恢复后，用户会收到一封电子邮件，确认请求并给出预计可重新获得访问权限的日期和时间。Apple 页面说明，用户会在 72 小时内收到这封电子邮件。如果是基于电话号码的 Apple 账户且没有关联电子邮件地址，用户可能会在“信息”App 中以 iMessage 信息形式收到相关内容。\n\n等待期结束后，Apple 会通过短信或自动语音电话发送重新获得账户访问权限的说明。用户也可以在最初邮件指定期限结束后访问 iforg"
+    }
+  ],
+  "limitation": "Tool wall time uses transcript entry timestamps, not an instrumented start/end event."
+}

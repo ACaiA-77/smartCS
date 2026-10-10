@@ -1,0 +1,23 @@
+{
+  "root_pid": 5444,
+  "early_process_tree_pids": [
+    5444,
+    24476
+  ],
+  "command": [
+    "../.venv-smartcs-cpu-control-20261010/Scripts/python.exe",
+    "-m",
+    "scripts.benchmark_reranker_devices",
+    "--inputs",
+    "output/gpu_rerank_eval_20261010/inputs.json",
+    "--output",
+    "output/gpu_rerank_eval_20261010/cpu_fp32_torch211.json",
+    "--device",
+    "cpu",
+    "--dtype",
+    "fp32",
+    "--threads",
+    "8"
+  ],
+  "created_at_utc": "2026-10-10T07:46:27.816807+00:00"
+}

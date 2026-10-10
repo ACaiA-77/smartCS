@@ -1,0 +1,22 @@
+{
+  "stage": "tiny endpoint preflight, NOT measured knowledge Q&A",
+  "status": 200,
+  "wall_seconds": 1.734437800012529,
+  "returned_model": "deepseek-flash",
+  "finish_reason": "stop",
+  "answer": "OK",
+  "usage": {
+    "prompt_tokens": 34,
+    "completion_tokens": 31,
+    "total_tokens": 65,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 29
+    },
+    "prompt_cache_hit_tokens": 0,
+    "prompt_cache_miss_tokens": 34
+  },
+  "reasoning_present": true
+}

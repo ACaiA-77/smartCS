@@ -1,0 +1,36 @@
+# Derive from the deployed CPU image; do not resolve requirements.txt again.
+ARG SMARTCS_BASE_IMAGE=smartcs-api:phase11
+FROM ${SMARTCS_BASE_IMAGE}
+
+USER root
+
+# Reviewed packaging-only exception: torch 2.11 requires setuptools<82,
+# whereas the deployed CPU image has 84.0.0. Pin 80.9.0 from official PyPI
+# only in this GPU layer, before freezing dependencies (including setuptools).
+# --no-deps prevents this packaging adjustment from changing other packages.
+RUN python -m pip install --no-cache-dir --no-deps \
+    --index-url https://pypi.org/simple "setuptools==80.9.0"
+
+# Freeze existing application dependencies and the reviewed setuptools pin.
+# Only torch, an already-installed torchvision, and torch's CUDA/triton
+# runtime dependencies may change after this point. Conflicts fail the build
+# instead of silently upgrading the application stack.
+RUN python -c "from importlib.metadata import distributions; from pathlib import Path; import subprocess, sys; packages = {d.metadata['Name'].lower().replace('_', '-'): d.version for d in distributions()}; Path('/tmp/smartcs-gpu-constraints.txt').write_text(''.join(f'{name}=={version}\n' for name, version in packages.items() if name not in {'torch', 'torchvision', 'triton'} and not name.startswith('nvidia-'))); targets = ['torch==2.11.0+cu128'] + (['torchvision==0.26.0+cu128'] if 'torchvision' in packages else []); subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', '--prefer-binary', '--upgrade-strategy', 'only-if-needed', '--index-url', 'https://download.pytorch.org/whl/cu128', '--constraint', '/tmp/smartcs-gpu-constraints.txt', *targets])" \
+    && python -m pip check \
+    && rm /tmp/smartcs-gpu-constraints.txt
+
+# Transformers 5.18 from_pretrained requires accelerate for any device_map,
+# including single-device cuda:0. Keep this small addition AFTER the CUDA RUN
+# to reuse its download layer. Freeze ALL installed GPU-layer packages,
+# including torch/NVIDIA/triton/setuptools; add psutil 7.0.0 only if absent.
+RUN python -c "from importlib.metadata import distributions; from pathlib import Path; import subprocess, sys; packages = {d.metadata['Name'].lower().replace('_', '-'): d.version for d in distributions()}; Path('/tmp/smartcs-accelerate-constraints.txt').write_text(''.join(f'{name}=={version}\n' for name, version in packages.items())); targets = ['accelerate==1.15.0'] + (['psutil==7.0.0'] if 'psutil' not in packages else []); subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', '--prefer-binary', '--upgrade-strategy', 'only-if-needed', '--index-url', 'https://pypi.org/simple', '--constraint', '/tmp/smartcs-accelerate-constraints.txt', *targets])" \
+    && python -m pip check \
+    && rm /tmp/smartcs-accelerate-constraints.txt
+
+# Only the modules needed for explicit reranker/embedding device selection.
+# No workspace-wide COPY, credentials, models, indexes, or databases.
+COPY --chown=app:app rag/ /app/rag/
+COPY --chown=app:app memory/ /app/memory/
+
+USER app
+# Inherit WORKDIR, CMD, EXPOSE, ENV and HEALTHCHECK from the CPU image.

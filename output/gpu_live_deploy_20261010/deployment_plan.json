@@ -1,0 +1,62 @@
+{
+  "old_image_id": "sha256:ce0c6c24dfc500e2eb98f1f794a0486ee9f0033b1658f21882d7fe2de6934a03",
+  "rollback_tag": "smartcs-api:cpu-before-gpu-20261010",
+  "gpu_tag": "smartcs-api:gpu-fp32-20261010",
+  "private_preserve_config": "D:\\Workspace_for_Codex\\project005_SmartCS\\.runtime\\gpu_live_deploy_20261010\\.env.preserve-api.compose.json",
+  "private_original_env": "D:\\Workspace_for_Codex\\project005_SmartCS\\.runtime\\gpu_live_deploy_20261010\\.env.original-api",
+  "original_env_values_not_in_public_output": true,
+  "changed_environment_keys": [
+    "SMARTCS_EMBEDDING_DEVICE",
+    "SMARTCS_RERANK_DEVICE",
+    "SMARTCS_RERANK_DTYPE",
+    "SMARTCS_RERANK_MAX_CHARS"
+  ],
+  "new_device_settings": {
+    "SMARTCS_EMBEDDING_DEVICE": "cpu",
+    "SMARTCS_RERANK_DEVICE": "cuda:0",
+    "SMARTCS_RERANK_DTYPE": "fp32",
+    "SMARTCS_RERANK_MAX_CHARS": "0"
+  },
+  "rollout_preserved": "0",
+  "mounts": [
+    {
+      "type": "bind",
+      "source": "D:\\Workspace_for_Codex\\project005_SmartCS\\python-impl\\data",
+      "target": "/app/data",
+      "bind": {}
+    },
+    {
+      "type": "bind",
+      "source": "D:\\Workspace_for_Codex\\project005_SmartCS\\python-impl\\vector_store",
+      "target": "/app/vector_store",
+      "bind": {}
+    },
+    {
+      "type": "bind",
+      "source": "D:\\Workspace_for_Codex\\project005_SmartCS\\python-impl\\artifacts\\rag_jieba",
+      "target": "/app/artifacts/rag_jieba",
+      "read_only": true,
+      "bind": {}
+    },
+    {
+      "type": "volume",
+      "source": "smartcs-hf-cache",
+      "target": "/home/app/.cache/huggingface",
+      "volume": {}
+    },
+    {
+      "type": "volume",
+      "source": "smartcs-st-cache",
+      "target": "/home/app/.cache/sentence-transformers",
+      "volume": {}
+    }
+  ],
+  "ports": [
+    {
+      "mode": "ingress",
+      "target": 8000,
+      "published": "8001",
+      "protocol": "tcp"
+    }
+  ]
+}

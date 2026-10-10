@@ -1,0 +1,124 @@
+{
+  "smartcs-api": {
+    "image": "smartcs-api:phase11",
+    "image_id": "sha256:ce0c6c24dfc500e2eb98f1f794a0486ee9f0033b1658f21882d7fe2de6934a03",
+    "created": "2026-10-04T16:14:57.228561793Z",
+    "safe_env": {
+      "RAG_SPARSE_MODE": "global_corpus_v1",
+      "AUTH_COOKIE_SECURE": "false",
+      "RAG_RERANKER_BACKEND": "cross_encoder",
+      "EMBEDDING_MODEL": "BAAI/bge-m3",
+      "SMARTCS_PI_ROLLOUT_PERCENT": "0",
+      "PI_HARNESS_BASE_URL": "http://smartcs-pi-harness:8971",
+      "EMBEDDING_BACKEND": "local",
+      "RAG_INDEX_ROOT": "/app/artifacts/rag_jieba/production_indexes",
+      "HF_HOME": "/home/app/.cache/huggingface"
+    },
+    "mounts": [
+      {
+        "Type": "bind",
+        "Source": "D:\\Workspace_for_Codex\\project005_SmartCS\\python-impl\\data",
+        "Destination": "/app/data",
+        "Mode": "rw",
+        "RW": true,
+        "Propagation": "rprivate"
+      },
+      {
+        "Type": "bind",
+        "Source": "D:\\Workspace_for_Codex\\project005_SmartCS\\python-impl\\vector_store",
+        "Destination": "/app/vector_store",
+        "Mode": "rw",
+        "RW": true,
+        "Propagation": "rprivate"
+      },
+      {
+        "Type": "bind",
+        "Source": "D:\\Workspace_for_Codex\\project005_SmartCS\\python-impl\\artifacts\\rag_jieba",
+        "Destination": "/app/artifacts/rag_jieba",
+        "Mode": "ro",
+        "RW": false,
+        "Propagation": "rprivate"
+      },
+      {
+        "Type": "volume",
+        "Name": "python-impl_smartcs-hf-cache",
+        "Source": "/var/lib/docker/volumes/python-impl_smartcs-hf-cache/_data",
+        "Destination": "/home/app/.cache/huggingface",
+        "Driver": "local",
+        "Mode": "rw",
+        "RW": true,
+        "Propagation": ""
+      },
+      {
+        "Type": "volume",
+        "Name": "python-impl_smartcs-st-cache",
+        "Source": "/var/lib/docker/volumes/python-impl_smartcs-st-cache/_data",
+        "Destination": "/home/app/.cache/sentence-transformers",
+        "Driver": "local",
+        "Mode": "rw",
+        "RW": true,
+        "Propagation": ""
+      }
+    ],
+    "compose_config_files": "D:\\Workspace_for_Codex\\project005_SmartCS\\python-impl\\compose.yaml",
+    "compose_project": "python-impl",
+    "ports": {
+      "8000/tcp": [
+        {
+          "HostIp": "",
+          "HostPort": "8001"
+        }
+      ]
+    }
+  },
+  "smartcs-pi-harness": {
+    "image": "smartcs-pi-harness:local",
+    "image_id": "sha256:aea6683e7b9a140aeb28c415f003327830d67b452d16c387f4d541038ba8c8bf",
+    "created": "2026-10-04T16:15:01.941907003Z",
+    "safe_env": {
+      "SMARTCS_KNOWLEDGE_TRANSPORT": "http",
+      "RAG_INDEX_ROOT": "/app/artifacts/rag_jieba/production_indexes",
+      "SMARTCS_WRITE_MODE": "live",
+      "SMARTCS_PROVIDER_MODE": "openai",
+      "EMBEDDING_MODEL": "BAAI/bge-m3",
+      "PYTHON_INTERNAL_BASE_URL": "http://smartcs-api:8000",
+      "SMARTCS_RAG_TIMING": "0",
+      "RAG_RERANKER_BACKEND": "cross_encoder",
+      "AUTH_COOKIE_SECURE": "false",
+      "SMARTCS_SKILLS": "on",
+      "RAG_SPARSE_MODE": "global_corpus_v1",
+      "SMARTCS_TOOL_TIMEOUT_MS": "90000",
+      "EMBEDDING_BACKEND": "local"
+    },
+    "mounts": [
+      {
+        "Type": "volume",
+        "Name": "python-impl_smartcs-pi-runtime",
+        "Source": "/var/lib/docker/volumes/python-impl_smartcs-pi-runtime/_data",
+        "Destination": "/app/.runtime",
+        "Driver": "local",
+        "Mode": "rw",
+        "RW": true,
+        "Propagation": ""
+      },
+      {
+        "Type": "bind",
+        "Source": "/run/desktop/mnt/host/d/Workspace_for_Codex/project005_SmartCS/python-impl/.env",
+        "Destination": "/app/runtime-env/.env",
+        "Mode": "ro",
+        "RW": false,
+        "Propagation": "rprivate"
+      }
+    ],
+    "compose_config_files": "D:\\Workspace_for_Codex\\project005_SmartCS\\python-impl\\compose.yaml",
+    "compose_project": "python-impl",
+    "ports": {
+      "8971/tcp": [
+        {
+          "HostIp": "127.0.0.1",
+          "HostPort": "8971"
+        }
+      ]
+    }
+  }
+}

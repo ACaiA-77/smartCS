@@ -1,0 +1,6 @@
+{
+  "returncode": 0,
+  "stdout": "torch 2.11.0+cu128 runtime 12.8\nCrossEncoder import OK\navailable True count 1\nmatrix cuda:0 torch.float32 True\n",
+  "stderr": "",
+  "stage": "pre-deployment ephemeral container; production still CPU"
+}

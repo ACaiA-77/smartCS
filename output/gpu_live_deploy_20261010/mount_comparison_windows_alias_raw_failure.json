@@ -1,0 +1,95 @@
+{
+  "before": [
+    {
+      "Type": "bind",
+      "Source": "D:\\Workspace_for_Codex\\project005_SmartCS\\python-impl\\artifacts\\rag_jieba",
+      "Destination": "/app/artifacts/rag_jieba",
+      "Mode": "ro",
+      "RW": false,
+      "Propagation": "rprivate"
+    },
+    {
+      "Type": "bind",
+      "Source": "D:\\Workspace_for_Codex\\project005_SmartCS\\python-impl\\data",
+      "Destination": "/app/data",
+      "Mode": "rw",
+      "RW": true,
+      "Propagation": "rprivate"
+    },
+    {
+      "Type": "bind",
+      "Source": "D:\\Workspace_for_Codex\\project005_SmartCS\\python-impl\\vector_store",
+      "Destination": "/app/vector_store",
+      "Mode": "rw",
+      "RW": true,
+      "Propagation": "rprivate"
+    },
+    {
+      "Type": "volume",
+      "Name": "python-impl_smartcs-hf-cache",
+      "Source": "/var/lib/docker/volumes/python-impl_smartcs-hf-cache/_data",
+      "Destination": "/home/app/.cache/huggingface",
+      "Driver": "local",
+      "Mode": "rw",
+      "RW": true,
+      "Propagation": ""
+    },
+    {
+      "Type": "volume",
+      "Name": "python-impl_smartcs-st-cache",
+      "Source": "/var/lib/docker/volumes/python-impl_smartcs-st-cache/_data",
+      "Destination": "/home/app/.cache/sentence-transformers",
+      "Driver": "local",
+      "Mode": "rw",
+      "RW": true,
+      "Propagation": ""
+    }
+  ],
+  "after": [
+    {
+      "Type": "bind",
+      "Source": "D:\\Workspace_for_Codex\\project005_SmartCS\\python-impl\\artifacts\\rag_jieba",
+      "Destination": "/app/artifacts/rag_jieba",
+      "Mode": "ro",
+      "RW": false,
+      "Propagation": "rprivate"
+    },
+    {
+      "Type": "bind",
+      "Source": "/run/desktop/mnt/host/d/Workspace_for_Codex/project005_SmartCS/python-impl/data",
+      "Destination": "/app/data",
+      "Mode": "rw",
+      "RW": true,
+      "Propagation": "rprivate"
+    },
+    {
+      "Type": "bind",
+      "Source": "/run/desktop/mnt/host/d/Workspace_for_Codex/project005_SmartCS/python-impl/vector_store",
+      "Destination": "/app/vector_store",
+      "Mode": "rw",
+      "RW": true,
+      "Propagation": "rprivate"
+    },
+    {
+      "Type": "volume",
+      "Name": "python-impl_smartcs-hf-cache",
+      "Source": "/var/lib/docker/volumes/python-impl_smartcs-hf-cache/_data",
+      "Destination": "/home/app/.cache/huggingface",
+      "Driver": "local",
+      "Mode": "rw",
+      "RW": true,
+      "Propagation": ""
+    },
+    {
+      "Type": "volume",
+      "Name": "python-impl_smartcs-st-cache",
+      "Source": "/var/lib/docker/volumes/python-impl_smartcs-st-cache/_data",
+      "Destination": "/home/app/.cache/sentence-transformers",
+      "Driver": "local",
+      "Mode": "rw",
+      "RW": true,
+      "Propagation": ""
+    }
+  ],
+  "equal_order_independent": false
+}

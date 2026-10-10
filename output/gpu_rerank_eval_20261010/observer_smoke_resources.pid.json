@@ -1,0 +1,13 @@
+{
+  "root_pid": 26540,
+  "early_process_tree_pids": [
+    26540,
+    55668
+  ],
+  "command": [
+    "../.venv-smartcs-cpu-control-20261010/Scripts/python.exe",
+    "-c",
+    "import time; a=bytearray(64*1024*1024); time.sleep(3); print(\"observer_smoke=ok\")"
+  ],
+  "created_at_utc": "2026-10-10T07:46:00.525010+00:00"
+}

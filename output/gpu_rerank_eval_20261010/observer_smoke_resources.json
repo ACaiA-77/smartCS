@@ -1,0 +1,65 @@
+{
+  "created_at_utc": "2026-10-10T07:46:00.525010+00:00",
+  "root_pid": 26540,
+  "early_process_tree_pids": [
+    26540,
+    55668
+  ],
+  "command": [
+    "../.venv-smartcs-cpu-control-20261010/Scripts/python.exe",
+    "-c",
+    "import time; a=bytearray(64*1024*1024); time.sleep(3); print(\"observer_smoke=ok\")"
+  ],
+  "return_code": 0,
+  "wall_seconds": 4.246482600225136,
+  "before": {
+    "ram_total_bytes": 33601986560,
+    "ram_available_bytes": 4011859968,
+    "ram_percent": 88.1,
+    "swap_total_bytes": 46831497216,
+    "swap_used_bytes": 8157745151
+  },
+  "after": {
+    "ram_total_bytes": 33601986560,
+    "ram_available_bytes": 4012523520,
+    "ram_percent": 88.1,
+    "swap_total_bytes": 46831497216,
+    "swap_used_bytes": 8157745151
+  },
+  "sample_interval_seconds": 2,
+  "sampling_errors": [],
+  "observed_min_available_ram_bytes": 3955453952,
+  "observed_peak_process_tree_rss_bytes": 85995520,
+  "process_memory_scope": "root plus early-discovered children; no whole-system snapshots during inference",
+  "observations": [
+    {
+      "elapsed_seconds": 0.23937810002826154,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 3973787648,
+      "ram_percent": 88.2,
+      "swap_total_bytes": 46831497216,
+      "swap_used_bytes": 8157745151,
+      "process_tree_rss_bytes": 85995520,
+      "process_tree_vms_bytes": 75374592,
+      "process_tree_count": 2
+    },
+    {
+      "elapsed_seconds": 2.241966700181365,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 3955453952,
+      "ram_percent": 88.2,
+      "swap_total_bytes": 46831497216,
+      "swap_used_bytes": 8157745151,
+      "process_tree_rss_bytes": 85995520,
+      "process_tree_vms_bytes": 75374592,
+      "process_tree_count": 2
+    }
+  ],
+  "limits": [
+    "RSS and host memory are sampled, not exact peaks.",
+    "Shared pages can be counted more than once in process-tree RSS.",
+    "Late-created children are not observed.",
+    "Windows swap counters alone cannot establish active paging.",
+    "The machine and existing services are not isolated or stopped."
+  ]
+}

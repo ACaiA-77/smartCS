@@ -1,0 +1,5 @@
+{
+  "error_type": "CalledProcessError",
+  "message": "Command '['docker', 'exec', 'smartcs-pi-harness', 'node', '-e', \"import('./dist/config/env.js').then(m=>{const c=m.loadLlmConfigFromPythonEnv(); if(c.model!=='deepseek-flash'||c.baseUrl!=='https://api.deepseek.com/v1')process.exit(2); console.log(JSON.stringify({model:c.model,base_url:c.baseUrl,key_present:Boolean(c.apiKey)}));})\"]' returned non-zero exit status 1.",
+  "rollback_initiated": true
+}

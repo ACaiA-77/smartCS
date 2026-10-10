@@ -725,7 +725,7 @@ docker build -t smart-cs-python .
 docker build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple -t smart-cs-python .
 ```
 
-Dockerfile 会预装 CPU 版 PyTorch。项目使用 CPU 本地 Embedding，不需要 CUDA 和 NVIDIA 运行库；因此不要把 GPU 版 PyTorch 安装进镜像。
+基础 Dockerfile 会预装 CPU 版 PyTorch，默认部署保持 CPU，不需要 CUDA 和 NVIDIA 运行库。仅需 reranker GPU 加速时，使用下文独立的 GPU 派生镜像与 Compose override，不修改基础镜像构建配置。
 
 运行服务（临时前台模式，关闭终端会影响查看日志）：
 
@@ -799,6 +799,49 @@ docker stop lucid_johnson
 ```
 
 日志中如果出现 `localhost:4317` / `OTLP` / `Failed to export traces`，通常只是 OpenTelemetry 追踪收集器未启动，不影响 `/health`、`/docs` 和 `/api/chat` 使用。需要追踪时再单独启动 Jaeger 或 OTLP collector。
+
+### 可选 GPU 部署（仅 reranker）
+
+`Dockerfile.gpu` 从已部署的 CPU 镜像派生（`ARG SMARTCS_BASE_IMAGE=smartcs-api:phase11`），使用官方 `https://download.pytorch.org/whl/cu128` 的 `torch==2.11.0+cu128`。不重装宽松版本的 `requirements.txt`，现有应用依赖冻结。packaging 兼容例外是：torch 2.11 要求 `setuptools<82`，原 CPU 镜像的 `84.0.0` 与之冲突（不是网络或 registry 问题），因此先从官方 PyPI 无依赖安装固定 `setuptools==80.9.0`，再将该已审查版本一同冻结。降级仅发生在 GPU 派生层，不修改原 CPU 镜像、运行容器或宿主机环境；ST/Transformers/NumPy/FastAPI 等应用版本保持不变。CUDA 安装阶段只允许 torch/CUDA/triton 依赖变化。另一个加载依赖例外是：Transformers 5.18 的 `from_pretrained` 使用任何 `device_map`（包括单设备 `cuda:0`）都要求 accelerate，因此在 CUDA 安装层之后独立从官方 PyPI 安装 `accelerate==1.15.0`；若缺少 psutil，则新增固定 `psutil==7.0.0`，已有 psutil 保持原版本。这一独立步骤按实际 GPU 层 metadata 冻结所有已有包（含应用依赖、torch、NVIDIA/triton 和 setuptools），不允许已有版本漂移，并复用之前的 CUDA 下载层缓存。各安装阶段必须通过 `pip check`；依赖冲突会失败而不是自动升级应用栈。如果原镜像已安装 torchvision，才替换为配套 `0.26.0+cu128`，否则不安装。只 COPY `rag/`、`memory/`，继承原镜像的 `USER app`、启动命令、健康检查和缓存路径。
+
+前提：Linux 容器、支持 CUDA 12.8 的 NVIDIA GPU、可用的 NVIDIA 容器运行时（Linux 安装 NVIDIA Container Toolkit；Windows 使用 Docker Desktop WSL2 GPU 支持）。建议 CUDA 12.8 对应的 NVIDIA R570+ 驱动（Linux >=570.26、Windows >=570.65），实际兼容性需按 GPU 与 NVIDIA/PyTorch 支持表确认；不依赖宿主机安装完整 CUDA Toolkit。Compose 需支持 NVIDIA device reservation（Compose V2 支持，已验证版本 v5.5.1）。
+
+**切换前必须确认源码已实现** `SMARTCS_RERANK_DEVICE`、`SMARTCS_RERANK_DTYPE`、`SMARTCS_EMBEDDING_DEVICE`：仅设置环境变量不会使旧版代码自动上 GPU。部署前先确认设备支持及原镜像内 torchvision 有无，再按以下步骤构建、切换并验收。
+
+在同一 PowerShell 会话查出运行容器的实际 image ID，并为该 ID 创建独立的本地基础/回滚标签（不要仅依赖可能移动的 phase11 标签）。记录标签与原 ID，校验标签的 `.Id` 相等后再构建并仅重建 API。BuildKit 的 `FROM` 需要命名镜像引用：裸本地 `sha256:...` image ID 会被解释为 `docker.io/library/sha256:...` 并尝试拉取；这是引用格式约束，不是 registry 权限问题。不要把裸 image ID 传给 `SMARTCS_BASE_IMAGE`：
+
+```powershell
+$cpuImageId = (docker inspect --format '{{.Image}}' smartcs-api).Trim()
+if ($LASTEXITCODE -ne 0 -or -not $cpuImageId) { throw '无法获取原 CPU image ID，禁止继续' }
+$cpuImageTag = "smartcs-api:cpu-before-gpu-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+docker image tag $cpuImageId $cpuImageTag
+if ($LASTEXITCODE -ne 0) { throw '保存 CPU 基础/回滚标签失败，禁止继续' }
+$tagImageId = (docker image inspect --format '{{.Id}}' $cpuImageTag).Trim()
+if ($LASTEXITCODE -ne 0 -or $tagImageId -ne $cpuImageId) { throw 'CPU 标签与原 image ID 不一致，禁止继续' }
+$env:SMARTCS_GPU_IMAGE = 'smartcs-api:phase11-gpu'
+# 公平对照旧 phase11 时设为 0；生产默认 768，可自行覆盖。
+# $env:SMARTCS_RERANK_MAX_CHARS = '0'
+docker build -f Dockerfile.gpu --build-arg "SMARTCS_BASE_IMAGE=$cpuImageTag" -t $env:SMARTCS_GPU_IMAGE .
+if ($LASTEXITCODE -ne 0) { throw 'GPU 构建失败，保留 CPU 服务' }
+docker compose -f compose.yaml -f compose.gpu.yaml config --quiet
+if ($LASTEXITCODE -ne 0) { throw 'GPU Compose 校验失败，禁止切换' }
+docker compose -f compose.yaml -f compose.gpu.yaml up -d --no-deps --no-build --pull never smartcs-api
+```
+
+`compose.gpu.yaml` 只改变 `smartcs-api`：申请 NVIDIA GPU，明确 `SMARTCS_RERANK_DEVICE=cuda:0`、`SMARTCS_RERANK_DTYPE=fp32`、`SMARTCS_EMBEDDING_DEVICE=cpu`；**不是把 LLM 放到本机 GPU**。`SMARTCS_RERANK_MAX_CHARS` 默认 768、可设 0 禁用截断；须在调用 Compose 的 shell（或其插值 env）设置，只改 service 的 `.env.docker` 不会覆盖 override 中的值。不用 `--env-file .env.docker` 改写 Compose 插值来源，以免意外改变 rollout 等现有配置。
+
+端口、挂载卷、harness、凭据、rollout 均不变；保留当前 `knowledge transport=http`，不启动 MCP gateway，不重建 harness。保留现有模型缓存、FAISS/只读 jieba 索引、SQLite/MySQL 与会话数据；不下载模型、不重建索引、不迁移 DB。启动前确认缓存已有完整模型，验收设备/健康状态失败立即回滚。不要执行 `down -v` 或镜像 prune；保留回滚标签及实际 ID。部署期间不要让已有 Watchtower 自动更新此 API。
+
+回滚 CPU 使用此前保存并校验的本地标签。跨会话时先恢复记录的 `$cpuImageTag` 和 `$cpuImageId`，不要重新读取已切换的 GPU 容器来获取原 CPU ID；回滚前再次核对标签：
+
+```powershell
+$tagImageId = (docker image inspect --format '{{.Id}}' $cpuImageTag).Trim()
+if ($LASTEXITCODE -ne 0 -or $tagImageId -ne $cpuImageId) { throw '回滚标签与原 CPU image ID 不一致，禁止继续' }
+$env:SMARTCS_IMAGE = $cpuImageTag
+docker compose -f compose.yaml up -d --no-deps --no-build --pull never smartcs-api
+```
+
+回滚时**不带** `compose.gpu.yaml`，恢复原有 CPU 环境配置；基础 Compose 与 Dockerfile 默认行为不变。Linux CUDA wheel 和 NVIDIA 运行库会额外下载数 GB，派生层也增加数 GB；原 CPU torch 所在基础层不会因替换而缩小，需为下载、解包、构建缓存与两份镜像预留磁盘空间。应按本机环境验收实际生效的参数、模型设备、健康状态和真实问答；固定基准结果不等于生产 SLA。
 
 ### GitHub Actions 工作流配置
 

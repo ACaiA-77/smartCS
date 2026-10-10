@@ -1,0 +1,29 @@
+{
+  "model": "deepseek-flash",
+  "official_product": "DeepSeek-V4.1-Flash",
+  "base_url": "https://api.deepseek.com/v1",
+  "provider_mode": "openai",
+  "thinking": "API default enabled/high; no thinking override added",
+  "changed_keys": {
+    "smartcs-api": [
+      "MODEL_NAME",
+      "OPENAI_API_KEY",
+      "OPENAI_BASE_URL"
+    ],
+    "smartcs-pi-harness": [
+      "MODEL_NAME",
+      "OPENAI_API_KEY",
+      "OPENAI_BASE_URL"
+    ]
+  },
+  "private_override_path": "D:\\Workspace_for_Codex\\project005_SmartCS\\.runtime\\deepseek_flash_switch_20261010\\.env.new-model.compose.json",
+  "private_rollback_path": "D:\\Workspace_for_Codex\\project005_SmartCS\\.runtime\\deepseek_flash_switch_20261010\\.env.rollback-model.compose.json",
+  "before_image_ids": {
+    "smartcs-api": "sha256:94f89cbb9102d5af24d5c59cdd7548a7f1dd3aa2b0bbfec14ccdcfdfdd37dae2",
+    "smartcs-pi-harness": "sha256:aea6683e7b9a140aeb28c415f003327830d67b452d16c387f4d541038ba8c8bf"
+  },
+  "gpu_config_unchanged": true,
+  "private_backups_outside_repository_root": true,
+  "runtime_env_files_git_ignored": true,
+  "images_not_rebuilt_with_credentials": true
+}

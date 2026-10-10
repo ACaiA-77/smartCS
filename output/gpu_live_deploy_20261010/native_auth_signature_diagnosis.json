@@ -1,0 +1,5 @@
+{
+  "native_8000_token_checked_with_deployed_container_key": "InvalidSignatureError",
+  "token_or_key_saved": false,
+  "workaround": "Use legitimate Docker login on 8001 for chat; session ownership is rechecked normally."
+}

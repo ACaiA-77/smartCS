@@ -1,0 +1,53 @@
+{
+  "source_and_runtime": {
+    "torch": "2.11.0+cu128",
+    "cuda": "12.8",
+    "cuda_available": true,
+    "hashes": {
+      "rag/reranker.py": "1959846ec66d63d9c22dd41b657a5a4ddf1504500551490e9da819af71f1a49f",
+      "rag/model_devices.py": "9f5458e1aa1e488339c238ec720bfafa8420e1f0b1a4936131958db237011408",
+      "rag/embeddings.py": "7eb0b2c1f0df207f10a3e6c8f3a1a5165d780c1cb7a1749402142922eba8af8d",
+      "memory/long_term.py": "2ebc7a547a9142e7c77b2d4871015c20aa20b5bf36141b6ad12035a8939bf750"
+    }
+  },
+  "health": {
+    "http://127.0.0.1:8001/health": {
+      "status": 200,
+      "body": {
+        "status": "healthy",
+        "version": "1.0.0"
+      }
+    },
+    "http://127.0.0.1:8971/health": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "sessions": {
+          "active": 0,
+          "queued": 0,
+          "evicted": 2
+        }
+      }
+    },
+    "http://127.0.0.1:8971/ready": {
+      "status": 200,
+      "body": {
+        "ready": true,
+        "degraded": false,
+        "warnings": [],
+        "checks": {
+          "mysql": {
+            "ok": true
+          },
+          "business_runtime": {
+            "ok": true
+          },
+          "mcp": {
+            "enabled": false,
+            "ok": true
+          }
+        }
+      }
+    }
+  }
+}
