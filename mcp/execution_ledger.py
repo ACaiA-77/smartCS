@@ -5,10 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+
+class LedgerClaimLost(RuntimeError):
+    """A recovery worker changed or released the claim before execution."""
 
 
 def canonical_arguments_hash(arguments: dict[str, Any]) -> str:
@@ -121,7 +126,11 @@ class ExecutionLedger:
                         now,
                     ),
                 )
-                return LedgerClaim("claimed")
+                row = connection.execute(
+                    "SELECT * FROM tool_executions WHERE idempotency_key = ?",
+                    (idempotency_key,),
+                ).fetchone()
+                return LedgerClaim("claimed", self._record(row))
 
             record = self._record(row)
             if (
@@ -133,13 +142,57 @@ class ExecutionLedger:
                 return LedgerClaim("in_progress", record)
             return LedgerClaim("replay", record)
 
-    def complete(self, idempotency_key: str, result: Any) -> dict[str, Any]:
+    def complete(
+        self, idempotency_key: str, result: Any, *,
+        connection: sqlite3.Connection | None = None,
+        expected_claim: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Store a successful or business-completed execution result."""
-        return self._finish(idempotency_key, "completed", result)
+        return self._finish(idempotency_key, "completed", result, connection, expected_claim)
 
-    def fail(self, idempotency_key: str, result: Any) -> dict[str, Any]:
+    def fail(
+        self, idempotency_key: str, result: Any, *,
+        expected_claim: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Store a final failed execution result."""
-        return self._finish(idempotency_key, "failed", result)
+        return self._finish(idempotency_key, "failed", result, expected_claim=expected_claim)
+
+    @contextmanager
+    def atomic_write(
+        self, idempotency_key: str, expected_claim: dict[str, Any], business_db: str | Path,
+    ) -> Iterator[sqlite3.Connection]:
+        """Lock the claimed execution and business changes in the same database."""
+        if (
+            str(self.db_path) == ":memory:"
+            or str(business_db) == ":memory:"
+            or self.db_path.resolve() != Path(business_db).resolve()
+        ):
+            raise ValueError("atomic write requires the ledger and business database to match")
+        connection = self._connect()
+        try:
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_claim(connection, idempotency_key, expected_claim)
+            yield connection
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _require_claim(
+        connection: sqlite3.Connection, idempotency_key: str, expected: dict[str, Any],
+    ) -> None:
+        row = connection.execute(
+            "SELECT * FROM tool_executions WHERE idempotency_key = ?", (idempotency_key,),
+        ).fetchone()
+        if row is None or row["status"] != "in_progress" or any(
+            row[field] != expected[field]
+            for field in ("tool_name", "arguments_hash", "created_at", "updated_at")
+        ):
+            raise LedgerClaimLost("execution claim changed before atomic write")
 
     def get(self, idempotency_key: str) -> dict[str, Any] | None:
         """Return one ledger row, including its decoded result when present."""
@@ -243,7 +296,16 @@ class ExecutionLedger:
             )
         return cursor.rowcount == 1
 
-    def _finish(self, idempotency_key: str, status: str, result: Any) -> dict[str, Any]:
+    def _finish(
+        self, idempotency_key: str, status: str, result: Any,
+        connection: sqlite3.Connection | None = None,
+        expected_claim: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if connection is None:
+            with self._connect() as owned_connection:
+                if expected_claim is not None:
+                    owned_connection.execute("BEGIN IMMEDIATE")
+                return self._finish(idempotency_key, status, result, owned_connection, expected_claim)
         if hasattr(result, "as_dict"):
             result = result.as_dict()
         if not isinstance(result, dict):
@@ -254,27 +316,28 @@ class ExecutionLedger:
             separators=(",", ":"),
         )
         now = self._now()
-        with self._connect() as connection:
-            cursor = connection.execute(
-                """
-                UPDATE tool_executions
-                SET status = ?, result_json = ?, error_code = ?, error = ?,
-                    operation_type = ?, attempts = ?, updated_at = ?
-                WHERE idempotency_key = ?
-                """,
-                (
-                    status,
-                    result_json,
-                    result.get("error_code"),
-                    result.get("error"),
-                    result.get("operation_type"),
-                    int(result.get("attempts", 0)),
-                    now,
-                    idempotency_key,
-                ),
-            )
-            if cursor.rowcount != 1:
-                raise KeyError(f"unknown idempotency key: {idempotency_key}")
+        if expected_claim is not None:
+            self._require_claim(connection, idempotency_key, expected_claim)
+        cursor = connection.execute(
+            """
+            UPDATE tool_executions
+            SET status = ?, result_json = ?, error_code = ?, error = ?,
+                operation_type = ?, attempts = ?, updated_at = ?
+            WHERE idempotency_key = ?
+            """,
+            (
+                status,
+                result_json,
+                result.get("error_code"),
+                result.get("error"),
+                result.get("operation_type"),
+                int(result.get("attempts", 0)),
+                now,
+                idempotency_key,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise KeyError(f"unknown idempotency key: {idempotency_key}")
         return result
 
     def _connect(self) -> sqlite3.Connection:
@@ -302,4 +365,4 @@ class ExecutionLedger:
         return datetime.now(timezone.utc).isoformat()
 
 
-__all__ = ["ExecutionLedger", "LedgerClaim", "canonical_arguments_hash"]
+__all__ = ["ExecutionLedger", "LedgerClaim", "LedgerClaimLost", "canonical_arguments_hash"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -118,9 +119,13 @@ class RefundService:
         user_id: str,
         reason: str,
         now: datetime | None = None,
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> RefundResult:
+        """Use a caller-owned transaction when supplied; otherwise commit locally."""
         timestamp = _timestamp(datetime.now() if now is None else now)
-        with self.repository.transaction() as connection:
+        transaction = self.repository.transaction() if connection is None else nullcontext(connection)
+        with transaction as connection:
             order = self._order(connection, order_id)
             if order is None:
                 return RefundResult(order_id, user_id, False, "not_found")

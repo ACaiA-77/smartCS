@@ -6,6 +6,7 @@ import sqlite3
 import hashlib
 import json
 import uuid
+from contextlib import nullcontext
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
@@ -133,7 +134,10 @@ class TicketService:
         now: datetime | None = None,
         category: str | None = None,
         request_payload_hash: str | None = None,
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> dict[str, Any]:
+        """Use a caller-owned transaction when supplied; otherwise commit locally."""
         if category is not None:
             ticket_type = category
         values = self._normalize(
@@ -158,7 +162,8 @@ class TicketService:
             return self._failure("invalid_ticket_content", values)
 
         timestamp = (now or datetime.now()).isoformat()
-        with self.repository.transaction() as connection:
+        transaction = self.repository.transaction() if connection is None else nullcontext(connection)
+        with transaction as connection:
             existing = connection.execute(
                 "SELECT * FROM support_tickets WHERE client_request_id = ?",
                 (values["client_request_id"],),

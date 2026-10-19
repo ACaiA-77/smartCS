@@ -132,7 +132,8 @@ Knowledge：HybridRetriever = Dense(FAISS) + Sparse(BM25) → RRF → Cross-Enco
   同一套领域服务）。它不是新功能的主链路，Pi 会话走的是上面的 `/internal/*` 通道。
 - 聊天链路中的副作用写入统一经过 `ToolExecutor`；`WRITE` 工具在非 `live` 部署下
   在服务端就不可达，而不是"被提示词劝阻"。
-- 退款和工单效果由业务域写入 SQLite，`ExecutionLedger` 记录执行幂等和 replay。
+- 本地退款申请和工单的业务变更，与 `ExecutionLedger` 的完成结果在同一 SQLite
+  事务提交；初始执行占用仍单独落库，保留幂等、结果重放和旧记录恢复。
 - 工单使用 `client_request_id` 加 canonical payload hash 表示业务请求身份，跨用户或
   payload 冲突不会返回旧工单信息。
 - 崩溃恢复见 [docs/recovery.md](docs/recovery.md)：收据（`agent_run_receipt`）与

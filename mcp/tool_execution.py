@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from mcp.approval_store import ApprovalService
-from mcp.execution_ledger import ExecutionLedger, canonical_arguments_hash
+from mcp.execution_ledger import ExecutionLedger, LedgerClaimLost, canonical_arguments_hash
 from mcp.mcp_server import MCPToolServer, ToolCallResult, ToolDefinition, customer_tool_arguments
 from checkpoint.models import active_checkpoint
 from context.manager import active_context
@@ -279,6 +279,10 @@ class ToolExecutor:
                     0,
                     None,
                 )
+        atomic = tool.local_atomic_write
+        if operation_type == "write" and atomic is not None and atomic.handler is tool.handler:
+            return self._execute_atomic(tool, arguments, idempotency_key, claim.record, requires_confirmation)
+
         max_attempts = self._max_attempts(tool, operation_type)
         started = time.perf_counter()
         last_error: Exception | None = None
@@ -382,6 +386,61 @@ class ToolExecutor:
         if operation_type == "write":
             self.ledger.fail(idempotency_key, result)
         return result
+
+    def _execute_atomic(
+        self, tool: ToolDefinition, arguments: dict[str, Any], idempotency_key: str,
+        claim: dict[str, Any], requires_confirmation: bool,
+    ) -> ToolExecutionResult:
+        """No awaits: only the registered local SQLite work runs under this lock."""
+        started = time.perf_counter()
+        error_code = "execution_error"
+        atomic = tool.local_atomic_write
+        try:
+            with self.ledger.atomic_write(idempotency_key, claim, atomic.repository.db_path) as connection:
+                output = atomic.execute(connection, arguments)
+                if inspect.isawaitable(output):
+                    if inspect.iscoroutine(output):
+                        output.close()
+                    raise TypeError("local atomic write must be synchronous")
+                if isinstance(output, ToolCallResult):
+                    if not output.success:
+                        error_code = "tool_failed"
+                        raise ValueError(output.error or "tool call failed")
+                    output = output.result
+                try:
+                    json.dumps(output, ensure_ascii=False)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    error_code = "result_not_serializable"
+                    raise ValueError("tool result is not JSON serializable") from exc
+                result = ToolExecutionResult(
+                    tool_name=tool.name,
+                    success=True,
+                    status="completed",
+                    result=output,
+                    attempts=1,
+                    duration_ms=self._duration_ms(started),
+                    operation_type="write",
+                    risk_level=tool.risk_level,
+                    requires_confirmation=requires_confirmation,
+                )
+                self.ledger.complete(
+                    idempotency_key, result, connection=connection, expected_claim=claim,
+                )
+            return result
+        except LedgerClaimLost as exc:
+            return self._failure(
+                tool, "write", requires_confirmation, "execution_claim_lost", str(exc), 0, started,
+            )
+        except Exception as exc:
+            result = self._failure(
+                tool, "write", requires_confirmation, error_code, str(exc), 1, started,
+            )
+            # Recovery may have completed or replaced the durable claim after rollback.
+            try:
+                self.ledger.fail(idempotency_key, result, expected_claim=claim)
+            except LedgerClaimLost:
+                pass
+            return result
 
     def _max_attempts(self, tool: ToolDefinition, operation_type: str) -> int:
         if operation_type == "write" or not tool.retryable:
