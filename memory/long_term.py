@@ -17,6 +17,13 @@ from typing import Any, Protocol
 
 import numpy as np
 
+from rag.model_devices import (
+    EMBEDDING_DEVICE_ENV,
+    device_from_env,
+    require_device_available,
+    verify_and_log_model,
+)
+
 try:
     import faiss
 except ImportError:
@@ -86,10 +93,13 @@ class SentenceTransformerEmbeddingBackend:
     """Local embedding backend using sentence-transformers when installed."""
 
     def __init__(self, model_name: str):
+        device = device_from_env(EMBEDDING_DEVICE_ENV)
+        require_device_available(device)
         from sentence_transformers import SentenceTransformer
 
         self.model_name = model_name
-        self._model = SentenceTransformer(model_name)
+        self._model = SentenceTransformer(model_name, **({"device": device} if device is not None else {}))
+        verify_and_log_model(self._model, model_name, device)
         if hasattr(self._model, "get_embedding_dimension"):
             self.dimension = int(self._model.get_embedding_dimension())
         else:
@@ -150,6 +160,10 @@ def create_embedding_backend(embedding_dim: int = 1536) -> EmbeddingBackend:
         )
 
     if backend == "auto":
+        # An explicit local-model device is a deployment requirement, not an
+        # invitation to silently replace a failed model with hash embeddings.
+        if device_from_env(EMBEDDING_DEVICE_ENV) is not None:
+            return SentenceTransformerEmbeddingBackend(model_name)
         try:
             return SentenceTransformerEmbeddingBackend(model_name)
         except Exception:

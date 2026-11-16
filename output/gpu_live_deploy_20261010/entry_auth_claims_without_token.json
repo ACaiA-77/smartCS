@@ -1,0 +1,20 @@
+{
+  "8000": {
+    "account_id": 314,
+    "alg": "HS256",
+    "iss": "smartcs",
+    "ttl": 1800,
+    "iat_skew_seconds": 1.1,
+    "same_failed_session_in_own_list": true,
+    "pi_session_count": 15
+  },
+  "8001": {
+    "account_id": 314,
+    "alg": "HS256",
+    "iss": "smartcs",
+    "ttl": 1800,
+    "iat_skew_seconds": 0.5,
+    "same_failed_session_in_own_list": true,
+    "pi_session_count": 15
+  }
+}

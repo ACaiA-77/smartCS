@@ -1,0 +1,19 @@
+{
+  "torch": "2.11.0+cu128",
+  "cuda_runtime": "12.8",
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "device_count": 1,
+  "matrix_device": "cuda:0",
+  "matrix_dtype": "torch.float32",
+  "tf32_matmul": false,
+  "tf32_cudnn": false,
+  "float32_matmul_precision": "highest",
+  "application_versions": {
+    "sentence-transformers": "6.1.0",
+    "transformers": "5.18.0",
+    "numpy": "2.5.3",
+    "fastapi": "0.142.2",
+    "setuptools": "80.9.0"
+  },
+  "cross_encoder_import": true
+}

@@ -1,0 +1,25 @@
+{
+  "created_at_utc": "2026-10-10T11:01:31.986926+00:00",
+  "api_base": "http://127.0.0.1:8001",
+  "label": "after_gpu",
+  "question": "请只调用一次 knowledge_search，query 为“Apple 账户恢复等待时间，联系客服能否缩短等待”，top_k 为 3。随后根据检索内容，用150字以内回答这个问题，并附官方来源链接。只做知识查询，不执行其他工具或任何业务写操作。",
+  "client_request_id": "gpuqa-after_gpu-5545edbd5536448c",
+  "auth": "real Argon2 login + HttpOnly cookie; token not saved",
+  "credentials_source": "environment or existing documented demo account",
+  "session_creation_api_base": "http://127.0.0.1:8000",
+  "session_id": "0dfcdcdf-4da9-40ae-b251-37520160b0cc",
+  "session_harness_version": "pi",
+  "chat_wall_ms": 18029.518899973482,
+  "http_status": 200,
+  "response": {
+    "response": "Apple 账户恢复出于安全原因可能需要数天或更长时间，联系 Apple 客服无法缩短等待期。提交恢复请求后，Apple 通常会在 72 小时内发送确认邮件，告知预计恢复访问的日期和时间。等待期结束后，会收到短信或自动语音电话的说明，也可在约定期限后访问 iforgot.apple.com 操作。\n\n官方来源：https://support.apple.com/zh-cn/118574",
+    "session_id": "0dfcdcdf-4da9-40ae-b251-37520160b0cc",
+    "intent": "general",
+    "compliance_passed": true,
+    "client_request_id": "gpuqa-after_gpu-5545edbd5536448c",
+    "harness_version": "pi"
+  },
+  "acceptance": {
+    "one_successful_knowledge_tool_no_other_tools": true
+  }
+}

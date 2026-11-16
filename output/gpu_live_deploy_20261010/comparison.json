@@ -1,0 +1,47 @@
+{
+  "samples_per_mode": 1,
+  "full_chat": {
+    "before_seconds": 41.43622569995932,
+    "after_seconds": 18.029518899973482,
+    "saved_seconds": 23.40670679998584,
+    "reduction_pct": 56.488510728448944,
+    "speedup": 2.2982435598999964
+  },
+  "knowledge_tool_approx": {
+    "before_seconds": 21.235,
+    "after_seconds": 6.188,
+    "saved_seconds": 15.047,
+    "reduction_pct": 70.85943018601365,
+    "speedup": 3.4316418875242403
+  },
+  "model_message_spans_approx": {
+    "before_seconds": 19.299,
+    "after_seconds": 11.089,
+    "saved_seconds": 8.21,
+    "reduction_pct": 42.54106430384994,
+    "speedup": 1.7403733429524755
+  },
+  "reasoning_tokens": {
+    "before": 903,
+    "after": 414
+  },
+  "tool_args_identical": true,
+  "top3_chunk_order_identical": true,
+  "fresh_session_each": true,
+  "real_model": "kimi-k2.7-code",
+  "question": "请只调用一次 knowledge_search，query 为“Apple 账户恢复等待时间，联系客服能否缩短等待”，top_k 为 3。随后根据检索内容，用150字以内回答这个问题，并附官方来源链接。只做知识查询，不执行其他工具或任何业务写操作。",
+  "source_chunk_ids": [
+    "4e93c0b61f31fc9ba0084371",
+    "9b925299b53c5e4dfb82e9c8",
+    "831a8581615b3e86914f36be"
+  ],
+  "caveat": "One successful question per mode. Model spans vary; all observed full-chat savings cannot be causally assigned to GPU. Tool spans are transcript timestamp approximations, NOT pure reranker time.",
+  "evidence_sha256": {
+    "before_cpu.json": "b73fb4e1cfacb2c0d5961bb155a70e70a11b1ef83efb884fcf572563861fccb7",
+    "after_gpu.json": "9a8540aafb7205663e5c896059febfbe9c33a2c5cacfa76d8fb550ef499c26b9",
+    "before_cpu_transcript_summary.json": "2188cceee40504456e469cf896cf623f354db4f73bdd92ea9380fc69cc6e0271",
+    "after_gpu_transcript_summary.json": "8f5fa26b0a93d4013e97bf0aed0502139bc0b1f98fcc251e1eff6c4f035aa470",
+    "deployment_result.json": "965d551d0fd12ef4b83ebe31ea5e42ec9a940470c2aa8377e56bb63830301723",
+    "package_comparison.json": "f4f5aebe9b9e69d9729dfcde122748720ce2b9ac92a0cf11cd04e5320de5ed01"
+  }
+}

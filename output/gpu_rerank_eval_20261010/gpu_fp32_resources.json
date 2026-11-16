@@ -1,0 +1,474 @@
+{
+  "created_at_utc": "2026-10-10T07:18:09.017381+00:00",
+  "command": [
+    "../.venv-smartcs-gpu-eval-20261010/Scripts/python.exe",
+    "-m",
+    "scripts.benchmark_reranker_devices",
+    "--inputs",
+    "output/gpu_rerank_eval_20261010/inputs.json",
+    "--output",
+    "output/gpu_rerank_eval_20261010/gpu_fp32.json",
+    "--device",
+    "cuda",
+    "--dtype",
+    "fp32",
+    "--threads",
+    "8"
+  ],
+  "return_code": 0,
+  "wall_seconds": 86.09828200004995,
+  "before": {
+    "ram_total_bytes": 33601986560,
+    "ram_available_bytes": 3915231232,
+    "ram_percent": 88.3,
+    "swap_total_bytes": 45732618240,
+    "swap_used_bytes": 7216754688
+  },
+  "after": {
+    "ram_total_bytes": 33601986560,
+    "ram_available_bytes": 3996549120,
+    "ram_percent": 88.1,
+    "swap_total_bytes": 45732618240,
+    "swap_used_bytes": 7267938304
+  },
+  "sample_interval_seconds": 2,
+  "observed_min_available_ram_bytes": 577335296,
+  "observed_peak_child_rss_bytes": 4685824,
+  "observations": [
+    {
+      "elapsed_seconds": 0.011331100016832352,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 3922726912,
+      "ram_percent": 88.3,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7216754688,
+      "child_rss_bytes": 2613248,
+      "child_vms_bytes": 397312
+    },
+    {
+      "elapsed_seconds": 2.0129665001295507,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 3474395136,
+      "ram_percent": 89.7,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7246901248,
+      "child_rss_bytes": 4685824,
+      "child_vms_bytes": 811008
+    },
+    {
+      "elapsed_seconds": 4.0146052001509815,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 3445706752,
+      "ram_percent": 89.7,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7246901248,
+      "child_rss_bytes": 4685824,
+      "child_vms_bytes": 811008
+    },
+    {
+      "elapsed_seconds": 6.016327100107446,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 3236253696,
+      "ram_percent": 90.4,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7246901248,
+      "child_rss_bytes": 4685824,
+      "child_vms_bytes": 811008
+    },
+    {
+      "elapsed_seconds": 8.018439900130033,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 3288260608,
+      "ram_percent": 90.2,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7246901248,
+      "child_rss_bytes": 4685824,
+      "child_vms_bytes": 811008
+    },
+    {
+      "elapsed_seconds": 10.020167300011963,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 3280318464,
+      "ram_percent": 90.2,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7246901248,
+      "child_rss_bytes": 4685824,
+      "child_vms_bytes": 811008
+    },
+    {
+      "elapsed_seconds": 12.02169800014235,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 3238187008,
+      "ram_percent": 90.4,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7246901248,
+      "child_rss_bytes": 4685824,
+      "child_vms_bytes": 811008
+    },
+    {
+      "elapsed_seconds": 14.02343640010804,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 3170103296,
+      "ram_percent": 90.6,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7246901248,
+      "child_rss_bytes": 4685824,
+      "child_vms_bytes": 811008
+    },
+    {
+      "elapsed_seconds": 16.024960200069472,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 3153375232,
+      "ram_percent": 90.6,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7246901248,
+      "child_rss_bytes": 4685824,
+      "child_vms_bytes": 811008
+    },
+    {
+      "elapsed_seconds": 18.026665600016713,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 3108270080,
+      "ram_percent": 90.7,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7246901248,
+      "child_rss_bytes": 4685824,
+      "child_vms_bytes": 811008
+    },
+    {
+      "elapsed_seconds": 20.028325299965218,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 3025633280,
+      "ram_percent": 91.0,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7246901248,
+      "child_rss_bytes": 4685824,
+      "child_vms_bytes": 811008
+    },
+    {
+      "elapsed_seconds": 22.029751599999145,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2921451520,
+      "ram_percent": 91.3,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7246901248,
+      "child_rss_bytes": 4685824,
+      "child_vms_bytes": 811008
+    },
+    {
+      "elapsed_seconds": 24.031877300003543,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 1676435456,
+      "ram_percent": 95.0,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7252520960,
+      "child_rss_bytes": 4685824,
+      "child_vms_bytes": 811008
+    },
+    {
+      "elapsed_seconds": 26.033644600072876,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 577335296,
+      "ram_percent": 98.3,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7252496384,
+      "child_rss_bytes": 4685824,
+      "child_vms_bytes": 811008
+    },
+    {
+      "elapsed_seconds": 28.036295500118285,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2722422784,
+      "ram_percent": 91.9,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4685824,
+      "child_vms_bytes": 811008
+    },
+    {
+      "elapsed_seconds": 30.03844640008174,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2710745088,
+      "ram_percent": 91.9,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 32.04091290012002,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2711064576,
+      "ram_percent": 91.9,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 34.04218340013176,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2688593920,
+      "ram_percent": 92.0,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 36.04473730013706,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2646794240,
+      "ram_percent": 92.1,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 38.05005560000427,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2708205568,
+      "ram_percent": 91.9,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 40.051586100133136,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2692841472,
+      "ram_percent": 92.0,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 42.053086900152266,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2686386176,
+      "ram_percent": 92.0,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 44.054542100057006,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2678874112,
+      "ram_percent": 92.0,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 46.0564135001041,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2625200128,
+      "ram_percent": 92.2,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 48.05874960008077,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2698362880,
+      "ram_percent": 92.0,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 50.06060770014301,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2695905280,
+      "ram_percent": 92.0,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 52.06261999998242,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2690359296,
+      "ram_percent": 92.0,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 54.06403030012734,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2674208768,
+      "ram_percent": 92.0,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 56.06589370011352,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2617999360,
+      "ram_percent": 92.2,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 58.0677545000799,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2679267328,
+      "ram_percent": 92.0,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 60.06947210012004,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2667593728,
+      "ram_percent": 92.1,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 62.071501299971715,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2670231552,
+      "ram_percent": 92.1,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 64.07265380001627,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2664861696,
+      "ram_percent": 92.1,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 66.07428820012137,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2604810240,
+      "ram_percent": 92.2,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 68.07582970010117,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2668834816,
+      "ram_percent": 92.1,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 70.07728840014897,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2665791488,
+      "ram_percent": 92.1,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 72.07967310003005,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2671071232,
+      "ram_percent": 92.1,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 74.0811362999957,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2667618304,
+      "ram_percent": 92.1,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 76.0823159001302,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2603716608,
+      "ram_percent": 92.3,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 78.08714290009812,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2657673216,
+      "ram_percent": 92.1,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 80.09105099993758,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2659696640,
+      "ram_percent": 92.1,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 82.09264150005765,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2662400000,
+      "ram_percent": 92.1,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    },
+    {
+      "elapsed_seconds": 84.09401460015215,
+      "ram_total_bytes": 33601986560,
+      "ram_available_bytes": 2995900416,
+      "ram_percent": 91.1,
+      "swap_total_bytes": 45732618240,
+      "swap_used_bytes": 7267938304,
+      "child_rss_bytes": 4673536,
+      "child_vms_bytes": 786432
+    }
+  ],
+  "limits": [
+    "RSS and host memory are sampled, not exact peaks.",
+    "Windows swap counters alone cannot establish active paging.",
+    "The machine and existing services are not isolated or stopped."
+  ]
+}

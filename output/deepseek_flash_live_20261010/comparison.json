@@ -1,0 +1,86 @@
+{
+  "samples": [
+    {
+      "label": "after_gpu",
+      "wall_seconds": 18.029518899973482,
+      "model": "kimi-k2.7-code",
+      "model_message_seconds_approx": 11.089,
+      "model_call_seconds_approx": [
+        3.675,
+        7.414
+      ],
+      "knowledge_seconds_approx": 6.188,
+      "reasoning_tokens": 414,
+      "api_base": "http://127.0.0.1:8001",
+      "question": "请只调用一次 knowledge_search，query 为“Apple 账户恢复等待时间，联系客服能否缩短等待”，top_k 为 3。随后根据检索内容，用150字以内回答这个问题，并附官方来源链接。只做知识查询，不执行其他工具或任何业务写操作。",
+      "args": {
+        "query": "Apple 账户恢复等待时间，联系客服能否缩短等待",
+        "top_k": 3
+      },
+      "chunks": [
+        "4e93c0b61f31fc9ba0084371",
+        "9b925299b53c5e4dfb82e9c8",
+        "831a8581615b3e86914f36be"
+      ],
+      "session_id": "0dfcdcdf-4da9-40ae-b251-37520160b0cc",
+      "answer": "Apple 账户恢复出于安全原因可能需要数天或更长时间，联系 Apple 客服无法缩短等待期。提交恢复请求后，Apple 通常会在 72 小时内发送确认邮件，告知预计恢复访问的日期和时间。等待期结束后，会收到短信或自动语音电话的说明，也可在约定期限后访问 iforgot.apple.com 操作。\n\n官方来源：https://support.apple.com/zh-cn/118574",
+      "compliance_passed": true
+    },
+    {
+      "label": "deepseek_flash",
+      "wall_seconds": 17.87186719989404,
+      "model": "deepseek-flash",
+      "model_message_seconds_approx": 2.547,
+      "model_call_seconds_approx": [
+        1.37,
+        1.177
+      ],
+      "knowledge_seconds_approx": 14.127,
+      "reasoning_tokens": 139,
+      "api_base": "http://127.0.0.1:8001",
+      "question": "请只调用一次 knowledge_search，query 为“Apple 账户恢复等待时间，联系客服能否缩短等待”，top_k 为 3。随后根据检索内容，用150字以内回答这个问题，并附官方来源链接。只做知识查询，不执行其他工具或任何业务写操作。",
+      "args": {
+        "query": "Apple 账户恢复等待时间，联系客服能否缩短等待",
+        "top_k": 3
+      },
+      "chunks": [
+        "4e93c0b61f31fc9ba0084371",
+        "9b925299b53c5e4dfb82e9c8",
+        "831a8581615b3e86914f36be"
+      ],
+      "session_id": "bb82a8fa-8ed2-4a39-b0a3-761e70dadf57",
+      "answer": "**结论：联系客服无法缩短 Apple 账户恢复的等待时间。**\n\n官方说明：出于安全原因，账户恢复可能需要等待数天或更长时间；开始恢复后 72 小时内会收到确认邮件（无关联邮箱的电话号码账户可能以 iMessage 形式收到），其中给出预计可重新获得访问权限的日期。等待期结束后，Apple 会通过短信或自动语音电话发送恢复访问的说明；也可在邮件指定期限结束后访问 iforgot.apple.com 按提示操作。\n\n来源：https://support.apple.com/zh-cn/118574",
+      "compliance_passed": true
+    },
+    {
+      "label": "deepseek_flash_warm",
+      "wall_seconds": 4.753961599897593,
+      "model": "deepseek-flash",
+      "model_message_seconds_approx": 3.088,
+      "model_call_seconds_approx": [
+        1.05,
+        2.038
+      ],
+      "knowledge_seconds_approx": 1.136,
+      "reasoning_tokens": 121,
+      "api_base": "http://127.0.0.1:8001",
+      "question": "请只调用一次 knowledge_search，query 为“Apple 账户恢复等待时间，联系客服能否缩短等待”，top_k 为 3。随后根据检索内容，用150字以内回答这个问题，并附官方来源链接。只做知识查询，不执行其他工具或任何业务写操作。",
+      "args": {
+        "query": "Apple 账户恢复等待时间，联系客服能否缩短等待",
+        "top_k": 3
+      },
+      "chunks": [
+        "4e93c0b61f31fc9ba0084371",
+        "9b925299b53c5e4dfb82e9c8",
+        "831a8581615b3e86914f36be"
+      ],
+      "session_id": "dcc0b8d4-ebef-4bb1-949f-456cb0554ba7",
+      "answer": "结论：联系客服**无法**缩短 Apple 账户恢复的等待时间。\n\n根据 Apple 官方说明，出于安全原因，账户恢复可能需要等待数天甚至更长时间。开始恢复后，你会在 72 小时内收到确认邮件，其中给出预计可重新获得访问权限的日期与时间；等待期结束后，Apple 会通过短信或自动语音电话发送重获访问权限的说明，也可在邮件指定期限结束后访问 iforgot.apple.com 按提示操作。\n\n来源：https://support.apple.com/zh-cn/118574\n\n（以上仅为知识库政策说明，不代表业务系统判定。）",
+      "compliance_passed": true
+    }
+  ],
+  "first_completion_reduction_pct_vs_previous_kimi": 0.8744088012224938,
+  "first_model_reduction_pct_approx": 77.03129227162052,
+  "warm_completion_reduction_pct_vs_previous_kimi": 73.63234356794409,
+  "caveat": "Previous Kimi GPU sample and current DeepSeek samples are not a controlled same-time warm-state A/B. First DeepSeek had a much slower tool span. Warm result includes RAG/cache effects; do NOT assign all complete-chat savings to the LLM model."
+}

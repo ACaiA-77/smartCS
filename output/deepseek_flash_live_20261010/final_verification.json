@@ -1,0 +1,56 @@
+{
+  "health": {
+    "http://127.0.0.1:8001/health": {
+      "status": 200,
+      "body": {
+        "status": "healthy",
+        "version": "1.0.0"
+      }
+    },
+    "http://127.0.0.1:8971/ready": {
+      "status": 200,
+      "body": {
+        "ready": true,
+        "degraded": false,
+        "warnings": [],
+        "checks": {
+          "mysql": {
+            "ok": true
+          },
+          "business_runtime": {
+            "ok": true
+          },
+          "mcp": {
+            "enabled": false,
+            "ok": true
+          }
+        }
+      }
+    }
+  },
+  "runtime": {
+    "model": "deepseek-flash",
+    "base_url": "https://api.deepseek.com/v1",
+    "rerank_device": "cuda:0",
+    "rerank_dtype": "fp32",
+    "embedding_device": "cpu",
+    "max_chars": "0",
+    "rollout": "0",
+    "index_hashes": {
+      "agent_engineering/bm25_index.json": "0f9fdae0f79ff9bf5d3e849c1afd34cede08a9140c079a4feefc0eeb669710a4",
+      "agent_engineering/chunks.jsonl": "d4b73fa26871ccf46077e91ac5363ce83fd922ba9c95232719dff1061568bd75",
+      "agent_engineering/corpus.jsonl": "a5fde471d17f4683d2e9198abc8f5aebc6919edd90d7c5737d3ee692dd88a7c1",
+      "agent_engineering/index.faiss": "6d85e05603cbc73e8b5c98f4cd60448237c6e82737833ac3c0c1ce353f873575",
+      "agent_engineering/manifest.json": "23bce608104ec72035ec284715b8e7611938c6dafa9dd5eb1c56cf3bc4687604",
+      "apple_support/bm25_index.json": "912700140bfe53cb83242e705118c67f7aa1cc9c150bcf749a441718448abdce",
+      "apple_support/chunks.jsonl": "bf0ce82c6414dee55bd6a7b69365b37d4322d89407dea48e66c3662b378b455d",
+      "apple_support/corpus.jsonl": "ac810d219e5c7e2ded4e0eb7c7f00819f4ad46f3928f68c9d744335d295d4836",
+      "apple_support/index.faiss": "30e70cbc0268462ce14d5f28cb00955d5740a73a42d55f34a091c8ad0836fed1",
+      "apple_support/manifest.json": "2e0a437020d459329f9325da28e64e0971aa0cf658d6313a86e990fed9eb2454",
+      "global_sparse/bm25_index.json": "aea828f4e779233a750e402a593fb8de6fb5f5ff7bf0ef2bc8fe9b977444cfee",
+      "global_sparse/manifest.json": "4f137f65ff1905a48c2a600f3c8b11c877a9c35da4a62c167f1fa966d585ed21"
+    }
+  },
+  "public_artifacts_secret_scan_passed": true,
+  "host_available_ram_gib_after_warm": 0.3499641418457031
+}

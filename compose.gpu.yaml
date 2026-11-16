@@ -1,0 +1,20 @@
+# Opt-in override: docker compose -f compose.yaml -f compose.gpu.yaml ...
+# Only the API changes; harness/Redis/MCP/rollout/credentials/mounts stay intact.
+services:
+  smartcs-api:
+    image: ${SMARTCS_GPU_IMAGE:-smartcs-api:phase11-gpu}
+    environment:
+      SMARTCS_RERANK_DEVICE: "cuda:0"
+      SMARTCS_RERANK_DTYPE: "fp32"
+      SMARTCS_EMBEDDING_DEVICE: "cpu"
+      # Set in the invoking shell (or Compose interpolation env), not just
+      # .env.docker: Compose environment overrides service env_file values.
+      # 0 disables clipping for a fair comparison with the older phase11.
+      SMARTCS_RERANK_MAX_CHARS: "${SMARTCS_RERANK_MAX_CHARS:-768}"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

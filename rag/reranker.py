@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Protocol
 
 from .build import _terms
+from .model_devices import (
+    RERANK_DEVICE_ENV,
+    device_from_env,
+    disable_tf32,
+    require_device_available,
+    rerank_dtype_from_env,
+    verify_and_log_model,
+)
 from .models import RetrievalHit
 
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
@@ -151,10 +160,33 @@ class CrossEncoderReranker:
         self.max_chars = max_chars_from_env() if max_chars is None else int(max_chars)
         if self.max_chars < 0:
             raise ValueError(f"max_chars must be >= 0, got {self.max_chars}")
-        if model is None:
+        device = device_from_env(RERANK_DEVICE_ENV)
+        dtype = rerank_dtype_from_env(device)
+        require_device_available(device)
+        injected = model is not None
+        if not injected:
+            import torch
             from sentence_transformers import CrossEncoder
 
-            model = CrossEncoder(model_name)
+            if dtype == "fp32" and (device == "cuda:0" or (device is None and torch.cuda.is_available())):
+                disable_tf32(torch)
+            # Load directly at the requested precision, rather than allocating
+            # FP32 CPU weights first and converting a second copy on the GPU.
+            model_kwargs = {"torch_dtype": torch.float16 if dtype == "fp16" else torch.float32}
+            if device == "cuda:0":
+                model_kwargs["device_map"] = {"": device}
+            # sentence-transformers 3.x called this argument automodel_args.
+            parameters = inspect.signature(CrossEncoder).parameters
+            argument = (
+                "automodel_args"
+                if "automodel_args" in parameters and "model_kwargs" not in parameters
+                else "model_kwargs"
+            )
+            kwargs = {argument: model_kwargs}
+            if device is not None:
+                kwargs["device"] = device
+            model = CrossEncoder(model_name, **kwargs)
+        verify_and_log_model(model, model_name, device, dtype, injected=injected)
         self._model = model
 
     def rerank(self, query: str, candidates: list[RetrievalHit], top_k: int = 3) -> list[RetrievalHit]:

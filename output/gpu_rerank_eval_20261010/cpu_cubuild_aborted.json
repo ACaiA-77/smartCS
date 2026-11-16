@@ -1,0 +1,18 @@
+{
+  "status": "aborted_without_complete_scores",
+  "command_build": "torch 2.11.0+cu128 running on CPU",
+  "error": "OSError: [WinError 1455] 页面文件太小，无法完成操作。",
+  "error_origin": "run_observed.py -> psutil.Process.children(recursive=True) -> psutil._ppid_map()",
+  "interpretation": "Windows process-snapshot resource allocation failed under memory/commit pressure; this is not a confirmed CrossEncoder numerical or CUDA inference failure.",
+  "model_load_logged": true,
+  "benchmark_result_written": false,
+  "cleanup": {
+    "verified_benchmark_only_pids_terminated": [21016, 57276],
+    "verification": "Both command lines matched scripts.benchmark_reranker_devices and the exact cpu_fp32_torch211.json output argument before termination.",
+    "existing_services_terminated": false
+  },
+  "log": "cpu_fp32_torch211_cubuild_aborted.log",
+  "next_control": "Separate torch 2.11.0+cpu environment; same framework release and frozen inputs. Avoid unnecessary CUDA DLL footprint on CPU.",
+  "observer_fix": "Discover venv launcher children early and cache their handles; do not repeat whole-system process snapshots during inference. Sampling errors no longer orphan an active benchmark.",
+  "system_pagefile_changed": false
+}

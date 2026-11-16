@@ -7,6 +7,7 @@ MCP工具协议服务端 — Model Context Protocol实现
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
 from datetime import datetime
@@ -26,6 +27,15 @@ def customer_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, A
     return {**arguments, "user_id": user.business_user_id}
 
 
+@dataclass(frozen=True)
+class LocalAtomicWrite:
+    """Trusted synchronous SQLite entry point, bound to its registered handler."""
+
+    repository: Any
+    handler: Callable[..., Any]
+    execute: Callable[[sqlite3.Connection, dict[str, Any]], Any]
+
+
 @dataclass
 class ToolDefinition:
     """MCP工具定义"""
@@ -40,6 +50,7 @@ class ToolDefinition:
     requires_confirmation: bool = False
     retryable: bool = True
     recovery_fields: tuple[str, ...] = ()
+    local_atomic_write: LocalAtomicWrite | None = None
 
 
 @dataclass
@@ -360,6 +371,9 @@ def create_default_tools(
         recovery_fields=("order_id", "user_id"),
     )
     async def refund_create(order_id: str, user_id: str, reason: str) -> dict:
+        return create_refund(None, order_id, user_id, reason)
+
+    def create_refund(connection, /, order_id: str, user_id: str, reason: str) -> dict:
         normalized_order_id = "" if order_id is None else str(order_id).strip()
         if not normalized_order_id:
             raise ValueError("order_id must not be empty")
@@ -371,11 +385,22 @@ def create_default_tools(
             raise ValueError("reason must not be empty")
         if refund_service is None:
             raise RuntimeError("refund service unavailable")
+        transaction = {"connection": connection} if connection is not None else {}
         return refund_service.create_refund(
             normalized_order_id,
             normalized_user_id,
             normalized_reason,
+            **transaction,
         ).as_dict()
+
+    from refunds.service import RefundService
+
+    if type(refund_service) is RefundService:
+        server.get_tool("refund_create").local_atomic_write = LocalAtomicWrite(
+            repository=refund_service.repository,
+            handler=refund_create,
+            execute=lambda connection, arguments: create_refund(connection, **arguments),
+        )
 
     @server.register(
         name="knowledge_search",
@@ -453,10 +478,21 @@ def create_default_tools(
         request_payload_hash: str = "",
         user_id: str = "anonymous",
     ) -> dict:
+        return create_ticket(
+            None, title, description, priority, category, client_request_id,
+            request_payload_hash, user_id,
+        )
+
+    def create_ticket(
+        connection, /, title: str, description: str, priority: str = "medium",
+        category: str = "general", client_request_id: str = "",
+        request_payload_hash: str = "", user_id: str = "anonymous",
+    ) -> dict:
         if ticket_service is None:
             return {"success": False, "reason_code": "ticket_service_unavailable"}
         if not client_request_id:
             return {"success": False, "reason_code": "invalid_client_request_id"}
+        transaction = {"connection": connection} if connection is not None else {}
         return ticket_service.create_ticket(
             client_request_id=client_request_id,
             user_id=user_id,
@@ -465,6 +501,16 @@ def create_default_tools(
             priority=priority,
             ticket_type=category,
             request_payload_hash=request_payload_hash,
+            **transaction,
+        )
+
+    from tickets.service import TicketService
+
+    if type(ticket_service) is TicketService:
+        server.get_tool("ticket_create").local_atomic_write = LocalAtomicWrite(
+            repository=ticket_service.repository,
+            handler=ticket_create,
+            execute=lambda connection, arguments: create_ticket(connection, **arguments),
         )
 
     @server.register(

@@ -1,0 +1,37 @@
+{
+  "error_type": "AssertionError",
+  "error": "Mount definitions changed (not just array ordering)",
+  "health_poll_attempts": [
+    {
+      "elapsed_seconds": 7.012416899902746,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 13.256288699805737,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 19.38167389994487,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 25.519919299986213,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 31.615220099920407,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 38.7200709998142,
+      "container_health": "healthy",
+      "http_status": 200
+    }
+  ],
+  "rollback_started": true
+}

@@ -1,0 +1,15 @@
+{
+  "global_torch": "2.13.0+cpu",
+  "global_torchvision": "0.28.0+cpu",
+  "health": {
+    "8000": {
+      "status": 200
+    },
+    "8001": {
+      "status": 200
+    },
+    "8971": {
+      "status": 200
+    }
+  }
+}

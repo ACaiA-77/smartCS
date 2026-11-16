@@ -8,6 +8,13 @@ from typing import Protocol
 
 import numpy as np
 
+from .model_devices import (
+    EMBEDDING_DEVICE_ENV,
+    device_from_env,
+    require_device_available,
+    verify_and_log_model,
+)
+
 BGE_M3_MODEL = "BAAI/bge-m3"
 BGE_M3_DIMENSION = 1024
 
@@ -52,11 +59,14 @@ class SentenceTransformerEmbeddingBackend:
     """Local production backend; model loading is intentionally injectable."""
 
     def __init__(self, model_name: str = BGE_M3_MODEL):
+        device = device_from_env(EMBEDDING_DEVICE_ENV)
+        require_device_available(device)
         from sentence_transformers import SentenceTransformer
 
         self.model_name = model_name
         self.backend_name = "sentence_transformers"
-        self._model = SentenceTransformer(model_name)
+        self._model = SentenceTransformer(model_name, **({"device": device} if device is not None else {}))
+        verify_and_log_model(self._model, model_name, device)
         self.dimension = int(self._model.get_sentence_embedding_dimension())
 
     def embed_batch(self, texts: list[str]) -> list[np.ndarray]:

@@ -1,0 +1,16 @@
+{
+  "8000": {
+    "session_visible_status": 404,
+    "harness_auth_probe_status": 401,
+    "probe_detail": {
+      "detail": "invalid or expired authentication"
+    }
+  },
+  "8001": {
+    "session_visible_status": 404,
+    "harness_auth_probe_status": 400,
+    "probe_detail": {
+      "detail": "invalid message"
+    }
+  }
+}

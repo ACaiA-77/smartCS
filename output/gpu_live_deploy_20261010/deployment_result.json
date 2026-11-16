@@ -1,0 +1,103 @@
+{
+  "started_utc": "2026-10-10T11:00:29.691740+00:00",
+  "completed_utc": "2026-10-10T11:01:09.517711+00:00",
+  "image_id": "sha256:94f89cbb9102d5af24d5c59cdd7548a7f1dd3aa2b0bbfec14ccdcfdfdd37dae2",
+  "image_tag": "smartcs-api:gpu-fp32-20261010",
+  "api_container_id": "64ac031d1b73c8c2de89536747c27c25652a7667293896046e4b3b9bcca53833",
+  "health": "healthy",
+  "device_requests": [
+    {
+      "Driver": "nvidia",
+      "Count": -1,
+      "DeviceIDs": null,
+      "Capabilities": [
+        [
+          "gpu"
+        ]
+      ],
+      "Options": null
+    }
+  ],
+  "actual_uvicorn_processes": [
+    {
+      "pid": 7,
+      "argv": [
+        "/usr/local/bin/python",
+        "/usr/local/bin/uvicorn",
+        "api.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000"
+      ]
+    }
+  ],
+  "safe_model_logs": [
+    "RAG model startup pid=7 path=loaded model=BAAI/bge-m3 device=cpu dtype=torch.float32 parameter_count=567754752 verification=passed",
+    "RAG model startup pid=7 path=loaded model=BAAI/bge-reranker-v2-m3 device=cuda:0 dtype=torch.float32 parameter_count=567755777 verification=passed",
+    "RAG runtime: mode=artifact sparse_mode=global_corpus_v1 domains=agent_engineering,apple_support embedding=BAAI/bge-m3 reranker=cross_encoder"
+  ],
+  "environment_changed_keys": [
+    "SMARTCS_EMBEDDING_DEVICE",
+    "SMARTCS_RERANK_DEVICE",
+    "SMARTCS_RERANK_DTYPE",
+    "SMARTCS_RERANK_MAX_CHARS"
+  ],
+  "mounts_unchanged": true,
+  "ports_unchanged": true,
+  "other_container_ids_unchanged": {
+    "smartcs-pi-harness": "c96ce6150651f75957d72e369d46df3830708a6101dccb3fcca2ae0e5a3a32a1",
+    "smartcs-redis": "7248aecab1be95270ecba5118b50cb9e5979bfef01234d39a197cb5b22e30518",
+    "smartcs-checkpoint-mysql": "7aab65013e790a5ef79191cca9847f5ddeb5cff7e417c85c2fbaef1871b05fd9"
+  },
+  "readiness": {
+    "ready": true,
+    "degraded": false,
+    "warnings": [],
+    "checks": {
+      "mysql": {
+        "ok": true
+      },
+      "business_runtime": {
+        "ok": true
+      },
+      "mcp": {
+        "enabled": false,
+        "ok": true
+      }
+    }
+  },
+  "health_poll_attempts": [
+    {
+      "elapsed_seconds": 7.043088400037959,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 13.142751300008968,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 19.21695110015571,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 25.31775339995511,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 31.41994890011847,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 38.529615100007504,
+      "container_health": "healthy",
+      "http_status": 200
+    }
+  ],
+  "rollback_needed": false
+}

@@ -1,0 +1,37 @@
+{
+  "error_type": "AssertionError",
+  "error": "Mounts changed",
+  "health_poll_attempts": [
+    {
+      "elapsed_seconds": 7.044974300079048,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 13.144415900111198,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 19.227309600217268,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 25.392339800018817,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 31.539324700133875,
+      "container_health": "starting",
+      "http_status": null
+    },
+    {
+      "elapsed_seconds": 38.60197550011799,
+      "container_health": "healthy",
+      "http_status": 200
+    }
+  ],
+  "rollback_started": true
+}
