@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from mcp.order_repository import OrderRepository
+from tool_runtime.order_repository import OrderRepository
 
 
 def parse_args() -> argparse.Namespace:

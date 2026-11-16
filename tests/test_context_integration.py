@@ -28,9 +28,9 @@ from memory.long_term import LongTermMemory
 from memory.session_store import ConversationState, SessionStore
 from memory.user_memory import InMemoryUserMemoryRepository, UserMemoryService
 from memory.short_term import ShortTermMemory
-from mcp.execution_ledger import ExecutionLedger
-from mcp.mcp_server import MCPToolServer, ToolDefinition
-from mcp.tool_execution import ToolExecutionContext, ToolExecutor
+from tool_runtime.execution_ledger import ExecutionLedger
+from tool_runtime.mcp_server import MCPToolServer, ToolDefinition
+from tool_runtime.tool_execution import ToolExecutionContext, ToolExecutor
 from tests.conftest import MockLLM
 from tests.loopback import unused_redis_url
 from tests.app_state import patch_app_state

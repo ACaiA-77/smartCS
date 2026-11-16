@@ -53,11 +53,11 @@ from memory.session_store import ConversationState, SessionStore
 from memory.knowledge import KnowledgeMemory
 from memory.user_memory import UserMemoryService
 from memory.user_memory_worker import UserMemoryWorker
-from mcp.mcp_server import MCPToolServer, create_default_tools
-from mcp.order_repository import OrderRepository
-from mcp.approval_store import ApprovalNotFoundError, ApprovalService, ApprovalStateError
-from mcp.execution_ledger import ExecutionLedger
-from mcp.tool_execution import ToolExecutionContext
+from tool_runtime.mcp_server import MCPToolServer, create_default_tools
+from tool_runtime.order_repository import OrderRepository
+from tool_runtime.approval_store import ApprovalNotFoundError, ApprovalService, ApprovalStateError
+from tool_runtime.execution_ledger import ExecutionLedger
+from tool_runtime.tool_execution import ToolExecutionContext
 from refunds.service import RefundService
 from tickets.service import TicketService
 from tracing.otel_config import init_tracer, AgentMetrics, set_agent_metrics

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from mcp.order_repository import OrderRepository
+from tool_runtime.order_repository import OrderRepository
 
 
 _ACTIVE_REFUND_STATUSES = ("pending", "requested", "reviewing", "approved", "processing")

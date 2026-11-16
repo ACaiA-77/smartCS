@@ -6,11 +6,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from mcp.execution_ledger import ExecutionLedger, canonical_arguments_hash
-from mcp.execution_recovery import ExecutionReconciler
-from mcp.mcp_server import MCPToolServer, ToolDefinition, create_default_tools
-from mcp.order_repository import OrderRepository
-from mcp.tool_execution import ToolExecutionContext, ToolExecutor
+from tool_runtime.execution_ledger import ExecutionLedger, canonical_arguments_hash
+from tool_runtime.execution_recovery import ExecutionReconciler
+from tool_runtime.mcp_server import MCPToolServer, ToolDefinition, create_default_tools
+from tool_runtime.order_repository import OrderRepository
+from tool_runtime.tool_execution import ToolExecutionContext, ToolExecutor
 from refunds.service import RefundService
 from tickets.service import TicketService, canonical_ticket_payload_hash
 

@@ -21,7 +21,7 @@ from checkpoint.models import (
     CheckpointOwnershipError, CheckpointUnavailable,
 )
 from checkpoint.store import CheckpointStore
-from mcp.execution_recovery import ExecutionReconciler
+from tool_runtime.execution_recovery import ExecutionReconciler
 from refunds.service import RefundService
 from tickets.service import TicketService
 from tests.test_orchestrator import _orchestrator, _state

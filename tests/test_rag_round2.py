@@ -4,8 +4,7 @@ import json
 
 import pytest
 
-from mcp.mcp_server import MCPToolServer, create_default_tools
-from mcp import create_server
+from tool_runtime.mcp_server import MCPToolServer, create_default_tools
 from rag.build import build_indexes
 from rag.dense_retriever import ArtifactValidationError, DenseRetriever
 from rag.embeddings import FakeEmbeddingBackend
@@ -284,7 +283,7 @@ async def test_public_mcp_factory_injects_the_shared_retriever():
                 )
             ]
 
-    server = create_server(retriever=StubRetriever())
+    server = create_default_tools(MCPToolServer(), retriever=StubRetriever())
     response = await server.handle_jsonrpc(
         {
             "method": "tools/call",

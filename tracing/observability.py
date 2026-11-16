@@ -11,8 +11,8 @@ from contextvars import ContextVar
 from threading import Lock
 from typing import Any, Iterable, Mapping
 
-from mcp.execution_recovery import ExecutionReconciler
-from mcp.tool_execution import ToolExecutionResult, ToolExecutor
+from tool_runtime.execution_recovery import ExecutionReconciler
+from tool_runtime.tool_execution import ToolExecutionResult, ToolExecutor
 
 
 logger = logging.getLogger(__name__)

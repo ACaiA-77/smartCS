@@ -5,11 +5,11 @@ import pytest
 
 import api.main as api_main
 from auth.context import UserContext
-from mcp.approval_store import ApprovalService
-from mcp.execution_ledger import ExecutionLedger
-from mcp.mcp_server import MCPToolServer, ToolDefinition, create_default_tools
-from mcp.order_repository import OrderRepository
-from mcp.tool_execution import ToolExecutor
+from tool_runtime.approval_store import ApprovalService
+from tool_runtime.execution_ledger import ExecutionLedger
+from tool_runtime.mcp_server import MCPToolServer, ToolDefinition, create_default_tools
+from tool_runtime.order_repository import OrderRepository
+from tool_runtime.tool_execution import ToolExecutor
 
 
 @pytest.fixture

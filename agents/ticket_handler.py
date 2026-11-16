@@ -15,7 +15,7 @@ from langchain_openai import ChatOpenAI
 
 from context.invocation import invoke_agent
 from tracing.otel_config import trace_agent_call
-from mcp.tool_execution import ToolExecutionContext, ToolExecutor
+from tool_runtime.tool_execution import ToolExecutionContext, ToolExecutor
 from tickets.service import canonical_ticket_payload_hash
 from checkpoint.models import active_checkpoint
 

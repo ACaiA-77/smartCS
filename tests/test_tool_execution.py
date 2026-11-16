@@ -4,10 +4,10 @@ import asyncio
 
 import pytest
 
-from mcp.mcp_server import MCPToolServer, ToolCallResult, ToolDefinition, create_default_tools
-from mcp.execution_ledger import ExecutionLedger
-from mcp.order_repository import OrderRepository
-from mcp.tool_execution import (
+from tool_runtime.mcp_server import MCPToolServer, ToolCallResult, ToolDefinition, create_default_tools
+from tool_runtime.execution_ledger import ExecutionLedger
+from tool_runtime.order_repository import OrderRepository
+from tool_runtime.tool_execution import (
     ToolExecutionContext,
     ToolExecutionPolicy,
     ToolExecutor,

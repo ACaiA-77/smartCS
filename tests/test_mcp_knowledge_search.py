@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from mcp.mcp_server import MCPToolServer, create_default_tools
+from tool_runtime.mcp_server import MCPToolServer, create_default_tools
 from memory.long_term import LongTermMemory
 
 

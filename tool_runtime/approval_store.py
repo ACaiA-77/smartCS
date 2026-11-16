@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from mcp.execution_ledger import canonical_arguments_hash
+from tool_runtime.execution_ledger import canonical_arguments_hash
 
 
 class ApprovalError(ValueError):

@@ -44,7 +44,7 @@ from internal_api.write_authorization import (
     AuthorizationDenied,
     WriteAuthorizationService,
 )
-from mcp.tool_execution import ToolExecutionContext as ToolExecutionContextType
+from tool_runtime.tool_execution import ToolExecutionContext as ToolExecutionContextType
 
 logger = logging.getLogger(__name__)
 

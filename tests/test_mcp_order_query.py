@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from mcp.mcp_server import MCPToolServer, create_default_tools
-from mcp.order_repository import OrderRepository
+from tool_runtime.mcp_server import MCPToolServer, create_default_tools
+from tool_runtime.order_repository import OrderRepository
 from memory.long_term import LongTermMemory
 
 

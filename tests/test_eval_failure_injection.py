@@ -6,8 +6,8 @@ import pytest
 
 from evals.faults import FaultInjectingHandler, FaultPlan
 from evals.scenarios import build_runtime, inject
-from mcp.mcp_server import MCPToolServer, ToolDefinition
-from mcp.tool_execution import ToolExecutionContext, ToolExecutionPolicy, ToolExecutor
+from tool_runtime.mcp_server import MCPToolServer, ToolDefinition
+from tool_runtime.tool_execution import ToolExecutionContext, ToolExecutionPolicy, ToolExecutor
 
 
 @pytest.mark.asyncio

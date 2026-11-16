@@ -237,8 +237,9 @@ python-impl/                    # 仓库根（Git root）
 │   ├── session_store.py        # 会话状态与消息边界
 │   ├── short_term.py           # Redis / fallback 消息与状态后端，30 min TTL
 │   └── long_term.py            # 长期记忆，FAISS 向量库
-├── mcp/                        # MCP 工具协议
-│   └── mcp_server.py           # 工具注册与调用，REST 暴露见 api/main.py
+├── tool_runtime/               # 进程内工具运行时（不是 MCP 线协议）
+│   ├── mcp_server.py           # 工具注册与调用，REST 暴露见 api/main.py
+│   └── tool_execution.py       # 确认、超时、幂等账簿与崩溃恢复
 ├── tickets/                    # 持久化客服工单业务域
 │   └── service.py              # support_tickets 与客户端请求幂等
 ├── tracing/                    # OpenTelemetry 追踪

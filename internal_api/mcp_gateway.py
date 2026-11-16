@@ -11,25 +11,16 @@ searches a shared corpus with no per-user partitioning, so it can move without
 touching the identity model. See the feasibility report in
 `pi-harness/docs/mcp-feasibility.md` and `PHASE8_REPORT.md`.
 
-The shadowed-SDK problem (important)
-------------------------------------
-This repository has its own top-level package named `mcp/` (the in-process tool
-server: `mcp/mcp_server.py`, `mcp/tools/`, …). Python resolves top-level imports
-by name, so with the repository root on `sys.path` — which is the normal case —
-`import mcp` gets the *repository's* package, not the official MCP SDK the
-gateway must serve with. One name cannot be two packages in one process.
-
-Therefore the SDK is imported with the repository root temporarily removed from
-`sys.path` (`_load_fastmcp`), and the gateway runs as its **own process**:
+The tool runtime is NOT the MCP SDK
+-----------------------------------
+The repository's in-process tool runtime used to be a top-level package named
+`mcp/`, which shadowed the official MCP SDK for any process with the repository
+root on `sys.path` — one name cannot be two packages in one process. It is now
+`tool_runtime/`, so the SDK imports normally here and the gateway can also run
+as a module:
 
     python internal_api/mcp_gateway.py          # from the repository root
-
-Run it as a *file*, not as `python -m internal_api.mcp_gateway`: importing the
-`internal_api` package executes its `__init__.py`, which pulls in the internal
-routers and, through them, the repository's own `mcp/` package — after that the
-two cannot coexist in one process. As a file, nothing imports the local package
-and the SDK resolves normally. If the local package *is* already imported, the
-gateway refuses to start rather than serving the wrong module.
+    python -m internal_api.mcp_gateway          # equivalent
 
 Auth: a static server-level bearer token (`SMARTCS_MCP_TOKEN`), never a user
 identity. A missing or weak token is a startup failure — there is no default.
@@ -65,9 +56,7 @@ def _ensure_repo_importable() -> None:
     top-level `auth/` package (`No module named 'auth.jwt'; 'auth' is not a
     package`). The directory is therefore removed and the root inserted, so
     every top-level name (`auth`, `memory`, `rag`, …) resolves to the real
-    package. `_load_fastmcp` removes the root again for the SDK import — that
-    temporary removal is what keeps the repository's `mcp/` package from
-    shadowing the official one.
+    package.
     """
     own_dir = pathlib.Path(__file__).resolve().parent
     sys.path[:] = [entry for entry in sys.path if pathlib.Path(entry or ".").resolve() != own_dir]
@@ -77,41 +66,17 @@ def _ensure_repo_importable() -> None:
 
 
 def _load_fastmcp():
-    """Import FastMCP from the OFFICIAL SDK, never the repository's `mcp/`."""
-    local = sys.modules.get("mcp")
-    local_file = getattr(local, "__file__", None) if local is not None else None
-    if local_file and _REPO_ROOT in pathlib.Path(local_file).resolve().parents:
-        raise RuntimeError(
-            "the repository's own `mcp/` package is already imported in this process; "
-            "run the gateway as its own process (python -m internal_api.mcp_gateway)"
-        )
-    saved = list(sys.path)
-    sys.path[:] = [entry for entry in sys.path if pathlib.Path(entry or ".").resolve() != _REPO_ROOT]
-    try:
-        from mcp.server.fastmcp import FastMCP
-    finally:
-        sys.path[:] = saved
+    """Import FastMCP from the official MCP SDK (no local package shadows it)."""
+    from mcp.server.fastmcp import FastMCP
+
     return FastMCP
 
 
 def _load_rag_timing() -> Any:
-    """Load `rag_timing` WITHOUT importing the `internal_api` package.
+    """The stdlib-only RAG timing module, imported normally."""
+    from internal_api import rag_timing
 
-    `from internal_api.rag_timing import ...` would execute
-    `internal_api/__init__.py`, which imports the internal routers and, through
-    them, this repository's own `mcp/` package — after which the official MCP
-    SDK can no longer be imported in this process (see the module docstring).
-    The timing module is stdlib-only, so it is loaded straight from its file.
-    """
-    import importlib.util
-
-    path = pathlib.Path(__file__).resolve().parent / "rag_timing.py"
-    spec = importlib.util.spec_from_file_location("smartcs_rag_timing", path)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return rag_timing
 
 
 def build_retriever() -> Any:
