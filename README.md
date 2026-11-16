@@ -846,34 +846,44 @@ docker compose -f compose.yaml up -d --no-deps --no-build --pull never smartcs-a
 
 ### GitHub Actions 工作流配置
 
-仓库包含 `.github/workflows/build-image.yml`。仓库里有两套运行时，所以有两个 job：
+仓库包含 `.github/workflows/build-image.yml`，测试分为两个任务：
 
 ```text
-test（Python Business Runtime）
+test（Python + 跨服务集成，Python 3.12 / Node 22）
+    -> 独立 MySQL 8 + Redis 7 服务容器
+    -> 安装 Python 和 Harness 依赖
     -> repository readiness
-    -> pytest
+    -> pytest -q -rs（显式开启真实 MySQL / Redis 测试）
+    -> 检查关键套件没有缺席或被跳过
+    -> npm test（完整 Harness 套件，与 pytest 串行）
     -> offline Eval
+    -> 保存 JUnit 测试报告
 
-harness（Pi Harness，Node 22）
+harness（独立离线检查，Node 22）
     -> npm ci
     -> npm run typecheck
-    -> npm run test:ci        # 纯离线子集
+    -> npm run test:ci（无 MySQL / Python 服务）
 
 Pull Request
-    -> 上述两个 job
+    -> 上述两个任务
     -> 不构建和发布镜像
 
 main push / workflow_dispatch
-    -> 同一质量门禁
+    -> 两个任务均成功
     -> image build / publish
 ```
 
-`npm run test:ci` **不是** `npm test` 的降级别名。绝大多数 Harness 套件按设计就是
-集成测试：它们会重建真实 MySQL 库并在子进程里拉起真实 Python `internal_api`，
-GitHub Runner 上都没有。所以 CI 只跑子集，而子集成员**逐个列在**
-`pi-harness/vitest.ci.config.ts` 里，并附上每个文件为何离线的说明——成员资格是
-静态声明，不是运行时"失败就跳过"，因此 CI 不会假绿。本地全量绿仍然以 `npm test`
-（需真实 MySQL + Python）为准。
+完整测试使用确定性模型替身，不访问真实 LLM。跨服务测试会启动真实 Python
+`internal_api` 和 Harness 进程，两个测试运行器按顺序使用任务内的
+`smartcs_phase1_test`，避免同时重建同一数据库。
+
+`npm run test:ci` 保留为快速离线子集，成员列在
+`pi-harness/vitest.ci.config.ts`；完整集成套件由 `test` 任务运行。
+Python 结果由 `scripts/check_ci_test_results.py` 检查：认证、checkpoint、记忆、
+会话、Redis 和跨服务测试必须出现，跳过仅允许缺少可选 ONNX 运行时或本地
+holdout 评测产物。`jieba` 是必需依赖，缺失不能作为正常跳过。
+测试报告保存在 `test-results` Actions artifact 中，保留七天；基线与验证记录见
+[重构前测试基线](docs/refactor-baseline.md)。
 
 镜像仓库名为：
 

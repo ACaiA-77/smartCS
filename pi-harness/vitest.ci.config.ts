@@ -1,18 +1,16 @@
 import { defineConfig } from "vitest/config";
 
 /**
- * The CI subset: the suites that run with NO MySQL, NO Python service and NO
- * network. `npm test` still runs everything — this config exists so CI can be
- * honest rather than green.
+ * The offline CI subset: no MySQL and no Python service. The workflow also
+ * runs the full `npm test` suite in its integration job with real dependencies.
  *
  * WHY AN EXPLICIT LIST
  *
  * Most of this repository's vitest suites are integration tests by design: they
  * reset a real MySQL database and boot the real FastAPI `internal_api` in a
- * subprocess (see tests/README.md). A GitHub runner has neither. Running the
- * whole suite there would fail — and "fixing" it by skipping the failing files
- * at runtime is exactly the kind of fake-green this list avoids: membership is
- * decided here, once, and every entry below is a file that was MEASURED to pass
+ * subprocess (see tests/README.md). The separate integration job provisions
+ * both; this fast job intentionally has neither. Membership is decided here,
+ * once, and every entry below is a file that was MEASURED to pass
  * with `MYSQL_HOST=127.0.0.1 MYSQL_PORT=1 MYSQL_PASSWORD=<invalid>
  * PYTHON_INTERNAL_BASE_URL=http://127.0.0.1:1`, i.e. with every external
  * dependency deliberately unreachable.
@@ -32,11 +30,9 @@ import { defineConfig } from "vitest/config";
  *                                  HTTP server standing in for the gateway
  *   phase11-outbox-ops.test.ts     receipt stub + pure CLI argument parsing
  *
- * What is NOT here, and is therefore not verified by CI: everything that needs
- * the real database or the real Python runtime — the crash matrix, the state
- * and transport matrices, the memory-outbox end-to-end chain, JWT interop and
- * the Python-side pytest suite. Those remain local acceptance runs (pytest runs
- * its own job; see the workflow).
+ * The crash/state/transport matrices, memory-outbox chain, JWT interop and
+ * other database/Python suites are covered by the full integration job, after
+ * pytest finishes so the two runners never reset their shared schema together.
  */
 const OFFLINE_SUITES = [
   "tests/smoke.test.ts",

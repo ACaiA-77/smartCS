@@ -7,8 +7,11 @@ racing.
 `npm test` runs everything and needs that database. `npm run test:ci` runs only
 the suites that were measured to pass with every external dependency
 unreachable — the list, and the justification for each file, is in
-`vitest.ci.config.ts`. CI uses the latter; a local "all green" claim must come
-from the former.
+`vitest.ci.config.ts`. GitHub Actions runs both: an isolated offline job runs
+`test:ci` plus typecheck, and the integration job runs full `npm test` after
+pytest, using its own MySQL/Redis service containers and installed Python
+runtime. The image publish job waits for both jobs. Python and Harness JUnit
+reports are saved as the `test-results` workflow artifact for seven days.
 
 ## The shared database
 
