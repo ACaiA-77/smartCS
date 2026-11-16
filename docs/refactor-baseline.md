@@ -44,6 +44,37 @@ MySQL 服务，但没有打开真实存储测试开关，没有 Redis 服务，�
 修复后本地以可丢弃的 MySQL 8 / Redis 7 容器验证：上述 4 个模块 74 passed，
 0 skipped；跨服务 e2e 1 passed。
 
+## 第二次完整运行暴露的问题（已修）：Linux 上的"孙进程残留"
+
+run 43921262260（提交 93dc99c）Python 套件与覆盖检查全部通过，新增的完整
+Harness 步骤 **10 failed, 181 passed**，集中在四个故障矩阵文件
+（F-crash 的 F3/F5/F6、F-state 的 F10/F13/F14、F-transport 的 F4/F9/F11、
+F-integration-chain）。失败响应里出现的是**上一轮测试脚本**的固定文案
+（`您的订单正在运输中。`）——说明请求根本没有打到本轮新启动的 harness。
+
+根因：`tsx` CLI 会把目标脚本再 `spawn` 一层，真正监听端口的服务是
+`spawn()` 返回进程的**孙进程**。旧的 `hardKill` 在 POSIX 上只
+`child.kill("SIGKILL")` 直接子进程，孙进程继续监听；下一轮启动的
+`/health` 探针立刻被它应答，于是测试拿到旧进程、旧 Faux 脚本、旧会话状态。
+Windows 分支用的是 `taskkill /T`（杀整棵进程树），所以本地一直通过、CI
+（Linux）稳定失败。在 `node:22-alpine` 容器里用最小复现确认：
+
+```
+single: started=true portStillOpenAfterKill=true
+group:  started=true portStillOpenAfterKill=false
+```
+
+修复（四道，缺一不可）：
+
+| 措施 | 位置 |
+| --- | --- |
+| POSIX 上 `detached` 自成进程组，`SIGKILL` 负 pid 杀整组 | `tests/helpers/harness.ts::treeSpawnOptions/hardKill` |
+| 固定端口重启前 `waitForPortFree`，残留进程当场报错而不是被静默复用 | 同上；phase1-restart、phase10 改用它 |
+| 启动就绪改看 fixture 自己打印的 `listening` 行，并携带本轮 `MATRIX_BOOT_TOKEN` | `tests/helpers/f-matrix.ts`、`tests/fixtures/matrix-harness.ts` |
+| 三级进程树回归测试 | `tests/harness-kill-tree.test.ts` |
+
+本地复跑（可丢弃 MySQL，串行）：上述六个文件 **6 passed / 23 tests passed**。
+
 ## 本地已完成的验证
 
 在独立 worktree `fix/ci-integration-coverage` 中运行；主工作区未提交文档和

@@ -37,7 +37,7 @@ import { MemorySourceStore } from "../src/db/memory-source.js";
 import { createHarnessServer, type HarnessServer } from "../src/server/app.js";
 import { signHs256 } from "../src/business/jwt-hs256.js";
 import { PI_HARNESS_ROOT, pythonEnv, resolveSmartCsPaths, userJwtSecret, type SmartCsPaths } from "../src/config/env.js";
-import { makeTmpDir } from "./helpers/harness.js";
+import { makeTmpDir, hardKill, treeSpawnOptions, waitForPortFree } from "./helpers/harness.js";
 import {
   TEST_DATABASE,
   childMysqlEnv,
@@ -156,6 +156,8 @@ function startCrashHarness(options: { crashPoint?: boolean }): void {
   const tsxCli = join(PI_HARNESS_ROOT, "node_modules", "tsx", "dist", "cli.mjs");
   crashChild = spawn(process.execPath, [tsxCli, "src/server/main.ts"], {
     cwd: PI_HARNESS_ROOT,
+    // tsx re-execs the server as ITS child: kill the whole group, not one pid.
+    ...treeSpawnOptions(),
     env: {
       ...process.env,
       ...pythonEnv(),
@@ -208,16 +210,8 @@ async function killCrashHarness(): Promise<void> {
   if (!crashChild) return;
   const dying = crashChild;
   crashChild = undefined;
-  await new Promise<void>((resolve) => {
-    dying.once("exit", () => resolve());
-    if (process.platform === "win32") {
-      spawn("taskkill", ["/pid", String(dying.pid), "/f", "/t"], { stdio: "ignore" });
-    } else {
-      dying.kill("SIGKILL");
-    }
-    setTimeout(resolve, 10_000).unref?.();
-  });
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  await hardKill(dying);
+  await waitForPortFree(CRASH_HARNESS_PORT);
 }
 
 async function crashChat(clientRequestId: string, message: string) {

@@ -218,7 +218,15 @@ async function main(): Promise<void> {
     }).listen(controlPort, "127.0.0.1");
   }
 
-  console.log(JSON.stringify({ event: "listening", port: bound, writeMode, controlPort }));
+  console.log(
+    JSON.stringify({
+      event: "listening",
+      port: bound,
+      bootToken: process.env.MATRIX_BOOT_TOKEN ?? "",
+      writeMode,
+      controlPort,
+    }),
+  );
 }
 
 main().catch((error) => {

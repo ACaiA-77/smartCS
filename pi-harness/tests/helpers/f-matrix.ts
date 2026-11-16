@@ -10,11 +10,13 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PI_HARNESS_ROOT, resolveMysqlConfig } from "../../src/config/env.js";
 import { mintServiceToken } from "../../src/business/python-client.js";
+import { hardKill, treeSpawnOptions } from "./harness.js";
 
 export const MATRIX_HARNESS_FIXTURE = join(PI_HARNESS_ROOT, "tests", "fixtures", "matrix-harness.ts");
 
@@ -213,8 +215,13 @@ export async function startMatrixHarness(options: MatrixHarnessOptions): Promise
   // The child starts from the raw environment, which does NOT carry the shared
   // python-impl/.env secrets; resolve them here and hand them over explicitly.
   const mysql = { ...resolveMysqlConfig(), database: options.database };
+  // A per-boot identity. `/health` from ANY other process — a leftover from a
+  // previous boot on the same port — must never be accepted as this boot's
+  // readiness signal, or every later assertion is about the wrong run.
+  const bootToken = randomBytes(8).toString("hex");
   const child = spawn(process.execPath, [tsxCli, MATRIX_HARNESS_FIXTURE], {
     cwd: PI_HARNESS_ROOT,
+    ...treeSpawnOptions(),
     env: {
       ...process.env,
       MYSQL_HOST: mysql.host,
@@ -222,6 +229,7 @@ export async function startMatrixHarness(options: MatrixHarnessOptions): Promise
       MYSQL_USER: mysql.user,
       MYSQL_PASSWORD: mysql.password,
       MATRIX_HARNESS_PORT: String(options.port),
+      MATRIX_BOOT_TOKEN: bootToken,
       MATRIX_SCRIPT_FILE: options.scriptFile,
       MATRIX_SCRIPT_REPEAT: String(options.scriptRepeat ?? 4),
       ...(options.contextWindow ? { MATRIX_FAUX_CONTEXT_WINDOW: String(options.contextWindow) } : {}),
@@ -245,8 +253,25 @@ export async function startMatrixHarness(options: MatrixHarnessOptions): Promise
   });
 
   let stderrText = "";
-  child.stderr?.on("data", (chunk) => {
+  child.stderr?.on("data", (chunk: Buffer) => {
     stderrText += String(chunk);
+  });
+  // The fixture prints one JSON line once ITS socket is bound. Waiting for the
+  // line that carries this boot's token — instead of polling `/health` — is
+  // what keeps a survivor from a previous boot from being mistaken for this one.
+  let stdoutText = "";
+  let listening = false;
+  child.stdout?.on("data", (chunk: Buffer) => {
+    stdoutText += String(chunk);
+    for (const line of stdoutText.split("\n")) {
+      if (!line.trim().startsWith("{")) continue;
+      try {
+        const event = JSON.parse(line) as { event?: string; bootToken?: string };
+        if (event.event === "listening" && event.bootToken === bootToken) listening = true;
+      } catch {
+        /* partial line: wait for more */
+      }
+    }
   });
 
   const url = `http://127.0.0.1:${options.port}`;
@@ -255,13 +280,11 @@ export async function startMatrixHarness(options: MatrixHarnessOptions): Promise
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(`matrix harness exited during startup (code=${child.exitCode}): ${stderrText}`);
     }
-    try {
-      const probe = await fetch(`${url}/health`, { signal: AbortSignal.timeout(1_000) });
-      if (probe.ok) break;
-    } catch {
-      /* not up yet */
+    if (listening) {
+      const probe = await fetch(`${url}/health`, { signal: AbortSignal.timeout(1_000) }).catch(() => undefined);
+      if (probe?.ok) break;
     }
-    if (Date.now() > deadline) throw new Error(`matrix harness did not start: ${stderrText}`);
+    if (Date.now() > deadline) throw new Error(`matrix harness did not start: ${stderrText}\n${stdoutText}`);
     await new Promise((r) => setTimeout(r, 200));
   }
 
@@ -272,23 +295,6 @@ export async function startMatrixHarness(options: MatrixHarnessOptions): Promise
     stderr: () => stderrText,
     kill: () => hardKill(child),
   };
-}
-
-/** SIGKILL-equivalent with no graceful shutdown path. */
-export function hardKill(child: ChildProcess): Promise<void> {
-  return new Promise<void>((resolve) => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resolve();
-      return;
-    }
-    child.once("exit", () => resolve());
-    if (process.platform === "win32") {
-      spawn("taskkill", ["/pid", String(child.pid), "/f", "/t"], { stdio: "ignore" });
-    } else {
-      child.kill("SIGKILL");
-    }
-    setTimeout(resolve, 10_000).unref?.();
-  });
 }
 
 export function crashMarker(path: string): { point: string; at: number; pid: number } | undefined {

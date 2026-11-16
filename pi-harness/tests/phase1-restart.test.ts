@@ -20,7 +20,7 @@ import {
   userJwtSecret,
   type SmartCsPaths,
 } from "../src/config/env.js";
-import { makeTmpDir } from "./helpers/harness.js";
+import { makeTmpDir, hardKill, treeSpawnOptions, waitForPortFree } from "./helpers/harness.js";
 import {
   TEST_DATABASE,
   childMysqlEnv,
@@ -63,10 +63,12 @@ function userToken(accountId: number): string {
 async function startHarness(): Promise<void> {
   stderrText = "";
   // Invoke the tsx CLI through node directly: no shell, so arguments are not
-  // re-parsed by cmd.exe and the child is a single killable process.
+  // re-parsed by cmd.exe. tsx re-execs the server as ITS child, hence the
+  // process-GROUP spawn options (see `treeSpawnOptions`).
   const tsxCli = join(PI_HARNESS_ROOT, "node_modules", "tsx", "dist", "cli.mjs");
   child = spawn(process.execPath, [tsxCli, "src/server/main.ts"], {
     cwd: PI_HARNESS_ROOT,
+    ...treeSpawnOptions(),
     env: {
       ...process.env,
       ...pythonEnv(),
@@ -92,6 +94,9 @@ async function startHarness(): Promise<void> {
 
   const deadline = Date.now() + 60_000;
   for (;;) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`harness exited during startup (code=${child.exitCode}): ${stderrText}`);
+    }
     try {
       const response = await fetch(`http://127.0.0.1:${HARNESS_PORT}/health`, { signal: AbortSignal.timeout(1_000) });
       if (response.ok) return;
@@ -108,17 +113,10 @@ async function killHarness(): Promise<void> {
   if (!child) return;
   const dying = child;
   child = undefined;
-  await new Promise<void>((resolve) => {
-    dying.once("exit", () => resolve());
-    if (process.platform === "win32") {
-      spawn("taskkill", ["/pid", String(dying.pid), "/f", "/t"], { stdio: "ignore" });
-    } else {
-      dying.kill("SIGKILL");
-    }
-    setTimeout(resolve, 10_000).unref?.();
-  });
-  // Let the port be released before rebinding.
-  await new Promise((r) => setTimeout(r, 500));
+  await hardKill(dying);
+  // Let the port be released before rebinding; a survivor fails loudly here
+  // instead of silently serving the next probe.
+  await waitForPortFree(HARNESS_PORT);
 }
 
 async function chat(clientRequestId: string, message: string) {
