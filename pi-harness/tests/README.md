@@ -7,8 +7,34 @@ racing.
 `npm test` runs everything and needs that database. `npm run test:ci` runs only
 the suites that were measured to pass with every external dependency
 unreachable — the list, and the justification for each file, is in
-`vitest.ci.config.ts`. CI uses the latter; a local "all green" claim must come
-from the former.
+`vitest.ci.config.ts`. GitHub Actions runs both: an isolated offline job runs
+`test:ci` plus typecheck, and the integration job runs full `npm test` after
+pytest, using its own MySQL/Redis service containers and installed Python
+runtime. The image publish job waits for both jobs. Python and Harness JUnit
+reports are saved as the `test-results` workflow artifact for seven days.
+
+## Killing a spawned server: kill the TREE
+
+`tsx` re-execs its target as a child, so the process holding a spawned
+server's port is a **grandchild** of the pid `spawn()` returned. `child.kill()`
+on POSIX ends only the direct child; the grandchild keeps listening, and the
+next boot's `/health` probe answers from the stale process — with the previous
+test's Faux script. The failure then looks like a product bug in whichever
+assertion runs next. On Windows `taskkill /T` already walked the tree, which is
+why this surfaced only on Linux CI.
+
+Rules for any suite that restarts a server on a fixed port:
+
+- spawn with `treeSpawnOptions()` from `tests/helpers/harness.ts`;
+- stop it with `hardKill()` (SIGKILL to the whole process group);
+- after the kill, `await waitForPortFree(port)` before rebinding — a survivor
+  fails there with a message naming the defect instead of silently serving the
+  next probe;
+- when the fixture can report its own readiness, bind readiness to a per-boot
+  token (`startMatrixHarness` does this via `MATRIX_BOOT_TOKEN`) so a response
+  from any other process is never accepted.
+
+`tests/harness-kill-tree.test.ts` pins the contract with a three-level tree.
 
 ## The shared database
 

@@ -28,6 +28,7 @@ knowledge_sources/review_samples.md
 
 # Logs and local runtime output
 *.log
+/test-results/
 
 # Generated local SQLite demo data
 data/*.db

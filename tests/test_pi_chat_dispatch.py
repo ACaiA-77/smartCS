@@ -29,6 +29,7 @@ from tests.internal_api_helpers import (
     seed_account,
     seed_session,
 )
+from tests.app_state import patch_app_state
 
 TOKEN = "header.payload.signature"
 
@@ -107,7 +108,7 @@ async def sessions(monkeypatch):
     database = platform_database()
     await database.initialize()
     handle = Sessions(database)
-    monkeypatch.setattr(main.app.state, "platform_sessions", handle, raising=False)
+    patch_app_state(monkeypatch, main.app, platform_sessions=handle)
     return handle
 
 

@@ -15,6 +15,8 @@ from memory.long_term import HashEmbeddingBackend, LongTermMemory
 from memory.session_store import SessionStore
 from memory.short_term import ShortTermMemory
 from rag.models import RetrievalHit
+from tests.loopback import unused_redis_url
+from tests.app_state import patch_app_state
 
 
 class _SmokeLLM:
@@ -141,7 +143,7 @@ async def test_api_chat_rag_and_capability_smoke(monkeypatch):
     from api import main as api
 
     llm = _SmokeLLM()
-    short_term = ShortTermMemory(redis_url="redis://127.0.0.1:6399/0", redis_retry_cooldown=60)
+    short_term = ShortTermMemory(redis_url=unused_redis_url(), redis_retry_cooldown=60)
     session_store = SessionStore(short_term)
     retriever = _SmokeRetriever()
     long_term_memory = LongTermMemory(
@@ -160,7 +162,7 @@ async def test_api_chat_rag_and_capability_smoke(monkeypatch):
     monkeypatch.setattr(api, "chat_orchestrator", orchestrator)
     monkeypatch.setattr(api, "checkpoint_store", None)
     monkeypatch.setattr(api, "session_store", session_store)
-    monkeypatch.setattr(api.app.state, "platform_sessions", sessions, raising=False)
+    patch_app_state(monkeypatch, api.app, platform_sessions=sessions)
     api.app.dependency_overrides[api.get_current_user] = lambda: user
 
     try:

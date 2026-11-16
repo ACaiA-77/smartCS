@@ -11,6 +11,7 @@ from context.invocation import invoke_agent
 from context.manager import ContextManager, WorkingSetCache, active_context
 from context.models import ContextOverflowError, ModelProfile
 from memory.short_term import ShortTermMemory
+from tests.loopback import unused_redis_url
 
 
 def _byte_tokenizer(text: str) -> list[int]:
@@ -164,7 +165,7 @@ def _profile() -> ModelProfile:
 
 
 def _memory_cache(ttl: int = 1800) -> WorkingSetCache:
-    return WorkingSetCache(ShortTermMemory(ttl_seconds=ttl), ttl=ttl)
+    return WorkingSetCache(ShortTermMemory(redis_url=unused_redis_url(), ttl_seconds=ttl), ttl=ttl)
 
 
 @pytest.mark.asyncio

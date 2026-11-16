@@ -8,10 +8,12 @@ import pytest
 
 from memory.session_store import ConversationState, SessionStore
 from memory.short_term import ShortTermMemory
+from tests.loopback import unused_redis_url
+from tests.app_state import patch_app_state
 
 
 def _store() -> SessionStore:
-    return SessionStore(ShortTermMemory(redis_url="redis://127.0.0.1:6399/0"))
+    return SessionStore(ShortTermMemory(redis_url=unused_redis_url()))
 
 
 def _pending() -> dict:
@@ -64,7 +66,7 @@ async def test_pending_action_arguments_must_match_top_level_for_dict_and_object
 
 @pytest.mark.asyncio
 async def test_legacy_snapshot_migrates_once_and_invalid_pending_is_skipped():
-    short = ShortTermMemory(redis_url="redis://127.0.0.1:6399/0")
+    short = ShortTermMemory(redis_url=unused_redis_url())
     store = SessionStore(short)
     valid = {"last_intent": "order_query", "accumulated_entities": {"order_id": "ORD-1"}, "turn_count": 2, "pending_action": _pending()}
     await short.add_message("s", "system", "[wm_snapshot]" + json.dumps(valid))
@@ -85,7 +87,7 @@ async def test_legacy_snapshot_migrates_once_and_invalid_pending_is_skipped():
 
 @pytest.mark.asyncio
 async def test_no_snapshot_history_and_restart_with_new_store():
-    short = ShortTermMemory(redis_url="redis://127.0.0.1:6399/0")
+    short = ShortTermMemory(redis_url=unused_redis_url())
     first = SessionStore(short)
     await first.add_message("s", "user", "hello")
     await first.update_state("s", last_intent="knowledge_rag", turn_count=1)
@@ -122,7 +124,7 @@ async def test_api_history_exposes_conversation_messages_only(monkeypatch):
     monkeypatch.setattr(api_main, "session_store", store)
     monkeypatch.setattr(api_main, "checkpoint_store", None)
     sessions = SimpleNamespace(get_owned=AsyncMock(return_value={"session_id": "api-session", "account_id": 1}))
-    monkeypatch.setattr(api_main.app.state, "platform_sessions", sessions, raising=False)
+    patch_app_state(monkeypatch, api_main.app, platform_sessions=sessions)
     user = UserContext(1, "history-unit-test", "user_001")
 
     response = await api_main.get_history("api-session", user)

@@ -32,6 +32,8 @@ from mcp.execution_ledger import ExecutionLedger
 from mcp.mcp_server import MCPToolServer, ToolDefinition
 from mcp.tool_execution import ToolExecutionContext, ToolExecutor
 from tests.conftest import MockLLM
+from tests.loopback import unused_redis_url
+from tests.app_state import patch_app_state
 
 
 PROFILE = ModelProfile(
@@ -1153,12 +1155,7 @@ async def test_chat_routes_preserve_context_errors_for_safe_global_handler(monke
     monkeypatch.setattr(api, "chat_orchestrator", orchestrator)
     monkeypatch.setattr(api, "checkpoint_store", SimpleNamespace())
     monkeypatch.setattr(api, "_owned_session", AsyncMock(return_value={"session_id": "context-error-session"}))
-    monkeypatch.setattr(
-        api.app.state,
-        "platform_sessions",
-        SimpleNamespace(touch=AsyncMock()),
-        raising=False,
-    )
+    patch_app_state(monkeypatch, api.app, platform_sessions=SimpleNamespace(touch=AsyncMock()))
     user = SimpleNamespace(account_id=1, business_user_id="context-error-owner")
 
     with pytest.raises(ContextOverflowError):
@@ -1274,9 +1271,9 @@ async def test_two_sidebar_order_reads_append_independent_events_and_preserve_ol
     assert store.checkpoints[(session_id, user_id)].context.get("request_id") is None
 
     owner = UserContext(account_id=1, username="owner", business_user_id=user_id)
-    monkeypatch.setattr(api.app.state, "platform_sessions", SimpleNamespace(
+    patch_app_state(monkeypatch, api.app, platform_sessions=SimpleNamespace(
         get_owned=AsyncMock(return_value={"session_id": session_id}),
-    ), raising=False)
+    ))
     history = await api.get_history(session_id, owner)
     assert all(set(message) == {"role", "content"} for message in history["messages"])
     assert len(history["messages"]) == 6
@@ -1284,7 +1281,7 @@ async def test_two_sidebar_order_reads_append_independent_events_and_preserve_ol
     llm = MockLLM()
     orchestrator = ChatOrchestrator(
         llm,
-        SessionStore(ShortTermMemory(redis_url="redis://127.0.0.1:6399/0", redis_retry_cooldown=60)),
+        SessionStore(ShortTermMemory(redis_url=unused_redis_url(), redis_retry_cooldown=60)),
         LongTermMemory(),
         checkpoint_store=store,
         context_manager=manager,

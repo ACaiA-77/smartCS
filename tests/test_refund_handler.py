@@ -12,6 +12,7 @@ from memory.long_term import LongTermMemory
 from memory.session_store import SessionStore
 from memory.short_term import ShortTermMemory
 from tests.conftest import MockLLM
+from tests.loopback import unused_redis_url
 
 
 def _setup(tmp_path):
@@ -22,7 +23,7 @@ def _setup(tmp_path):
 
 
 def _store() -> SessionStore:
-    return SessionStore(ShortTermMemory(redis_url="redis://127.0.0.1:6399/0"))
+    return SessionStore(ShortTermMemory(redis_url=unused_redis_url()))
 
 
 def _state(message: str, session_id: str = "refund-session", user_id: str = "user_002"):
@@ -270,7 +271,7 @@ def test_pending_action_state_survives_new_store_instance():
     import asyncio
 
     async def scenario():
-        short = ShortTermMemory(redis_url="redis://127.0.0.1:6399/0")
+        short = ShortTermMemory(redis_url=unused_redis_url())
         first = SessionStore(short)
         restarted = SessionStore(short)
         action = {

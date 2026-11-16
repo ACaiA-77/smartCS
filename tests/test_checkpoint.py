@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from contextlib import contextmanager
 from unittest.mock import AsyncMock
 
 import httpx
@@ -24,6 +25,11 @@ from mcp.execution_recovery import ExecutionReconciler
 from refunds.service import RefundService
 from tickets.service import TicketService
 from tests.test_orchestrator import _orchestrator, _state
+from tests.app_state import patch_app_state
+
+
+class SimulatedCrash(BaseException):
+    """A process boundary bypasses application exception handlers."""
 
 
 def test_strict_json_validation_and_required_password(monkeypatch):
@@ -222,12 +228,16 @@ async def test_ticket_plan_and_completed_ledger_are_reused(mysql, tmp_path):
         "ticket_handler": {"action": "create", "ticket_type": "complaint", "priority": "medium",
                            "summary": "服务投诉", "details": "需要人工处理", "debug_trace": "must_not_save"}}
     agent, _, _, executor, _ = runtime(tmp_path, store, overrides=overrides)
-    original = executor.ledger.complete
-    def crash(key, result):
-        original(key, result)
-        raise RuntimeError("injected crash after ledger")
-    executor.ledger.complete = crash
-    with pytest.raises(RuntimeError, match="injected"):
+    original = executor.ledger.atomic_write
+
+    @contextmanager
+    def crash(*args, **kwargs):
+        with original(*args, **kwargs) as connection:
+            yield connection
+        raise SimulatedCrash("injected crash after committed ledger")
+
+    executor.ledger.atomic_write = crash
+    with pytest.raises(SimulatedCrash, match="injected"):
         await agent.ainvoke(request(sid, "帮我创建投诉工单", "ticket"))
     assert "debug_trace" not in (await store.load(sid, "user_002")).context["ticket_plan"]
     restarted, _, _, tools, _ = runtime(tmp_path, store)
@@ -241,12 +251,16 @@ async def test_compliance_escalation_crash_replays_without_second_ticket(mysql, 
     store, sid = mysql
     overrides = {"compliance": {"passed": False, "risk_level": "high", "violations": ["敏感内容"]}}
     agent, _, _, executor, _ = runtime(tmp_path, store, overrides=overrides)
-    original = executor.ledger.complete
-    def crash(key, result):
-        original(key, result)
-        raise RuntimeError("injected escalation crash")
-    executor.ledger.complete = crash
-    with pytest.raises(RuntimeError, match="injected"):
+    original = executor.ledger.atomic_write
+
+    @contextmanager
+    def crash(*args, **kwargs):
+        with original(*args, **kwargs) as connection:
+            yield connection
+        raise SimulatedCrash("injected escalation crash")
+
+    executor.ledger.atomic_write = crash
+    with pytest.raises(SimulatedCrash, match="injected"):
         await agent.ainvoke(request(sid, "查询订单 ORD-20260801-0002", "escalate"))
     restarted, _, _, tools, _ = runtime(tmp_path, store)
     restarted.llm.ainvoke = AsyncMock(side_effect=AssertionError("reviewed stage called model"))
@@ -294,11 +308,11 @@ async def test_http_ownership_history_delete_and_safe_errors(mysql, tmp_path, mo
     other = UserContext(account_id=2, username="other", business_user_id="wrong")
     current = [owner]
     monkeypatch.setitem(api.app.dependency_overrides, api.get_current_user, lambda: current[0])
-    monkeypatch.setattr(api.app.state, "platform_sessions", SimpleNamespace(
+    patch_app_state(monkeypatch, api.app, platform_sessions=SimpleNamespace(
         get_owned=AsyncMock(side_effect=lambda session_id, account_id:
                             {"session_id": sid} if session_id == sid and account_id == 1 else None),
         touch=AsyncMock(),
-    ), raising=False)
+    ))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url="http://test") as client:
         body = {"session_id": sid, "message": "查询订单 ORD-20260801-0002", "client_request_id": "http"}
         assert (await client.post("/api/chat", json=body)).status_code == 200
