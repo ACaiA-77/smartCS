@@ -122,3 +122,18 @@ def base_state() -> dict[str, Any]:
         "retry_count": 0,
         "needs_clarification": False,
     }
+
+
+def pytest_configure(config):  # DIAG: temporary teardown instrumentation
+    from _pytest.monkeypatch import MonkeyPatch, notset
+
+    def undo(self):
+        for obj, name, value in reversed(self._setattr):
+            if value is notset and hasattr(obj, "_state"):
+                present = name in obj._state
+                print(f"DIAG-UNDO-DELETE {name} present={present} state={id(obj)}", flush=True)
+        return MonkeyPatch._diag_original_undo(self)
+
+    if not hasattr(MonkeyPatch, "_diag_original_undo"):
+        MonkeyPatch._diag_original_undo = MonkeyPatch.undo
+        MonkeyPatch.undo = undo

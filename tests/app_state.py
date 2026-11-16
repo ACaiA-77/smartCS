@@ -17,7 +17,6 @@ from typing import Any
 def patch_app_state(monkeypatch, app, /, **values: Any) -> None:
     for name, value in values.items():
         if not hasattr(app.state, name):
-            # Define a previous value first: the final undo is then a restore,
-            # and the single recorded delete always runs against a present key.
+            print(f"DIAG-ABSENT {name} app={id(app)} state={id(app.state)}", flush=True)
             monkeypatch.setattr(app.state, name, None, raising=False)
         monkeypatch.setattr(app.state, name, value)
