@@ -26,6 +26,12 @@ from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any, Protocol
 
+from memory.user_memory_search import (
+    score as _score,
+    search_terms as _search_terms,
+    semantic_text as _semantic_text,
+    tokens as _tokens,
+)
 from platform_db.database import PlatformDatabase
 
 
@@ -1772,50 +1778,3 @@ def _is_strict_json_value(value: Any) -> bool:
     if isinstance(value, dict):
         return all(type(key) is str and _is_strict_json_value(item) for key, item in value.items())
     return False
-
-
-def _semantic_text(value: Any) -> str:
-    if isinstance(value, dict):
-        ignored = {"source", "source_readonly_hint", "not_authoritative", "requires_live_tool_lookup",
-                   "source_event_id", "session_id", "confidence", "importance", "created_at",
-                   "derived_abstraction"}
-        return " ".join(_semantic_text(item) for key, item in value.items() if key not in ignored)
-    if isinstance(value, (list, tuple, set)):
-        return " ".join(_semantic_text(item) for item in value)
-    return str(value) if value is not None else ""
-
-
-_STOP_WORDS = {
-    "the", "a", "an", "and", "or", "to", "for", "of", "in", "on", "with", "is", "it", "my", "i",
-    "me", "this", "that", "what", "when", "where", "how", "do", "does", "can", "you", "please",
-    "的", "了", "吗", "呢", "我", "你", "他", "她", "它", "是", "在", "请", "一下", "什么",
-}
-
-
-def _search_terms(terms: list[str]) -> list[str]:
-    normalized: list[str] = []
-    for raw in terms:
-        term = str(raw).lower().strip()
-        if not term or len(term) > 64 or not re.fullmatch(r"[a-z0-9_\u4e00-\u9fff]+", term):
-            continue
-        if term not in normalized:
-            normalized.append(term)
-        if len(normalized) >= 24:
-            break
-    return normalized
-
-
-def _tokens(text: str) -> list[str]:
-    normalized = (text or "").lower()
-    words = re.findall(r"[a-z0-9_]+", normalized)
-    cjk_chars = re.findall(r"[\u4e00-\u9fff]", normalized)
-    cjk_bigrams = [normalized[index:index + 2] for index in range(max(len(normalized) - 1, 0))]
-    cjk_bigrams = [item for item in cjk_bigrams if re.search(r"[\u4e00-\u9fff]", item)]
-    return [item for item in words + cjk_chars + cjk_bigrams if item not in _STOP_WORDS and len(item) > 1 or item in {"a", "i"}]
-
-
-def _score(query_terms: set[str], text: str) -> float:
-    body_terms = set(_tokens(text))
-    if not query_terms or not body_terms:
-        return 0.0
-    return len(query_terms & body_terms) / len(query_terms)
