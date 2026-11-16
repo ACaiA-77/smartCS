@@ -12,6 +12,7 @@ from platform_db.sessions import Sessions
 from platform_db.users import Users
 from tests.auth_integration_helpers import auth_test_data
 from tests.test_checkpoint import runtime
+from tests.app_state import patch_app_state
 
 
 @pytest.fixture
@@ -30,8 +31,7 @@ async def authenticated_runtime(tmp_path, monkeypatch):
                             ("session_store", agent.session_store), ("order_repository", repository),
                             ("mcp_server", executor.server), ("tool_executor", executor)):
             monkeypatch.setattr(api, name, value)
-        monkeypatch.setattr(api.app.state, "platform_users", Users(data.database), raising=False)
-        monkeypatch.setattr(api.app.state, "platform_sessions", Sessions(data.database), raising=False)
+        patch_app_state(monkeypatch, api.app, platform_users=Users(data.database), platform_sessions=Sessions(data.database))
         assert api.get_current_user not in api.app.dependency_overrides
         transport = httpx.ASGITransport(app=api.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"Origin": "http://test"}) as alice, \
@@ -158,8 +158,7 @@ async def test_real_mysql_reopen_login_ownership_and_initial_request_replay(auth
     # New DB/store objects simulate application store recreation; the HTTP probe
     # separately kills and restarts a real Uvicorn process.
     database = PlatformDatabase.from_env()
-    monkeypatch.setattr(api.app.state, "platform_users", Users(database))
-    monkeypatch.setattr(api.app.state, "platform_sessions", Sessions(database))
+    patch_app_state(monkeypatch, api.app, platform_users=Users(database), platform_sessions=Sessions(database))
     from checkpoint.store import CheckpointStore
     monkeypatch.setattr(api, "checkpoint_store", CheckpointStore.from_env())
     assert (await alice.post("/api/auth/logout")).status_code == 200

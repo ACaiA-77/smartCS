@@ -22,6 +22,7 @@ from auth.jwt import COOKIE_NAME, ISSUER, TOKEN_TTL_SECONDS, cookie_options, dec
 from auth.password import hash_password, verify_password
 from platform_db import PlatformConflict, PlatformDatabase, Sessions, Users
 from scripts.init_demo_auth_user import verify_business_user
+from tests.app_state import patch_app_state
 
 
 @pytest.fixture
@@ -212,7 +213,7 @@ async def test_real_api_login_me_logout_and_disabled_account(auth_env, monkeypat
     account = {"id": 31, "username": "auth-test", "business_user_id": "user_001",
                "status": "active", "password_hash": hash_password(password)}
     users = MemoryUsers([account])
-    monkeypatch.setattr(api.app.state, "platform_users", users, raising=False)
+    patch_app_state(monkeypatch, api.app, platform_users=users)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url="http://test",
                                 headers={"Origin": "http://test"}) as client:
         for username, supplied in [("unknown-account", password), (account["username"], secrets.token_urlsafe(24))]:
@@ -286,9 +287,8 @@ async def test_api_login_and_authenticated_cookie_writes_reject_cross_origin(aut
     from api import main as api
     users = MemoryUsers([{"id": 47, "username": "csrf-test", "business_user_id": "user_002", "status": "active"}])
     users.by_username = AsyncMock(side_effect=AssertionError("cross-origin login reached account lookup"))
-    monkeypatch.setattr(api.app.state, "platform_users", users, raising=False)
     sessions = Mock()
-    monkeypatch.setattr(api.app.state, "platform_sessions", sessions, raising=False)
+    patch_app_state(monkeypatch, api.app, platform_users=users, platform_sessions=sessions)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url="http://test",
                                 headers={"Origin": "https://untrusted.example"}) as client:
         response = await client.post("/api/auth/login", json={"username": "csrf-test", "password": secrets.token_urlsafe(24)})
@@ -313,7 +313,7 @@ async def test_auth_mysql_failure_returns_sanitized_503(auth_env, monkeypatch, c
     failure = database.pymysql.OperationalError(1045, "SELECT password_hash FROM platform_user; password=" + marker)
     monkeypatch.setattr(database.pymysql, "connect", Mock(side_effect=failure))
     db = PlatformDatabase(password=secrets.token_urlsafe(32))
-    monkeypatch.setattr(api.app.state, "platform_users", Users(db), raising=False)
+    patch_app_state(monkeypatch, api.app, platform_users=Users(db))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url="http://test",
                                 headers={"Origin": "http://test"}) as client:
         response = await client.post("/api/auth/login", json={"username": "auth-test", "password": secrets.token_urlsafe(24)})
@@ -366,8 +366,7 @@ async def test_real_mysql_account_session_restart_login_and_ownership(auth_env, 
             await users.create(alice["username"], password_hash, prefix + "-unused")
         with pytest.raises(PlatformConflict):
             await users.create(prefix + "-unused", password_hash, alice["business_user_id"])
-        monkeypatch.setattr(api.app.state, "platform_users", users, raising=False)
-        monkeypatch.setattr(api.app.state, "platform_sessions", sessions, raising=False)
+        patch_app_state(monkeypatch, api.app, platform_users=users, platform_sessions=sessions)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url="http://test",
                                     headers={"Origin": "http://test"}) as client:
             assert (await client.post("/api/auth/login", json={"username": alice["username"], "password": password})).status_code == 200
@@ -385,8 +384,7 @@ async def test_real_mysql_account_session_restart_login_and_ownership(auth_env, 
             # New store instances simulate platform-store restart, not an in-memory substitute.
             restarted = PlatformDatabase.from_env()
             await restarted.initialize()
-            monkeypatch.setattr(api.app.state, "platform_users", Users(restarted))
-            monkeypatch.setattr(api.app.state, "platform_sessions", Sessions(restarted))
+            patch_app_state(monkeypatch, api.app, platform_users=Users(restarted), platform_sessions=Sessions(restarted))
             client.cookies.clear()
             assert (await client.post("/api/auth/login", json={"username": alice["username"], "password": password})).status_code == 200
             listed = (await client.get("/api/sessions")).json()["sessions"]

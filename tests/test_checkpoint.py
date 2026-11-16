@@ -25,6 +25,7 @@ from mcp.execution_recovery import ExecutionReconciler
 from refunds.service import RefundService
 from tickets.service import TicketService
 from tests.test_orchestrator import _orchestrator, _state
+from tests.app_state import patch_app_state
 
 
 class SimulatedCrash(BaseException):
@@ -307,7 +308,7 @@ async def test_http_ownership_history_delete_and_safe_errors(mysql, tmp_path, mo
     other = UserContext(account_id=2, username="other", business_user_id="wrong")
     current = [owner]
     monkeypatch.setitem(api.app.dependency_overrides, api.get_current_user, lambda: current[0])
-    monkeypatch.setattr(api.app.state, "platform_sessions", SimpleNamespace(
+    patch_app_state(monkeypatch, api.app, platform_sessions=SimpleNamespace(
         get_owned=AsyncMock(side_effect=lambda session_id, account_id:
                             {"session_id": sid} if session_id == sid and account_id == 1 else None),
         touch=AsyncMock(),

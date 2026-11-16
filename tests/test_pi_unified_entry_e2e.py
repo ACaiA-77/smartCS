@@ -49,6 +49,7 @@ from tests.internal_api_helpers import (
     random_username,
     seed_account,
 )
+from tests.app_state import patch_app_state
 
 PYTHON_IMPL = Path(__file__).resolve().parents[1]
 PI_HARNESS = PYTHON_IMPL / "pi-harness"
@@ -240,7 +241,7 @@ async def test_a_new_session_goes_through_the_unified_entry_into_the_harness(
         database = platform_database()
         await database.initialize()
         sessions = Sessions(database)
-        monkeypatch.setattr(main.app.state, "platform_sessions", sessions, raising=False)
+        patch_app_state(monkeypatch, main.app, platform_sessions=sessions)
         tripwire = _TripwireOrchestrator()
         monkeypatch.setattr(main, "chat_orchestrator", tripwire)
 

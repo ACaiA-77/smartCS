@@ -9,6 +9,7 @@ import pytest
 from memory.session_store import ConversationState, SessionStore
 from memory.short_term import ShortTermMemory
 from tests.loopback import unused_redis_url
+from tests.app_state import patch_app_state
 
 
 def _store() -> SessionStore:
@@ -123,7 +124,7 @@ async def test_api_history_exposes_conversation_messages_only(monkeypatch):
     monkeypatch.setattr(api_main, "session_store", store)
     monkeypatch.setattr(api_main, "checkpoint_store", None)
     sessions = SimpleNamespace(get_owned=AsyncMock(return_value={"session_id": "api-session", "account_id": 1}))
-    monkeypatch.setattr(api_main.app.state, "platform_sessions", sessions, raising=False)
+    patch_app_state(monkeypatch, api_main.app, platform_sessions=sessions)
     user = UserContext(1, "history-unit-test", "user_001")
 
     response = await api_main.get_history("api-session", user)
