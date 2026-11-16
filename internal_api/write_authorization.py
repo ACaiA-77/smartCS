@@ -9,20 +9,12 @@ Three rules, in order:
   1. the raw user message is read back from `memory_source_event` (the durable
      ledger written before the model ran) — never from the request body, so a
      compromised or confused harness cannot smuggle consent text;
-  2. the deterministic phrase rules decide, and they are **copied** from the
-     legacy handlers (see the provenance note below) so legacy behaviour is not
-     disturbed;
+  2. the deterministic phrase rules decide — `policies.consent`, the same
+     module the legacy handlers call, so this gate and the legacy path cannot
+     disagree about what consent looks like;
   3. the operation id is made durable in `pending_action.operation_id` AND
      `agent_run_receipt.open_write_operations` **before** the write is sent
      (plan v2 §6.3 iron rule — otherwise F4/F5 are unrecoverable).
-
-PROVENANCE / SYNC OBLIGATION
-    The consent phrase tables below are copied verbatim from
-    `agents/ticket_handler.py::_has_explicit_create_consent` (Phase 5a) and
-    `agents/refund_handler.py` (Phase 5b). `agents/` is READ-ONLY this phase and
-    legacy still uses its own copy, so the two now exist in parallel by design.
-    When legacy is retired, one of them must be deleted — until then, any change
-    to the legacy rule MUST be mirrored here.
 """
 
 from __future__ import annotations
@@ -33,6 +25,8 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+from policies.consent import has_explicit_create_consent, is_refund_confirmation
 
 PENDING_TTL_MINUTES = 30
 
@@ -47,34 +41,6 @@ class AuthorizationDenied(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
-
-
-def has_explicit_create_consent(user_message: str) -> bool:
-    """Copied from agents/ticket_handler.py::_has_explicit_create_consent.
-
-    LLM intent alone cannot authorize a ticket-creating side effect.
-    """
-    normalized = re.sub(r"\s+", "", str(user_message))
-    if any(
-        marker in normalized
-        for marker in (
-            "怎么", "如何", "怎样", "流程", "步骤", "规则", "政策",
-            "条件", "入口", "在哪里", "需要什么", "需要哪些", "怎么办",
-            "是什么", "有哪些要求",
-        )
-    ):
-        return False
-    if "工单" in normalized and any(
-        phrase in normalized for phrase in ("帮我创建", "我要创建", "请创建", "提交工单", "发起工单")
-    ):
-        return True
-    return any(
-        phrase in normalized
-        for phrase in (
-            "我要投诉", "帮我投诉", "我要申请理赔", "帮我申请理赔", "我要开户",
-            "帮我办理开户", "提交投诉", "提交申请", "创建工单", "发起申请",
-        )
-    )
 
 
 @dataclass(frozen=True)
@@ -301,20 +267,6 @@ class WriteAuthorizationService:
 # --- refund two-phase (Phase 5b) -------------------------------------------
 
 _ORDER_ID_RE = re.compile(r"ORD[_-]?\d{8}[_-]?\d{4}", re.IGNORECASE)
-
-
-def is_refund_confirmation(user_message: str) -> bool:
-    """Deterministic confirmation rule.
-
-    Mirrors the legacy intent router's mapping (`agents/refund_handler.py`):
-    the confirmation turn is the one that says 确认退款 (and the cancel phrases
-    are explicitly NOT confirmations). Kept deliberately narrow — a model's
-    paraphrase is not consent.
-    """
-    normalized = re.sub(r"\s+", "", str(user_message))
-    if any(phrase in normalized for phrase in ("取消退款", "不退了", "先不退", "算了")):
-        return False
-    return "确认退款" in normalized or "确认提交退款" in normalized
 
 
 class _RefundAuthorization:

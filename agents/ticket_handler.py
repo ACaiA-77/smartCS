@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from context.invocation import invoke_agent
+from policies.consent import has_explicit_create_consent
 from tracing.otel_config import trace_agent_call
 from tool_runtime.tool_execution import ToolExecutionContext, ToolExecutor
 from tickets.service import canonical_ticket_payload_hash
@@ -277,51 +278,6 @@ class TicketHandlerAgent:
         return bool(re.search(r"换一个|换一笔|另一个|另一笔|再看|再查", user_message))
 
     @staticmethod
-    def _has_explicit_create_consent(user_message: str) -> bool:
-        """LLM intent alone cannot authorize a ticket-creating side effect."""
-        normalized = re.sub(r"\s+", "", str(user_message))
-        if any(
-            marker in normalized
-            for marker in (
-                "怎么",
-                "如何",
-                "怎样",
-                "流程",
-                "步骤",
-                "规则",
-                "政策",
-                "条件",
-                "入口",
-                "在哪里",
-                "需要什么",
-                "需要哪些",
-                "怎么办",
-                "是什么",
-                "有哪些要求",
-            )
-        ):
-            return False
-        if "工单" in normalized and any(
-            phrase in normalized for phrase in ("帮我创建", "我要创建", "请创建", "提交工单", "发起工单")
-        ):
-            return True
-        return any(
-            phrase in normalized
-            for phrase in (
-                "我要投诉",
-                "帮我投诉",
-                "我要申请理赔",
-                "帮我申请理赔",
-                "我要开户",
-                "帮我办理开户",
-                "提交投诉",
-                "提交申请",
-                "创建工单",
-                "发起申请",
-            )
-        )
-
-    @staticmethod
     def _create_consent_prompt() -> str:
         return (
             "如果需要我代为创建工单，请明确告诉我“帮我创建投诉工单”或“我要申请理赔”。"
@@ -396,7 +352,7 @@ class TicketHandlerAgent:
             result = "请提供工单号，我才能查询工单状态。"
         elif action == "update":
             result = "当前暂不支持更新工单，请说明需要办理的新业务。"
-        elif action == "create" and self._has_explicit_create_consent(last_message):
+        elif action == "create" and has_explicit_create_consent(last_message):
             result = await self.create_ticket(ticket_info, user_id, state.get("session_id", "default"))
         else:
             result = self._create_consent_prompt()
