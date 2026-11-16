@@ -19,7 +19,7 @@ REQUIRED_FILES = (
     "tests/test_eval_failure_injection.py",
     "tests/test_runtime_observability.py",
 )
-PRODUCTION_DIRS = ("agents", "api", "mcp", "memory", "refunds", "tickets", "sandbox", "tracing")
+PRODUCTION_DIRS = ("agents", "api", "tool_runtime", "memory", "refunds", "tickets", "sandbox", "tracing")
 SOURCE_RULES = (
     (("agents",), (".call_tool(",)),
     (

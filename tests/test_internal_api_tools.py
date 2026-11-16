@@ -12,7 +12,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from auth.context import UserContext, current_user
-from mcp.tool_execution import ToolExecutionContext
+from tool_runtime.tool_execution import ToolExecutionContext
 from tests.internal_api_helpers import (
     SERVICE_SECRET,
     TEST_DATABASE,

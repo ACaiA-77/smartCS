@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from mcp.execution_ledger import ExecutionLedger
-from mcp.mcp_server import MCPToolServer, create_default_tools
-from mcp.order_repository import OrderRepository
-from mcp.tool_execution import ToolExecutionContext, ToolExecutor
+from tool_runtime.execution_ledger import ExecutionLedger
+from tool_runtime.mcp_server import MCPToolServer, create_default_tools
+from tool_runtime.order_repository import OrderRepository
+from tool_runtime.tool_execution import ToolExecutionContext, ToolExecutor
 from tickets.service import canonical_ticket_payload_hash
 
 

@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
-from mcp.order_repository import OrderRepository
+from tool_runtime.order_repository import OrderRepository
 
 
 def _normalized_text(value: Any) -> str:

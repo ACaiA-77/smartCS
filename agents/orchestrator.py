@@ -21,8 +21,8 @@ from agents.ticket_handler import TicketHandlerAgent
 from context.manager import ContextManager
 from memory.long_term import LongTermMemory
 from memory.session_store import ConversationState, SessionStore
-from mcp.mcp_server import MCPToolServer
-from mcp.tool_execution import ToolExecutionContext, ToolExecutor
+from tool_runtime.mcp_server import MCPToolServer
+from tool_runtime.tool_execution import ToolExecutionContext, ToolExecutor
 from tracing.otel_config import create_traced_chat_openai
 from tickets.service import canonical_ticket_payload_hash
 from checkpoint.models import (

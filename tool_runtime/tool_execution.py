@@ -14,9 +14,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from mcp.approval_store import ApprovalService
-from mcp.execution_ledger import ExecutionLedger, LedgerClaimLost, canonical_arguments_hash
-from mcp.mcp_server import MCPToolServer, ToolCallResult, ToolDefinition, customer_tool_arguments
+from tool_runtime.approval_store import ApprovalService
+from tool_runtime.execution_ledger import ExecutionLedger, LedgerClaimLost, canonical_arguments_hash
+from tool_runtime.mcp_server import MCPToolServer, ToolCallResult, ToolDefinition, customer_tool_arguments
 from checkpoint.models import active_checkpoint
 from context.manager import active_context
 

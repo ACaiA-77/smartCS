@@ -12,10 +12,10 @@ from langchain_core.messages import HumanMessage
 from memory.long_term import LongTermMemory
 from memory.session_store import SessionStore
 from memory.short_term import ShortTermMemory
-from mcp.execution_ledger import ExecutionLedger
-from mcp.mcp_server import MCPToolServer, ToolDefinition, create_default_tools
-from mcp.order_repository import OrderRepository
-from mcp.tool_execution import ToolExecutionContext, ToolExecutionResult, ToolExecutor
+from tool_runtime.execution_ledger import ExecutionLedger
+from tool_runtime.mcp_server import MCPToolServer, ToolDefinition, create_default_tools
+from tool_runtime.order_repository import OrderRepository
+from tool_runtime.tool_execution import ToolExecutionContext, ToolExecutionResult, ToolExecutor
 from tests.conftest import MockLLM
 from tests.loopback import unused_redis_url
 from tickets.service import TicketService, canonical_ticket_payload_hash

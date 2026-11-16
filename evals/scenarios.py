@@ -17,11 +17,11 @@ from evals.faults import FaultInjectingHandler, FaultPlan
 from evals.models import EvalCheck
 from memory.long_term import HashEmbeddingBackend, LongTermMemory
 from memory.session_store import SessionStore
-from mcp.approval_store import ApprovalService
-from mcp.execution_ledger import ExecutionLedger
-from mcp.mcp_server import MCPToolServer, create_default_tools
-from mcp.order_repository import OrderRepository
-from mcp.tool_execution import ToolExecutionPolicy, ToolExecutor
+from tool_runtime.approval_store import ApprovalService
+from tool_runtime.execution_ledger import ExecutionLedger
+from tool_runtime.mcp_server import MCPToolServer, create_default_tools
+from tool_runtime.order_repository import OrderRepository
+from tool_runtime.tool_execution import ToolExecutionPolicy, ToolExecutor
 
 
 ORDER_ID = "ORD-20260801-0002"

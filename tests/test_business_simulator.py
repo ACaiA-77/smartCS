@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from mcp.order_repository import OrderRepository
+from tool_runtime.order_repository import OrderRepository
 from sandbox.business_simulator import BusinessSimulator
 
 

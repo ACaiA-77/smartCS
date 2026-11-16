@@ -20,7 +20,7 @@ async def authenticated_runtime(tmp_path, monkeypatch):
     if os.getenv("SMARTCS_CHECKPOINT_MYSQL_TEST") != "1":
         pytest.skip("real MySQL disabled; set SMARTCS_CHECKPOINT_MYSQL_TEST=1 explicitly")
     from api import main as api
-    from mcp.order_repository import OrderRepository
+    from tool_runtime.order_repository import OrderRepository
     monkeypatch.setenv("AUTH_JWT_SECRET", secrets.token_urlsafe(48))
     monkeypatch.setenv("AUTH_COOKIE_SECURE", "false")
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "")

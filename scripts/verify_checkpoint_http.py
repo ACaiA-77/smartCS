@@ -99,7 +99,7 @@ def browser_acceptance(base, data, repository, alice):
 
 
 async def verify(args):
-    from mcp.order_repository import OrderRepository
+    from tool_runtime.order_repository import OrderRepository
     from tests.auth_integration_helpers import auth_test_data
 
     with socket.socket() as sock:

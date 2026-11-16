@@ -104,7 +104,7 @@ def _mcp_call(url: str, token: str, payload: dict) -> dict:
 
 async def _http_path_hits(query: str, top_k: int = 3) -> list[dict]:
     """The HTTP tool path's own answer, over the same corpus."""
-    from mcp.mcp_server import MCPToolServer, create_default_tools  # the repository's own tool server
+    from tool_runtime.mcp_server import MCPToolServer, create_default_tools  # the repository's own tool server
     from tests.mcp_test_corpus import build_memory
 
     server = create_default_tools(MCPToolServer(), long_term_memory=build_memory())

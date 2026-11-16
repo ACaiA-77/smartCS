@@ -4,10 +4,10 @@ import asyncio
 
 import pytest
 
-from mcp.approval_store import ApprovalService, ApprovalStateError
-from mcp.execution_ledger import ExecutionLedger
-from mcp.mcp_server import MCPToolServer, ToolDefinition
-from mcp.tool_execution import ToolExecutionContext, ToolExecutor
+from tool_runtime.approval_store import ApprovalService, ApprovalStateError
+from tool_runtime.execution_ledger import ExecutionLedger
+from tool_runtime.mcp_server import MCPToolServer, ToolDefinition
+from tool_runtime.tool_execution import ToolExecutionContext, ToolExecutor
 
 
 def _server(

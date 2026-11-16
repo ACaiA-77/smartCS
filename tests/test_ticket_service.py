@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from mcp.order_repository import OrderRepository
+from tool_runtime.order_repository import OrderRepository
 from tickets.service import TicketService, canonical_ticket_payload_hash
 
 

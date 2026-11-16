@@ -142,9 +142,8 @@ services:
       # No default. The gateway refuses to start without a >=16-byte token,
       # which is the correct place for that refusal to happen.
       SMARTCS_MCP_TOKEN: "${SMARTCS_MCP_TOKEN:-}"
-    # Run as a FILE, not `-m internal_api.mcp_gateway`: importing the
-    # `internal_api` package pulls in this repo's own `mcp/` package, which
-    # would shadow the official MCP SDK the gateway must serve with.
+    # The gateway speaks the official MCP protocol and serves only
+    # `knowledge_search`; the repository's own tool runtime is `tool_runtime/`.
     command: ["python", "internal_api/mcp_gateway.py"]
     volumes:
       - ./data:/app/data

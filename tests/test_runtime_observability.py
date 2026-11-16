@@ -10,10 +10,10 @@ from fastapi import FastAPI
 
 import api.main as api_main
 from auth.context import UserContext
-from mcp.execution_ledger import ExecutionLedger
-from mcp.execution_recovery import ExecutionReconciler
-from mcp.mcp_server import MCPToolServer, ToolDefinition
-from mcp.tool_execution import ToolExecutionContext, ToolExecutionResult, ToolExecutor
+from tool_runtime.execution_ledger import ExecutionLedger
+from tool_runtime.execution_recovery import ExecutionReconciler
+from tool_runtime.mcp_server import MCPToolServer, ToolDefinition
+from tool_runtime.tool_execution import ToolExecutionContext, ToolExecutionResult, ToolExecutor
 from tracing import otel_config
 from tracing.observability import (
     InstrumentedExecutionReconciler,

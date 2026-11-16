@@ -216,7 +216,7 @@ async def build_app(
 
 def build_order_repository(tmp_path: Path):
     """The real SQLite order repository, seeded with the demo dataset."""
-    from mcp.order_repository import OrderRepository
+    from tool_runtime.order_repository import OrderRepository
 
     return OrderRepository(str(tmp_path / "orders.db"))
 
@@ -250,9 +250,9 @@ def seed_memory_source_event(session_id: str, business_user_id: str, client_requ
 
 def build_tool_executor(tmp_path: Path):
     """The real MCP server + ToolExecutor stack over a seeded temp SQLite DB."""
-    from mcp.mcp_server import MCPToolServer, create_default_tools
-    from mcp.order_repository import OrderRepository
-    from mcp.tool_execution import ToolExecutor
+    from tool_runtime.mcp_server import MCPToolServer, create_default_tools
+    from tool_runtime.order_repository import OrderRepository
+    from tool_runtime.tool_execution import ToolExecutor
     from memory.long_term import LongTermMemory
     from refunds.service import RefundService
     from tickets.service import TicketService
