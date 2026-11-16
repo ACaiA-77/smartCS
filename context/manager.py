@@ -17,12 +17,11 @@ from datetime import datetime, timezone
 import hashlib
 import inspect
 import json
-import math
 import time
 from typing import Any
 from uuid import uuid4
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from context.assembler import ContextAssembler, DYNAMIC_ORDER
 from context.budget import TokenCounter, profile_from_model
@@ -46,6 +45,26 @@ from context.models import (
     RequestContext,
 )
 from context.policies import policy_for
+from context.projection import (
+    MISSING as _MISSING,
+    checkpoint_context as _checkpoint_context,
+    checkpoint_cutoff_seq as _checkpoint_cutoff_seq,
+    checkpoint_projection as _checkpoint_projection,
+    checkpoint_session_state as _checkpoint_session_state,
+    checkpoint_value as _checkpoint_value,
+    decode_archive as _decode_archive,
+    format_messages as _format_messages,
+    json_safe as _json_safe,
+    merge_checkpoint_messages as _merge_checkpoint_messages,
+    message_content as _message_content,
+    message_role as _message_role,
+    message_sequence_offset as _message_sequence_offset,
+    normalise_working_set as _normalise_working_set,
+    safe_session_state as _safe_session_state,
+    safe_state as _safe_state,
+    validate_owner as _validate_owner,
+    validate_working_set_owner as _validate_working_set_owner,
+)
 
 
 active_context: ContextVar[RequestContext | None] = ContextVar("smartcs_active_context", default=None)
@@ -170,12 +189,6 @@ def _accepts_keyword(function: Any, name: str) -> bool:
     )
 
 
-def _validate_owner(session_id: str, user_id: str) -> None:
-    for name, value in {"session_id": session_id, "user_id": user_id}.items():
-        if not isinstance(value, str) or not value.strip() or len(value) > 128 or "\x00" in value:
-            raise ContextOwnershipError(f"invalid {name}")
-
-
 def _validate_cached_owner(payload: dict[str, Any], session_id: str, user_id: str) -> None:
     if payload.get("session_id") != session_id or payload.get("user_id") != user_id:
         raise ContextOwnershipError("working-set cache owner mismatch")
@@ -184,150 +197,8 @@ def _validate_cached_owner(payload: dict[str, Any], session_id: str, user_id: st
         _validate_working_set_owner(working_set, session_id, user_id)
 
 
-def _validate_working_set_owner(working_set: dict[str, Any], session_id: str, user_id: str) -> None:
-    if not isinstance(working_set, dict):
-        raise ContextOwnershipError("working set must be an object")
-    ws_session = working_set.get("session_id")
-    ws_user = working_set.get("user_id")
-    if ws_session not in (None, session_id) or ws_user not in (None, user_id):
-        raise ContextOwnershipError("working set owner mismatch")
-
-
-def _message_role(message: Any) -> str:
-    if isinstance(message, HumanMessage):
-        return "user"
-    if isinstance(message, AIMessage):
-        return "assistant"
-    role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
-    if role in {"user", "assistant", "tool"}:
-        return role
-    kind = str(getattr(message, "type", "message"))
-    return "tool" if kind == "tool" else kind
-
-
-def _message_content(message: Any) -> str:
-    content = message.get("content", "") if isinstance(message, dict) else getattr(message, "content", message)
-    if isinstance(content, str):
-        return content
-    return json.dumps(content, ensure_ascii=False, default=str)
-
-
-def _format_messages(messages: list[Any], *, limit: int) -> list[dict[str, str]]:
-    formatted = []
-    for message in messages:
-        role = _message_role(message)
-        content = _message_content(message)
-        if role in {"user", "assistant", "tool"} and content:
-            formatted.append({"role": role, "content": content})
-    return formatted[-limit:]
-
-
 def _render_json_block(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str, indent=2)
-
-
-def _json_safe(value: Any) -> Any:
-    """Copy only finite JSON values so P1 state cannot contain arbitrary objects."""
-    if value is None or isinstance(value, (str, bool, int)):
-        return value
-    if isinstance(value, float):
-        return value if math.isfinite(value) else None
-    if isinstance(value, list):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items() if isinstance(key, str)}
-    return None
-
-
-_MISSING = object()
-
-
-def _safe_state(state: dict[str, Any]) -> dict[str, Any]:
-    """P1 request state: scalar workflow facts and the exact pending action only."""
-    allowed_scalars = {
-        "intent",
-        "current_agent",
-        "needs_clarification",
-        "compliance_passed",
-        "client_request_id",
-        "last_intent",
-        "turn_count",
-    }
-    nested_session = state.get("session_state")
-    if not isinstance(nested_session, dict) or not nested_session:
-        sub_results = state.get("sub_results")
-        nested_session = sub_results.get("_session_context") if isinstance(sub_results, dict) else None
-    if not isinstance(nested_session, dict):
-        nested_session = {}
-    safe: dict[str, Any] = {}
-    for key in allowed_scalars:
-        value = state.get(key, nested_session.get(key))
-        if key in state or key in nested_session:
-            if isinstance(value, (str, bool, int, float)) or value is None:
-                safe[key] = _json_safe(value)
-    if "pending_action" in state:
-        pending = state["pending_action"]
-        safe["pending_action"] = _json_safe(pending) if isinstance(pending, dict) else None
-    elif "pending_action" in nested_session:
-        pending = nested_session["pending_action"]
-        safe["pending_action"] = _json_safe(pending) if isinstance(pending, dict) else None
-    entities = state.get("accumulated_entities", nested_session.get("accumulated_entities"))
-    if isinstance(entities, dict):
-        critical = {
-            key: _json_safe(value)
-            for key, value in entities.items()
-            if str(key).lower() in {
-                "order_id", "ticket_id", "refund_id", "product", "serial_number", "client_request_id"
-            } and isinstance(value, (str, int, float, bool))
-        }
-        if critical:
-            safe["accumulated_entities"] = critical
-    return drop_noise(safe)
-
-
-def _safe_session_state(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    allowed = {"last_intent", "turn_count", "pending_action", "accumulated_entities"}
-    result = _safe_state({key: value[key] for key in allowed if key in value})
-    # Keep only critical scalar entities in the structured checkpoint state.
-    entities = value.get("accumulated_entities")
-    if isinstance(entities, dict):
-        result.update(_safe_state({"accumulated_entities": entities}))
-    return result
-
-
-def _decode_archive(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return deepcopy(value)
-    if isinstance(value, str) and value:
-        try:
-            decoded = json.loads(value)
-        except json.JSONDecodeError as exc:
-            raise ContextCompressionError("stored archive summary is not valid JSON") from exc
-        if not isinstance(decoded, dict):
-            raise ContextCompressionError("stored archive summary must be an object")
-        return decoded
-    return {}
-
-
-def _normalise_working_set(value: dict[str, Any], session_id: str, user_id: str) -> dict[str, Any]:
-    _validate_working_set_owner(value, session_id, user_id)
-    result = deepcopy(value)
-    result["session_id"] = session_id
-    result["user_id"] = user_id
-    result.setdefault("recent_messages", [])
-    result.setdefault("recent_tool_events", [])
-    result.setdefault("rolling_summary", "")
-    result["archive_summary"] = _decode_archive(result.get("archive_summary"))
-    result.setdefault("session_state", {})
-    result.setdefault("last_event_seq", 0)
-    result.setdefault("version", 0)
-    result.setdefault("checkpoint_version", 0)
-    result.setdefault("cutoff_seq", 0)
-    result.setdefault("protected_fields", {})
-    result.setdefault("summary_event_seq", 0)
-    return result
 
 
 def _protected_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -370,119 +241,6 @@ def _object_to_dict(value: Any) -> dict[str, Any]:
     if hasattr(value, "__dict__"):
         return dict(value.__dict__)
     return {"result": value}
-
-
-def _checkpoint_value(checkpoint: Any, name: str, default: Any = None) -> Any:
-    if isinstance(checkpoint, dict):
-        return checkpoint.get(name, default)
-    return getattr(checkpoint, name, default)
-
-
-def _message_sequence_offset(haystack: list[dict[str, str]], needle: list[dict[str, str]]) -> int | None:
-    if not needle or len(needle) > len(haystack):
-        return None
-    for start in range(len(haystack) - len(needle) + 1):
-        if haystack[start : start + len(needle)] == needle:
-            return start
-    return None
-
-
-def _merge_checkpoint_messages(
-    existing: list[dict[str, str]],
-    incoming: list[dict[str, str]],
-    *,
-    request_id: str | None,
-    prior_request_id: str | None,
-    limit: int = 20,
-) -> list[dict[str, str]]:
-    """Merge checkpoint snapshots by event-order overlap, preserving new request duplicates."""
-    old = list(existing)
-    new = list(incoming)
-    if not new:
-        return old[-limit:]
-    if not old:
-        return new[-limit:]
-    same_request = request_id is not None and request_id == prior_request_id
-    if not same_request and len(new) <= 2:
-        # A one-message request or its user/assistant pair is a new event even if
-        # every role/content value exactly matches an earlier request.
-        return [*old, *new][-limit:]
-    if same_request and _message_sequence_offset(old, new) is not None:
-        return old[-limit:]
-    old_offset_in_new = _message_sequence_offset(new, old)
-    if old_offset_in_new is not None:
-        if old_offset_in_new + len(old) < len(new):
-            # The new snapshot contains the prior suffix and later messages.
-            return new[-limit:]
-        if len(new) > 2:
-            # A longer/older full snapshot without a new tail must not duplicate
-            # the cached history; short new-request pairs were handled above.
-            return old[-limit:]
-    overlap = 0
-    for size in range(min(len(old), len(new)), 0, -1):
-        if old[-size:] == new[:size]:
-            overlap = size
-            break
-    if overlap:
-        return [*old, *new[overlap:]][-limit:]
-    return [*old, *new][-limit:]
-
-
-def _checkpoint_context(checkpoint: Any) -> dict[str, Any]:
-    context = _checkpoint_value(checkpoint, "context", {})
-    return context if isinstance(context, dict) else {}
-
-
-def _checkpoint_session_state(checkpoint: Any) -> dict[str, Any]:
-    context = _checkpoint_context(checkpoint)
-    session_state = context.get("session_state", {})
-    session_state = deepcopy(session_state) if isinstance(session_state, dict) else {}
-    pending_action = _checkpoint_value(checkpoint, "pending_action", _MISSING)
-    if pending_action is not _MISSING:
-        # The checkpoint's explicit null is authoritative after cancel/finish.
-        session_state["pending_action"] = deepcopy(pending_action)
-    return _safe_session_state(session_state)
-
-
-def _checkpoint_cutoff_seq(checkpoint: Any) -> int | None:
-    context = _checkpoint_context(checkpoint)
-    candidates = (
-        _checkpoint_value(checkpoint, "cutoff_seq", _MISSING),
-        context.get("cutoff_seq", _MISSING),
-        context.get("history_cutoff_seq", _MISSING),
-    )
-    for value in candidates:
-        if type(value) is int and value >= 0:
-            return value
-    return None
-
-
-def _checkpoint_projection(checkpoint: Any, session_id: str, user_id: str) -> dict[str, Any]:
-    context = _checkpoint_context(checkpoint)
-    session_state = _checkpoint_session_state(checkpoint)
-    messages = _checkpoint_value(checkpoint, "messages", []) or []
-    last_event_seq = int(_checkpoint_value(checkpoint, "last_event_seq", 0) or 0)
-    checkpoint_version = int(_checkpoint_value(checkpoint, "version", 0) or 0)
-    cutoff_seq = _checkpoint_cutoff_seq(checkpoint)
-    projection = {
-        "session_id": session_id,
-        "user_id": user_id,
-        "recent_messages": _format_messages(list(messages), limit=20),
-        "synchronized_request_id": context.get("request_id"),
-        "recent_tool_events": [],
-        "rolling_summary": "",
-        "archive_summary": {},
-        "session_state": session_state,
-        "last_event_seq": last_event_seq,
-        "version": 0,
-        "checkpoint_version": checkpoint_version,
-        "protected_fields": extract_protected_fields(session_state),
-        "summary_event_seq": cutoff_seq or 0,
-        "requires_cold_restore": True,
-    }
-    if cutoff_seq is not None:
-        projection["cutoff_seq"] = cutoff_seq
-    return projection
 
 
 class ContextManager:
