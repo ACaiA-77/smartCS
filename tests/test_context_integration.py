@@ -1155,12 +1155,7 @@ async def test_chat_routes_preserve_context_errors_for_safe_global_handler(monke
     monkeypatch.setattr(api, "chat_orchestrator", orchestrator)
     monkeypatch.setattr(api, "checkpoint_store", SimpleNamespace())
     monkeypatch.setattr(api, "_owned_session", AsyncMock(return_value={"session_id": "context-error-session"}))
-    monkeypatch.setattr(
-        api.app.state,
-        "platform_sessions",
-        SimpleNamespace(touch=AsyncMock()),
-        raising=False,
-    )
+    patch_app_state(monkeypatch, api.app, platform_sessions=SimpleNamespace(touch=AsyncMock()))
     user = SimpleNamespace(account_id=1, business_user_id="context-error-owner")
 
     with pytest.raises(ContextOverflowError):
