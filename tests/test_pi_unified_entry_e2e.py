@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import threading
@@ -109,12 +110,35 @@ class _Harness:
         return f"http://127.0.0.1:{self.port}"
 
     def kill(self) -> None:
+        """Kill the whole tree and wait until the port stops serving.
+
+        The tsx CLI runs the harness in a child process, so killing only the
+        launcher leaves a live server behind — exactly the state an outage test
+        must not mistake for "down".
+        """
         if self.child.poll() is None:
-            self.child.kill()
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/pid", str(self.child.pid), "/f", "/t"],
+                    capture_output=True, check=False,
+                )
+            else:
+                try:
+                    os.killpg(os.getpgid(self.child.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
         try:
             self.child.wait(timeout=10)
         except subprocess.TimeoutExpired:
             pass
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            try:
+                httpx.get(f"{self.url}/health", timeout=0.5)
+            except httpx.HTTPError:
+                return
+            time.sleep(0.1)
+        raise RuntimeError(f"harness kept serving on {self.url} after it was killed")
 
 
 def _start_harness(python_url: str, port: int, script_file: Path, root: Path, secrets: dict) -> _Harness:
@@ -141,6 +165,8 @@ def _start_harness(python_url: str, port: int, script_file: Path, root: Path, se
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        # One process group, so a kill reaches the tsx launcher and the real server.
+        start_new_session=os.name != "nt",
     )
     harness = _Harness(child, port)
     deadline = time.time() + 90

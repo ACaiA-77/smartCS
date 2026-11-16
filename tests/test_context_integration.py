@@ -32,6 +32,7 @@ from mcp.execution_ledger import ExecutionLedger
 from mcp.mcp_server import MCPToolServer, ToolDefinition
 from mcp.tool_execution import ToolExecutionContext, ToolExecutor
 from tests.conftest import MockLLM
+from tests.loopback import unused_redis_url
 
 
 PROFILE = ModelProfile(
@@ -1284,7 +1285,7 @@ async def test_two_sidebar_order_reads_append_independent_events_and_preserve_ol
     llm = MockLLM()
     orchestrator = ChatOrchestrator(
         llm,
-        SessionStore(ShortTermMemory(redis_url="redis://127.0.0.1:6399/0", redis_retry_cooldown=60)),
+        SessionStore(ShortTermMemory(redis_url=unused_redis_url(), redis_retry_cooldown=60)),
         LongTermMemory(),
         checkpoint_store=store,
         context_manager=manager,

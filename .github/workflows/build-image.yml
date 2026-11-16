@@ -20,7 +20,7 @@ jobs:
   test:
     name: Run tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     permissions:
       contents: read
     services:
@@ -61,6 +61,10 @@ jobs:
       SMARTCS_CONTEXT_REDIS_TEST: "1"
       REDIS_URL: "redis://127.0.0.1:6379/0"
       PYTHON: python
+      # CI-only credentials: the Harness integration suites sign and verify real
+      # JWTs with both runtimes. Never production values.
+      AUTH_JWT_SECRET: "ci-only-auth-jwt-secret-0123456789abcdef"
+      INTERNAL_SERVICE_JWT_SECRET: "ci-only-internal-service-secret-0123456789abcdef"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -91,6 +95,15 @@ jobs:
           mysql -h 127.0.0.1 -P 3307 -u root -proot -e
           "CREATE DATABASE IF NOT EXISTS smartcs_phase1_test;
           GRANT ALL PRIVILEGES ON smartcs_phase1_test.* TO 'smartcs'@'%'; FLUSH PRIVILEGES;"
+
+      - name: Initialize runtime test schema
+        env:
+          MYSQL_PWD: ${{ env.MYSQL_PASSWORD }}
+        run: |
+          python -c "import asyncio; from platform_db import PlatformDatabase; asyncio.run(PlatformDatabase.from_env().initialize())"
+          for migration in migrations/*.sql; do
+            mysql -h "$MYSQL_HOST" -P "$MYSQL_PORT" -u "$MYSQL_USER" "$MYSQL_DATABASE" < "$migration"
+          done
 
       - name: Check repository readiness
         run: python -m scripts.check_repository_readiness

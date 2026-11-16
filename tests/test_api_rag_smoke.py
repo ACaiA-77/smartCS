@@ -15,6 +15,7 @@ from memory.long_term import HashEmbeddingBackend, LongTermMemory
 from memory.session_store import SessionStore
 from memory.short_term import ShortTermMemory
 from rag.models import RetrievalHit
+from tests.loopback import unused_redis_url
 
 
 class _SmokeLLM:
@@ -141,7 +142,7 @@ async def test_api_chat_rag_and_capability_smoke(monkeypatch):
     from api import main as api
 
     llm = _SmokeLLM()
-    short_term = ShortTermMemory(redis_url="redis://127.0.0.1:6399/0", redis_retry_cooldown=60)
+    short_term = ShortTermMemory(redis_url=unused_redis_url(), redis_retry_cooldown=60)
     session_store = SessionStore(short_term)
     retriever = _SmokeRetriever()
     long_term_memory = LongTermMemory(

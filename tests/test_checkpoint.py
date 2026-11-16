@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from contextlib import contextmanager
 from unittest.mock import AsyncMock
 
 import httpx
@@ -24,6 +25,10 @@ from mcp.execution_recovery import ExecutionReconciler
 from refunds.service import RefundService
 from tickets.service import TicketService
 from tests.test_orchestrator import _orchestrator, _state
+
+
+class SimulatedCrash(BaseException):
+    """A process boundary bypasses application exception handlers."""
 
 
 def test_strict_json_validation_and_required_password(monkeypatch):
@@ -222,12 +227,16 @@ async def test_ticket_plan_and_completed_ledger_are_reused(mysql, tmp_path):
         "ticket_handler": {"action": "create", "ticket_type": "complaint", "priority": "medium",
                            "summary": "服务投诉", "details": "需要人工处理", "debug_trace": "must_not_save"}}
     agent, _, _, executor, _ = runtime(tmp_path, store, overrides=overrides)
-    original = executor.ledger.complete
-    def crash(key, result):
-        original(key, result)
-        raise RuntimeError("injected crash after ledger")
-    executor.ledger.complete = crash
-    with pytest.raises(RuntimeError, match="injected"):
+    original = executor.ledger.atomic_write
+
+    @contextmanager
+    def crash(*args, **kwargs):
+        with original(*args, **kwargs) as connection:
+            yield connection
+        raise SimulatedCrash("injected crash after committed ledger")
+
+    executor.ledger.atomic_write = crash
+    with pytest.raises(SimulatedCrash, match="injected"):
         await agent.ainvoke(request(sid, "帮我创建投诉工单", "ticket"))
     assert "debug_trace" not in (await store.load(sid, "user_002")).context["ticket_plan"]
     restarted, _, _, tools, _ = runtime(tmp_path, store)
@@ -241,12 +250,16 @@ async def test_compliance_escalation_crash_replays_without_second_ticket(mysql, 
     store, sid = mysql
     overrides = {"compliance": {"passed": False, "risk_level": "high", "violations": ["敏感内容"]}}
     agent, _, _, executor, _ = runtime(tmp_path, store, overrides=overrides)
-    original = executor.ledger.complete
-    def crash(key, result):
-        original(key, result)
-        raise RuntimeError("injected escalation crash")
-    executor.ledger.complete = crash
-    with pytest.raises(RuntimeError, match="injected"):
+    original = executor.ledger.atomic_write
+
+    @contextmanager
+    def crash(*args, **kwargs):
+        with original(*args, **kwargs) as connection:
+            yield connection
+        raise SimulatedCrash("injected escalation crash")
+
+    executor.ledger.atomic_write = crash
+    with pytest.raises(SimulatedCrash, match="injected"):
         await agent.ainvoke(request(sid, "查询订单 ORD-20260801-0002", "escalate"))
     restarted, _, _, tools, _ = runtime(tmp_path, store)
     restarted.llm.ainvoke = AsyncMock(side_effect=AssertionError("reviewed stage called model"))

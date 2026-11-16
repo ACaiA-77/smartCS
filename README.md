@@ -891,7 +891,7 @@ holdout 评测产物。`jieba` 是必需依赖，缺失不能作为正常跳过�
 ghcr.io/acaia-77/smartcs:<tag>
 ```
 
-Pull Request 只执行仓库就绪检查、测试和离线 Eval，不发布镜像。`main` push 和 `workflow_dispatch` 在同一质量门禁通过后，按 workflow 的标签规则构建并发布镜像，默认分支规则可能产生 `latest`，同时可以产生 commit SHA 等标签。workflow 使用 GitHub 自动提供的 `GITHUB_TOKEN`，不需要把 Docker Hub 或 GHCR 密钥写进仓库。本次工作会话没有执行或验证远程 GitHub Actions。
+Pull Request 只执行仓库就绪检查、测试和离线 Eval，不发布镜像。`main` push 和 `workflow_dispatch` 在同一质量门禁通过后，按 workflow 的标签规则构建并发布镜像，默认分支规则可能产生 `latest`，同时可以产生 commit SHA 等标签。workflow 使用 GitHub 自动提供的 `GITHUB_TOKEN`，不需要把 Docker Hub 或 GHCR 密钥写进仓库。实际远程验证记录见 [测试基线](docs/refactor-baseline.md)。
 
 首次使用 GHCR 时，需要在 GitHub Packages 中将该镜像设置为 Public，或者在本机先执行 `docker login ghcr.io`。不要把个人访问令牌写入 `.env.docker` 或提交到 Git。
 

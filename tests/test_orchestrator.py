@@ -20,6 +20,7 @@ from mcp.mcp_server import MCPToolServer, create_default_tools
 from mcp.order_repository import OrderRepository
 from mcp.tool_execution import ToolExecutor
 from tests.conftest import MockLLM
+from tests.loopback import unused_redis_url
 
 
 def _state(message: str, *, user_id: str = "user_002", session_id: str = "session-1") -> dict:
@@ -47,7 +48,7 @@ def _services(tmp_path, *, overrides=None):
     approvals = ApprovalService(repository.db_path)
     executor = ToolExecutor(server, ledger=ledger, approval_service=approvals)
     llm = MockLLM(overrides=overrides)
-    short = ShortTermMemory(redis_url="redis://127.0.0.1:6399/0", redis_retry_cooldown=60)
+    short = ShortTermMemory(redis_url=unused_redis_url(), redis_retry_cooldown=60)
     session_store = SessionStore(short)
     return llm, session_store, short, long_term, server, executor, repository
 
@@ -312,7 +313,7 @@ def test_orchestrator_uses_explicit_memory_when_production_rag_root_is_set(
         embedding_backend=HashEmbeddingBackend(64),
     )
     memory.add_document("隔离知识库中的账户恢复说明。", "isolated.md")
-    short = ShortTermMemory(redis_url="redis://127.0.0.1:6399/0", redis_retry_cooldown=60)
+    short = ShortTermMemory(redis_url=unused_redis_url(), redis_retry_cooldown=60)
     orchestrator = ChatOrchestrator(MockLLM(), SessionStore(short), memory)
 
     hits = orchestrator.retriever.retrieve("账户恢复说明", top_k=1, rerank=False)

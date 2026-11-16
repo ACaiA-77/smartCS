@@ -17,6 +17,7 @@ from mcp.mcp_server import MCPToolServer, ToolDefinition, create_default_tools
 from mcp.order_repository import OrderRepository
 from mcp.tool_execution import ToolExecutionContext, ToolExecutionResult, ToolExecutor
 from tests.conftest import MockLLM
+from tests.loopback import unused_redis_url
 from tickets.service import TicketService, canonical_ticket_payload_hash
 
 
@@ -292,7 +293,7 @@ async def test_compliance_escalation_replays_one_durable_ticket(tmp_path):
     executor = ToolExecutor(server, ledger=ExecutionLedger(repository.db_path))
     orchestrator = ChatOrchestrator(
         MockLLM(),
-        SessionStore(ShortTermMemory(redis_url="redis://127.0.0.1:6399/0")),
+        SessionStore(ShortTermMemory(redis_url=unused_redis_url())),
         LongTermMemory(),
         tool_executor=executor,
     )
@@ -315,7 +316,7 @@ async def test_missing_executor_gracefully_blocks_read_and_write():
 
     orchestrator = ChatOrchestrator(
         MockLLM(),
-        SessionStore(ShortTermMemory(redis_url="redis://127.0.0.1:6399/0")),
+        SessionStore(ShortTermMemory(redis_url=unused_redis_url())),
         LongTermMemory(),
     )
     assert await orchestrator._create_escalation_ticket({"session_id": "s"}) == ""
