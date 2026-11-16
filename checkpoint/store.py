@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any
@@ -26,33 +25,24 @@ from checkpoint.models import (
     CheckpointOwnershipError,
     CheckpointUnavailable,
 )
+from db.mysql import connection_config, environment_config, run_in_thread
 
 
 class CheckpointStore:
     def __init__(self, *, host="127.0.0.1", port=3307, database="smartcs_checkpoint", user="smartcs", password: str):
-        if not password:
-            raise ValueError("MYSQL_PASSWORD is required")
-        self._config = dict(host=host, port=int(port), database=database, user=user, password=password,
-                            charset="utf8mb4", autocommit=True, connect_timeout=5,
-                            read_timeout=10, write_timeout=10, cursorclass=pymysql.cursors.DictCursor)
+        self._config = connection_config(
+            host=host, port=port, database=database, user=user,
+            password=password, autocommit=True,
+        )
         self._lease = ContextVar(f"mysql_checkpoint_lease_{id(self)}", default=None)
 
     @classmethod
     def from_env(cls):
-        return cls(host=os.getenv("MYSQL_HOST", "127.0.0.1"), port=int(os.getenv("MYSQL_PORT", "3307")),
-                   database=os.getenv("MYSQL_DATABASE", "smartcs_checkpoint"),
-                   user=os.getenv("MYSQL_USER", "smartcs"), password=os.getenv("MYSQL_PASSWORD", ""))
+        return cls(**environment_config())
 
     async def _thread(self, function):
-        # A cancelled to_thread keeps running. Wait before releasing its connection/lock.
-        task = asyncio.create_task(asyncio.to_thread(function))
         try:
-            return await asyncio.shield(task)
-        except asyncio.CancelledError:
-            try:
-                await task
-            finally:
-                raise
+            return await run_in_thread(function)
         except pymysql.MySQLError as exc:
             raise CheckpointUnavailable("checkpoint database unavailable") from exc
 
