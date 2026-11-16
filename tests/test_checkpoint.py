@@ -312,7 +312,7 @@ async def test_http_ownership_history_delete_and_safe_errors(mysql, tmp_path, mo
         get_owned=AsyncMock(side_effect=lambda session_id, account_id:
                             {"session_id": sid} if session_id == sid and account_id == 1 else None),
         touch=AsyncMock(),
-    ), raising=False)
+    ))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url="http://test") as client:
         body = {"session_id": sid, "message": "查询订单 ORD-20260801-0002", "client_request_id": "http"}
         assert (await client.post("/api/chat", json=body)).status_code == 200

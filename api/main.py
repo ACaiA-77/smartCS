@@ -240,6 +240,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Declare the composition-root handles up front. `lifespan` fills (and later
+# clears) them; a missing attribute would instead be supplied by tests with
+# `monkeypatch.setattr(..., raising=False)`, whose undo path *deletes* the key
+# and then races every other test that patches the same name.
+for _handle in (
+    "platform_users",
+    "platform_sessions",
+    "platform_database",
+    "execution_ledger",
+    "tool_executor",
+    "order_repository",
+    "user_memory_service",
+):
+    setattr(app.state, _handle, None)
+del _handle
+
 cors_origins = cors_allowed_origins()
 if cors_origins:
     app.add_middleware(CORSMiddleware, allow_origins=cors_origins, allow_credentials=True,
