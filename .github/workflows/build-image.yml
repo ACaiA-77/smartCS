@@ -109,7 +109,7 @@ jobs:
         run: python -m scripts.check_repository_readiness
 
       - name: Run Python suite
-        run: python -m pytest -q -rs --junitxml=test-results/python.xml
+        run: python -m pytest -q -rs --tb=long --junitxml=test-results/python.xml
 
       - name: Check required integration coverage
         if: ${{ !cancelled() }}
