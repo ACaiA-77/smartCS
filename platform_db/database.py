@@ -1,11 +1,10 @@
-"""Small thread-wrapped PyMySQL access; does not change CheckpointStore."""
+"""Platform transactions and public errors over the shared MySQL infrastructure."""
 
 from __future__ import annotations
 
-import asyncio
-import os
-
 import pymysql
+
+from db.mysql import connection_config, environment_config, run_in_thread
 
 
 class PlatformUnavailable(RuntimeError):
@@ -19,20 +18,14 @@ class PlatformConflict(ValueError):
 class PlatformDatabase:
     def __init__(self, *, host="127.0.0.1", port=3307, database="smartcs_checkpoint",
                  user="smartcs", password: str):
-        if not password:
-            raise ValueError("MYSQL_PASSWORD is required")
-        self._config = dict(host=host, port=int(port), database=database, user=user,
-                            password=password, charset="utf8mb4", autocommit=False,
-                            connect_timeout=5, read_timeout=10, write_timeout=10,
-                            cursorclass=pymysql.cursors.DictCursor)
+        self._config = connection_config(
+            host=host, port=port, database=database, user=user,
+            password=password, autocommit=False,
+        )
 
     @classmethod
     def from_env(cls):
-        return cls(host=os.getenv("MYSQL_HOST", "127.0.0.1"),
-                   port=int(os.getenv("MYSQL_PORT", "3307")),
-                   database=os.getenv("MYSQL_DATABASE", "smartcs_checkpoint"),
-                   user=os.getenv("MYSQL_USER", "smartcs"),
-                   password=os.getenv("MYSQL_PASSWORD", ""))
+        return cls(**environment_config())
 
     async def ping(self) -> None:
         """Cheapest possible liveness proof: one connection, one `SELECT 1`.
@@ -67,15 +60,7 @@ class PlatformDatabase:
             except pymysql.MySQLError:
                 raise PlatformUnavailable("platform database unavailable") from None
 
-        task = asyncio.create_task(asyncio.to_thread(work))
-        try:
-            return await asyncio.shield(task)
-        except asyncio.CancelledError:
-            # A thread is not cancelled with its caller; finish its transaction first.
-            try:
-                await task
-            finally:
-                raise
+        return await run_in_thread(work)
 
     async def initialize(self):
         def create(_connection, cursor):

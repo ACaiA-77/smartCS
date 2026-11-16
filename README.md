@@ -240,6 +240,9 @@ python-impl/                    # 仓库根（Git root）
 ├── tool_runtime/               # 进程内工具运行时（不是 MCP 线协议）
 │   ├── mcp_server.py           # 工具注册与调用，REST 暴露见 api/main.py
 │   └── tool_execution.py       # 确认、超时、幂等账簿与崩溃恢复
+├── policies/                   # 两条运行路径共享的合规与同意判定
+├── db/                         # MySQL 配置与取消时的线程等待
+│   └── mysql.py                # 事务、连接租约和错误映射由各 store 保留
 ├── tickets/                    # 持久化客服工单业务域
 │   └── service.py              # support_tickets 与客户端请求幂等
 ├── tracing/                    # OpenTelemetry 追踪
