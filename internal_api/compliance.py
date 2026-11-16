@@ -7,10 +7,10 @@ Contract (phase3-design.md §4):
             "rulesHit": [...], "llmReviewed": bool }
 
 Two stages:
-  1. **Rule mask — always runs.** Deterministic, sub-millisecond. It reuses the
-     rule tables already defined in `agents/compliance_checker.py` (read-only
-     import; that module is untouched) so there is exactly one source of truth
-     for what counts as PII or a forbidden financial phrase.
+  1. **Rule mask — always runs.** Deterministic, sub-millisecond. It calls
+     `policies.compliance_rules`, the same module the legacy agent's rule stage
+     calls, so there is exactly one source of truth for what counts as PII or a
+     forbidden financial phrase.
   2. **LLM review — off by default.** Enabled only by
      `SMARTCS_COMPLIANCE_LLM_REVIEW=true`. Offline tests never enable it and
      never reach a real endpoint.
@@ -28,18 +28,19 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 
 import jwt as pyjwt
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-# Read-only reuse of the existing rule tables. Importing them (rather than
-# copying) is what keeps PII/forbidden-term definitions from drifting apart.
-from agents.compliance_checker import FORBIDDEN_TERMS, SENSITIVE_PATTERNS
+# The neutral rule layer — shared with the legacy checker so PII and
+# forbidden-term definitions cannot drift apart. Importing a leaf module here
+# (rather than `agents.compliance_checker`) keeps this channel free of the
+# agent layer's langchain dependency.
 from internal_api.auth import resolve_service_session
 from internal_api.service_jwt import ServiceAuthUnavailable, decode_service_token
 from internal_api.tools import _bearer_token, _error
+from policies.compliance_rules import mask_pii, rule_review
 
 logger = logging.getLogger(__name__)
 
@@ -48,42 +49,8 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 #: Deterministic fallback used when the text cannot be safely rewritten.
 SAFE_FALLBACK_TEXT = "抱歉，该回复未能通过合规检查，请稍后再试或转人工客服。"
 
-_PII_LABELS = {
-    "phone": "手机号",
-    "id_card": "身份证号",
-    "bank_card": "银行卡号",
-    "email": "邮箱地址",
-}
-
-
-def _mask_match(match: re.Match) -> str:
-    text = match.group()
-    if len(text) <= 4:
-        return "****"
-    return text[:3] + "*" * (len(text) - 6) + text[-3:]
-
-
-def mask_pii(content: str) -> str:
-    """Same masking rule as `ComplianceCheckerAgent._mask_pii`."""
-    masked = content
-    for pattern in SENSITIVE_PATTERNS.values():
-        masked = re.sub(pattern, _mask_match, masked)
-    return masked
-
-
-def rule_review(content: str) -> tuple[list[str], str]:
-    """Return (violations, masked_text). Deterministic; no I/O, no model."""
-    violations: list[str] = []
-
-    for term in FORBIDDEN_TERMS:
-        if term in content:
-            violations.append(f"包含违规金融用语: '{term}'")
-
-    for pii_type, pattern in SENSITIVE_PATTERNS.items():
-        if re.search(pattern, content):
-            violations.append(f"检测到PII信息泄露: {_PII_LABELS.get(pii_type, pii_type)}")
-
-    return violations, mask_pii(content)
+# `mask_pii` and `rule_review` are re-exported from `policies.compliance_rules`
+# so this module's public surface (see `__all__`) is unchanged.
 
 
 def _llm_review_enabled() -> bool:

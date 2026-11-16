@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -17,6 +16,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from context.invocation import invoke_agent
+from policies.compliance_rules import mask_pii, rule_violations
 from tracing.otel_config import trace_agent_call
 
 
@@ -29,19 +29,6 @@ class ComplianceResult:
     suggestions: list[str] = field(default_factory=list)
     sanitized_content: str = ""
 
-
-SENSITIVE_PATTERNS = {
-    "phone": r"1[3-9]\d{9}",
-    "id_card": r"\d{17}[\dXx]",
-    "bank_card": r"\d{16,19}",
-    "email": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
-}
-
-FORBIDDEN_TERMS = [
-    "保证收益", "稳赚不赔", "零风险", "保本保息",
-    "最高收益", "预期收益率", "承诺回报",
-    "内部消息", "内幕", "暗箱操作",
-]
 
 COMPLIANCE_SYSTEM_PROMPT = """你是一个金融合规审查Agent，负责审查客服回复内容的合规性。
 
@@ -70,33 +57,11 @@ class ComplianceCheckerAgent:
 
     def _rule_based_check(self, content: str) -> list[str]:
         """基于规则的快速检查（不依赖LLM，低延迟）"""
-        violations = []
-
-        for term in FORBIDDEN_TERMS:
-            if term in content:
-                violations.append(f"包含违规金融用语: '{term}'")
-
-        for pii_type, pattern in SENSITIVE_PATTERNS.items():
-            if re.search(pattern, content):
-                label = {
-                    "phone": "手机号", "id_card": "身份证号",
-                    "bank_card": "银行卡号", "email": "邮箱地址",
-                }.get(pii_type, pii_type)
-                violations.append(f"检测到PII信息泄露: {label}")
-
-        return violations
+        return rule_violations(content)
 
     def _mask_pii(self, content: str) -> str:
         """对PII信息进行脱敏处理"""
-        masked = content
-        for pii_type, pattern in SENSITIVE_PATTERNS.items():
-            def _mask_match(match):
-                text = match.group()
-                if len(text) <= 4:
-                    return "****"
-                return text[:3] + "*" * (len(text) - 6) + text[-3:]
-            masked = re.sub(pattern, _mask_match, masked)
-        return masked
+        return mask_pii(content)
 
     @trace_agent_call("compliance_rule_check")
     async def rule_check(self, content: str) -> ComplianceResult:

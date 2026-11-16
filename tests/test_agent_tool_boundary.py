@@ -12,6 +12,7 @@ from langchain_core.messages import HumanMessage
 from memory.long_term import LongTermMemory
 from memory.session_store import SessionStore
 from memory.short_term import ShortTermMemory
+from policies.consent import has_explicit_create_consent
 from tool_runtime.execution_ledger import ExecutionLedger
 from tool_runtime.mcp_server import MCPToolServer, ToolDefinition, create_default_tools
 from tool_runtime.order_repository import OrderRepository
@@ -74,7 +75,7 @@ def _process_state(message: str) -> dict:
     ],
 )
 def test_mixed_consultation_never_counts_as_create_consent(message):
-    assert TicketHandlerAgent._has_explicit_create_consent(message) is False
+    assert has_explicit_create_consent(message) is False
 
 
 @pytest.mark.parametrize(
@@ -88,7 +89,7 @@ def test_mixed_consultation_never_counts_as_create_consent(message):
     ],
 )
 def test_explicit_business_request_counts_as_create_consent(message):
-    assert TicketHandlerAgent._has_explicit_create_consent(message) is True
+    assert has_explicit_create_consent(message) is True
 
 
 @pytest.mark.asyncio
