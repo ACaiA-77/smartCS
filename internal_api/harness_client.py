@@ -56,15 +56,11 @@ def harness_base_url() -> str:
 
 
 def rollout_percent() -> int:
-    """The configured cohort size, 0-100. A malformed value is a hard error.
-
-    Read per call (not cached) so tests and a rolling restart can change it,
-    but validated loudly: a rollout switch that silently reads as 0 would look
-    exactly like "the rollout is not happening".
-    """
-    raw = os.getenv(ROLLOUT_PERCENT_ENV, "0").strip()
+    """The configured cohort size, 0-100. Defaults to 100 (all Pi) now that the
+    legacy Python orchestrator is retired."""
+    raw = os.getenv(ROLLOUT_PERCENT_ENV, "100").strip()
     if raw == "":
-        return 0
+        return 100
     try:
         percent = int(raw)
     except ValueError:
@@ -197,3 +193,53 @@ async def forward_chat(
             )
     except httpx.HTTPError:
         raise HarnessUnavailable("pi harness unreachable") from None
+
+
+async def stream_chat(
+    *,
+    account_id: int,
+    business_user_id: str,
+    session_id: str,
+    client_request_id: str,
+    message: str,
+    user_token: str,
+    timeout_seconds: float = DEFAULT_CHAT_TIMEOUT_SECONDS,
+):
+    """Stream one turn from pi-harness (/api/chat/stream) as SSE chunks."""
+    if not isinstance(user_token, str) or not user_token:
+        raise ValueError("user_token is required to forward a chat turn")
+    service_token = mint_service_token(
+        account_id=account_id,
+        business_user_id=business_user_id,
+        session_id=session_id,
+        client_request_id=client_request_id,
+    )
+    url = f"{harness_base_url()}/api/chat/stream"
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            async with client.stream(
+                "POST",
+                url,
+                headers={
+                    "Authorization": f"Bearer {user_token}",
+                    SERVICE_TOKEN_HEADER: f"Bearer {service_token}",
+                },
+                json={
+                    "message": message,
+                    "session_id": session_id,
+                    "client_request_id": client_request_id,
+                },
+            ) as response:
+                if response.status_code != 200:
+                    body = await response.aread()
+                    yield (
+                        f"event: error\ndata: "
+                        f'{{"status":{response.status_code},"detail":{body.decode("utf-8", errors="replace")!r}}}\n\n'
+                    ).encode("utf-8")
+                    return
+                async for chunk in response.aiter_bytes():
+                    if chunk:
+                        yield chunk
+    except httpx.HTTPError:
+        raise HarnessUnavailable("pi harness unreachable") from None
+

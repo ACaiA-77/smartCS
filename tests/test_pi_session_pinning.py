@@ -25,10 +25,10 @@ async def _account(prefix: str) -> int:
 
 
 @pytest.mark.asyncio
-async def test_create_defaults_to_legacy():
-    account_id = await _account("legacy-default")
+async def test_create_defaults_to_pi():
+    account_id = await _account("pi-default")
     created = await (await _sessions()).create(account_id)
-    assert created["harness_version"] == "legacy"
+    assert created["harness_version"] == "pi"
 
 
 @pytest.mark.asyncio

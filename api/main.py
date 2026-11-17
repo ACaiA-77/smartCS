@@ -1,32 +1,26 @@
-"""
-FastAPI入口 — REST API（/api/chat 等）；SSE 流式为规划项
-"""
+"""FastAPI Business Runtime entrypoint (REST + SSE streaming forwarded to pi-harness)."""
 
 from __future__ import annotations
 
-import logging
 import asyncio
-import hashlib
+import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from auth.context import UserContext
-from auth.dependency import get_current_user, check_request_origin, cors_allowed_origins
-from auth.jwt import issue_token, cookie_options, COOKIE_NAME, TOKEN_TTL_SECONDS
+from auth.dependency import check_request_origin, cors_allowed_origins, get_current_user
+from auth.jwt import COOKIE_NAME, TOKEN_TTL_SECONDS, cookie_options, issue_token
 from auth.password import verify_password
-from platform_db.database import PlatformDatabase, PlatformUnavailable, PlatformConflict
-from platform_db.users import Users
-from platform_db.sessions import Sessions
-
 from internal_api import internal_router
 from internal_api.harness_client import (
     HarnessUnavailable,
@@ -34,51 +28,33 @@ from internal_api.harness_client import (
     forward_chat,
     harness_version_for_account,
     rollout_percent,
+    stream_chat,
 )
-
-from agents.orchestrator import create_chat_orchestrator
-from context.invocation import configure_context_manager
-from context.manager import ContextManager, WorkingSetCache
-from context.models import (
-    ContextCompressionError,
-    ContextError,
-    ContextOverflowError,
-    ContextOwnershipError,
-    ModelProfile,
-)
-from checkpoint.models import AgentCheckpoint, CheckpointError, CheckpointConflict, CheckpointOwnershipError
-from checkpoint.store import CheckpointStore
-from memory.short_term import ShortTermMemory
-from memory.session_store import ConversationState, SessionStore
 from memory.knowledge import KnowledgeMemory
 from memory.user_memory import UserMemoryService
 from memory.user_memory_worker import UserMemoryWorker
-from tool_runtime.mcp_server import MCPToolServer, create_default_tools
-from tool_runtime.order_repository import OrderRepository
-from tool_runtime.approval_store import ApprovalNotFoundError, ApprovalService, ApprovalStateError
-from tool_runtime.execution_ledger import ExecutionLedger
-from tool_runtime.tool_execution import ToolExecutionContext
+from platform_db.database import PlatformConflict, PlatformDatabase, PlatformUnavailable
+from platform_db.sessions import Sessions
+from platform_db.users import Users
 from refunds.service import RefundService
 from tickets.service import TicketService
-from tracing.otel_config import init_tracer, AgentMetrics, set_agent_metrics
+from tool_runtime.approval_store import ApprovalNotFoundError, ApprovalService, ApprovalStateError
+from tool_runtime.execution_ledger import ExecutionLedger
+from tool_runtime.mcp_server import MCPToolServer, create_default_tools
+from tool_runtime.order_repository import OrderRepository
+from tool_runtime.tool_execution import ToolExecutionContext
 from tracing.observability import (
     InstrumentedExecutionReconciler,
     InstrumentedToolExecutor,
     RuntimeMetrics,
     install_request_observability,
 )
+from tracing.otel_config import AgentMetrics, init_tracer, set_agent_metrics
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-
-short_term_memory = ShortTermMemory(
-    redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
-    redis_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT_SECONDS", "0.5")),
-    redis_retry_cooldown=float(os.getenv("REDIS_RETRY_COOLDOWN_SECONDS", "30")),
-)
-session_store = SessionStore(short_term_memory)
 long_term_memory = KnowledgeMemory(index_path=os.getenv("FAISS_INDEX_PATH", "./vector_store/faiss_index"))
 shared_retriever = long_term_memory.get_retriever()
 order_repository = OrderRepository(os.getenv("ORDER_DB_PATH", "./data/orders.db"))
@@ -108,9 +84,6 @@ tool_executor = InstrumentedToolExecutor(
     runtime_metrics=runtime_metrics,
 )
 metrics = AgentMetrics()
-chat_orchestrator = None
-checkpoint_store = None
-context_manager = None
 user_memory_service = None
 user_memory_worker = None
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
@@ -134,54 +107,30 @@ def _log_rag_runtime() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
-    global chat_orchestrator, checkpoint_store, context_manager, user_memory_service, user_memory_worker
-
-    # Fail startup on invalid budgets before reporting healthy or initializing
-    # external services. This validates configuration only; no tokenizer/model
-    # provider or weights are loaded here.
-    ModelProfile.from_env()
+    """Application lifecycle management."""
+    global user_memory_service, user_memory_worker
 
     init_tracer(
         service_name=os.getenv("OTEL_SERVICE_NAME", "smart-cs-multi-agent"),
         otlp_endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
     )
     set_agent_metrics(metrics)
-    checkpoint_store = CheckpointStore.from_env()
-    await checkpoint_store.initialize()
     platform = PlatformDatabase.from_env()
     await platform.initialize()
     user_memory_service = UserMemoryService(database=platform)
     await user_memory_service.initialize()
-    # Candidate application is owned by this bounded background worker, never
-    # by the chat request tail: the durable lease queue survives restarts.
     user_memory_worker = UserMemoryWorker(user_memory_service)
     await user_memory_worker.start()
-    context_manager = ContextManager(
-        event_store=checkpoint_store,
-        cache=WorkingSetCache(short_term_memory, ttl=1800),
-        user_memory=user_memory_service,
-    )
-    configure_context_manager(context_manager)
+
     app.state.platform_users = Users(platform)
     app.state.platform_sessions = Sessions(platform)
-    # Handle for the Phase 5 write-authorization service (pending_action +
-    # receipt.open_write_operations), which needs raw transaction access.
     app.state.platform_database = platform
-    # Authoritative source for /internal/operation_status (Phase 5c).
     app.state.execution_ledger = execution_ledger
-    # Exposed for the /internal/tools/execute channel so it can reuse the exact
-    # same executor (and its retry/timeout/binding policy) without importing
-    # this module from internal_api (which would be a circular import).
     app.state.tool_executor = tool_executor
-    # Read-only sources for the Phase 3 turn snapshot: authoritative business
-    # facts and long-term memory highlights.
     app.state.order_repository = order_repository
     app.state.user_memory_service = user_memory_service
-    # Validate JWT configuration at startup; never fall back to a built-in secret.
+
     issue_token(1)
-    # Phase 7: a malformed rollout switch must fail startup, not every session
-    # creation. The value only decides NEW sessions (existing ones are pinned).
     logger.info("pi cohort rollout: percent=%d", rollout_percent())
 
     summary = execution_reconciler.reconcile_stale()
@@ -194,17 +143,6 @@ async def lifespan(app: FastAPI):
         summary.get("manual_required", 0),
         summary.get("skipped", 0),
     )
-
-    chat_orchestrator = create_chat_orchestrator(
-        session_store=session_store,
-        long_term_memory=long_term_memory,
-        retriever=shared_retriever,
-        mcp_server=mcp_server,
-        tool_executor=tool_executor,
-        checkpoint_store=checkpoint_store,
-        execution_reconciler=execution_reconciler,
-        context_manager=context_manager,
-    )
     _log_rag_runtime()
 
     try:
@@ -213,11 +151,7 @@ async def lifespan(app: FastAPI):
         if user_memory_worker is not None:
             await user_memory_worker.stop()
             user_memory_worker = None
-        chat_orchestrator = None
-        checkpoint_store = None
-        context_manager = None
         user_memory_service = None
-        configure_context_manager(None)
         app.state.platform_users = None
         app.state.platform_sessions = None
         app.state.tool_executor = None
@@ -229,21 +163,18 @@ async def lifespan(app: FastAPI):
 
 try:
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
     _HAS_FASTAPI_OTEL = True
 except ImportError:
     _HAS_FASTAPI_OTEL = False
 
 app = FastAPI(
-    title="智能客服多Agent系统",
-    description="基于显式 Orchestrator 与 Safe Tool Execution 的智能客服系统",
+    title="智能客服系统",
+    description="基于 Pi Harness 与 Safe Tool Execution 的双层智能客服系统",
     version="1.0.0",
     lifespan=lifespan,
 )
 
-# Declare the composition-root handles up front. `lifespan` fills (and later
-# clears) them; a missing attribute would instead be supplied by tests with
-# `monkeypatch.setattr(..., raising=False)`, whose undo path *deletes* the key
-# and then races every other test that patches the same name.
 for _handle in (
     "platform_users",
     "platform_sessions",
@@ -258,8 +189,13 @@ del _handle
 
 cors_origins = cors_allowed_origins()
 if cors_origins:
-    app.add_middleware(CORSMiddleware, allow_origins=cors_origins, allow_credentials=True,
-                       allow_methods=["GET", "POST", "DELETE"], allow_headers=["Content-Type", "Authorization"])
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["Content-Type", "Authorization"],
+    )
 
 
 @app.middleware("http")
@@ -269,34 +205,19 @@ async def private_api_responses(request: Request, call_next):
         response.headers["Cache-Control"] = "no-store"
     return response
 
-# Internal service-to-service channel (pi-harness -> Business Runtime). Separate
-# credential and audience from the public API; expected to be reachable only on
-# the internal network (isolation is a deployment concern, not enforced here).
+
 app.include_router(internal_router)
 
 if _HAS_FASTAPI_OTEL:
     FastAPIInstrumentor.instrument_app(app)
 
-@app.exception_handler(ContextError)
-async def context_error(_request: Request, exc: ContextError):
-    status = 409 if isinstance(exc, (ContextOverflowError, ContextCompressionError, ContextOwnershipError)) else 503
-    detail = "context request cannot be assembled" if status == 409 else "context service unavailable"
-    return JSONResponse(status_code=status, content={"detail": detail})
-
-
-@app.exception_handler(CheckpointError)
-async def checkpoint_error(_request: Request, exc: CheckpointError):
-    code = 403 if isinstance(exc, CheckpointOwnershipError) else 409 if isinstance(exc, CheckpointConflict) else 503
-    # These domain exceptions contain no SQL, driver errors or credentials.
-    return JSONResponse(status_code=code, content={"detail": str(exc)})
-
 
 @app.exception_handler(RequestValidationError)
 async def invalid_request(_request: Request, exc: RequestValidationError):
-    # Pydantic's default error includes raw input, potentially a login password.
-    return JSONResponse(status_code=422, content={"detail": [
-        {"loc": error["loc"], "type": error["type"], "msg": error["msg"]} for error in exc.errors()
-    ]})
+    return JSONResponse(
+        status_code=422,
+        content={"detail": [{"loc": error["loc"], "type": error["type"], "msg": error["msg"]} for error in exc.errors()]},
+    )
 
 
 @app.exception_handler(PlatformUnavailable)
@@ -309,7 +230,6 @@ async def platform_conflict(_request: Request, _exc: PlatformConflict):
     return JSONResponse(status_code=409, content={"detail": "platform identity or ownership conflict"})
 
 
-# This builds the middleware stack, so register exception handlers first.
 install_request_observability(app, runtime_metrics)
 
 
@@ -335,14 +255,7 @@ class ChatResponse(BaseModel):
     intent: str
     compliance_passed: bool
     client_request_id: str | None = None
-    # Phase 7 rollout observation: which harness served this turn. The value is
-    # the session's creation-time pin, never a per-request decision.
-    harness_version: str = "legacy"
-
-
-class ResumeRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    client_request_id: str | None = Field(default=None, min_length=1, max_length=128)
+    harness_version: str = "pi"
 
 
 class ToolExecuteRequest(BaseModel):
@@ -372,7 +285,6 @@ async def login(body: LoginRequest, request: Request, response: Response):
     if users is None:
         raise HTTPException(503, "authentication unavailable")
     user = await users.by_username(body.username)
-    # The shared verifier does equal password work for unknown accounts.
     valid = await asyncio.to_thread(verify_password, body.password, user["password_hash"] if user else None)
     if not valid or user is None or user["status"] != "active":
         raise HTTPException(401, "invalid credentials")
@@ -411,19 +323,17 @@ async def list_sessions(user: UserContext = Depends(get_current_user)):
 
 
 async def _create_session(user: UserContext, *, title: str = "", client_request_id: str | None = None) -> dict:
-    """Create a session on the account's cohort — the one place that decides.
-
-    Explicit creation (POST /api/sessions) and the chat path's implicit
-    creation both come through here, so an account cannot end up in two cohorts
-    depending on which door it enters by.
-    """
     session = await app.state.platform_sessions.create(
-        user.account_id, title=title, client_request_id=client_request_id,
-        harness_version=harness_version_for_account(user.account_id))
-    # Rollout observation (phase7-design §3): which harness the new session is
-    # pinned to. No title or message content is logged.
-    logger.info("session created: session_id=%s harness_version=%s",
-                session["session_id"], session["harness_version"])
+        user.account_id,
+        title=title,
+        client_request_id=client_request_id,
+        harness_version=harness_version_for_account(user.account_id),
+    )
+    logger.info(
+        "session created: session_id=%s harness_version=%s",
+        session["session_id"],
+        session["harness_version"],
+    )
     return session
 
 
@@ -458,7 +368,6 @@ class ApprovalDecisionRequest(BaseModel):
 
 
 def _customer_arguments(name, arguments, user):
-    # Customers cannot invoke arbitrary registered tools or self-authorize writes.
     if name not in {"order_query", "refund_evaluate", "ticket_query", "knowledge_search"}:
         raise HTTPException(403, "use customer chat for this operation")
     if "user_id" in arguments and arguments["user_id"] != user.business_user_id:
@@ -474,135 +383,10 @@ def _customer_arguments(name, arguments, user):
 
 
 async def _internal_only(user: UserContext = Depends(get_current_user)):
-    # No admin role exists in this round. Internal Python services remain available.
     raise HTTPException(403, "internal operation is not exposed to customers")
 
 
-async def _persist_order_query_context(
-    session_id: str | None,
-    user_id: str,
-    order: dict,
-    *,
-    tool_arguments: dict | None = None,
-    tool_result: dict | None = None,
-    event_operation_id: str | None = None,
-) -> None:
-    """把网页端直接调用订单工具的结果接入同一会话记忆。"""
-    if not session_id or not order.get("found") or not order.get("order_id"):
-        return
-
-    order_id = str(order["order_id"])
-    if checkpoint_store is not None:
-        async with checkpoint_store.session_lock(session_id):
-            cp = await checkpoint_store.load(session_id, user_id)
-            if cp is not None and cp.status == "running":
-                raise CheckpointConflict("unfinished chat request owns this session")
-            context = dict(cp.context) if cp else {
-                "workflow_version": 1,
-                "session_state": ConversationState().to_dict(),
-                "state": {},
-            }
-            current = ConversationState.from_dict(context.get("session_state", {}))
-            current.last_intent = "order_query"
-            current.accumulated_entities["order_id"] = order_id
-            context["session_state"] = current.to_dict()
-
-            operation_id = event_operation_id if isinstance(event_operation_id, str) and event_operation_id else str(uuid.uuid4())
-            operation_hash = hashlib.sha256(
-                f"{session_id}:{user_id}:{operation_id}".encode("utf-8")
-            ).hexdigest()[:40]
-            event_key = f"direct-order-query:{operation_hash}"
-            safe_arguments = {"order_id": order_id}
-            result_payload = dict(tool_result or order)
-            for private_key in ("user_id", "business_user_id", "customer_email", "phone"):
-                result_payload.pop(private_key, None)
-            await checkpoint_store.append_event(
-                session_id,
-                user_id,
-                "TOOL_CALL",
-                {"name": "order_query", "arguments": tool_arguments or safe_arguments},
-                event_key=f"{event_key}:call",
-            )
-            await checkpoint_store.append_event(
-                session_id,
-                user_id,
-                "TOOL_RESULT",
-                {"name": "order_query", "success": True, "result": result_payload},
-                event_key=f"{event_key}:result",
-            )
-            context_message = (
-                f"上一轮已查询订单 {order_id}，状态：{order.get('status_label', order.get('status', '未知'))}，"
-                f"商品：{order.get('product', '未知')}。"
-            )
-            synthetic_user_message = f"查询订单 {order_id}"
-            await checkpoint_store.append_event(
-                session_id,
-                user_id,
-                "USER_MESSAGE",
-                {"role": "user", "content": synthetic_user_message, "synthetic": True},
-                event_key=f"{event_key}:user",
-            )
-            await checkpoint_store.append_event(
-                session_id,
-                user_id,
-                "ASSISTANT_MESSAGE",
-                {"role": "assistant", "content": context_message},
-                event_key=f"{event_key}:assistant",
-            )
-            # These context events do not belong to the previous chat receipt.
-            context.pop("request_id", None)
-            context.pop("request_hash", None)
-            value = AgentCheckpoint(
-                session_id=session_id,
-                user_id=user_id,
-                intent="order_query",
-                current_stage="WAIT_CONFIRM" if current.pending_action else "FINISHED",
-                status="waiting" if current.pending_action else "finished",
-                pending_action=current.pending_action,
-                messages=[],
-                context=context,
-                version=cp.version if cp else 0,
-                last_event_seq=cp.last_event_seq if cp else 0,
-            )
-            saved = await (checkpoint_store.update(value) if cp else checkpoint_store.save(value))
-            if context_manager is not None:
-                synchronize = getattr(context_manager, "synchronize_checkpoint", None)
-                if callable(synchronize):
-                    projection = AgentCheckpoint.model_validate({
-                        **saved.model_dump(),
-                        "messages": [
-                            {"role": "user", "content": synthetic_user_message},
-                            {"role": "assistant", "content": context_message},
-                        ],
-                    })
-                    await synchronize(projection)
-        return
-    current = await session_store.get_state(session_id)
-    entities = dict(current.accumulated_entities or {})
-    entities["order_id"] = order_id
-    await session_store.update_state(
-        session_id,
-        last_intent="order_query",
-        accumulated_entities=entities,
-    )
-
-    context_message = (
-        f"上一轮已查询订单 {order_id}，状态：{order.get('status_label', order.get('status', '未知'))}，"
-        f"商品：{order.get('product', '未知')}。"
-    )
-    await session_store.add_message(session_id, "user", f"查询订单 {order_id}")
-    await session_store.add_message(session_id, "assistant", context_message)
-
-
 async def _forward_user_token(request: Request) -> str:
-    """The caller's own public token, forwarded verbatim to the harness.
-
-    `get_current_user` has already accepted this request by the time a handler
-    runs, so this only re-reads the same two sources it accepts (the HttpOnly
-    cookie, or a Bearer header that must agree with it). It never decides
-    identity — the harness re-verifies the token and re-resolves the account
-    with this runtime before acting.
-    """
     cookie = request.cookies.get(COOKIE_NAME)
     authorization = request.headers.get("authorization")
     if authorization is not None:
@@ -612,111 +396,59 @@ async def _forward_user_token(request: Request) -> str:
     return cookie or ""
 
 
+async def _resolve_pi_session(body: ChatRequest, user: UserContext) -> str:
+    if body.session_id:
+        session_id = body.session_id
+        session = await _owned_session(session_id, user)
+    else:
+        session = await _create_session(user, title=body.message[:100], client_request_id=body.client_request_id)
+        session_id = session["session_id"]
+    await app.state.platform_sessions.touch(session_id, user.account_id, title=body.message[:100])
+    if (session.get("harness_version") or "legacy") != "pi":
+        raise HTTPException(status_code=409, detail="legacy orchestrator is retired; create a new session")
+    return session_id
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(
     body: ChatRequest,
     user: UserContext = Depends(get_current_user),
     user_token: str = Depends(_forward_user_token),
 ):
-    """统一入口：legacy 会话走本进程 orchestrator，pi 会话转发 pi-harness。
+    """Unified chat entry forwarded to pi-harness."""
+    session_id = await _resolve_pi_session(body, user)
+    return await _pi_chat(user_token, body, session_id, user)
 
-    `user_token` is injected by FastAPI and used only by the pi branch (to
-    forward the caller's own token verbatim). It is a parameter rather than a
-    `Request` the handler digs into, so the two business arguments stay first
-    and the handler remains directly callable — the way route-level tests
-    exercise it.
-    """
-    if chat_orchestrator is None:
-        raise HTTPException(status_code=503, detail="系统初始化中")
 
-    if body.session_id:
-        session_id = body.session_id
-        session = await _owned_session(session_id, user)
-    else:
-        # Written once, at creation. A retry that lands on an existing row
-        # keeps that row's harness_version — see platform_db/sessions.py.
-        session = await _create_session(
-            user, title=body.message[:100], client_request_id=body.client_request_id)
-        session_id = session["session_id"]
-    await app.state.platform_sessions.touch(session_id, user.account_id, title=body.message[:100])
-
-    if (session.get("harness_version") or "legacy") == "pi":
-        # A pi session is served by the harness or not at all: degrading to the
-        # legacy orchestrator here would fork one conversation into two
-        # transcript systems (phase7-design §2). Unreachable harness -> 503.
-        return await _pi_chat(user_token, body, session_id, user)
-
-    if checkpoint_store is not None:
-        from langchain_core.messages import HumanMessage
-        try:
-            result = await chat_orchestrator.ainvoke({
-                "session_id": session_id, "user_id": user.business_user_id,
-                "client_request_id": body.client_request_id,
-                "messages": [HumanMessage(content=body.message)],
-            })
-        except (CheckpointError, ContextError):
-            raise
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="invalid checkpoint request") from exc
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail="请求中断，可查询 checkpoint 后显式恢复") from exc
-        return _chat_response(session_id, result)
-
-    await session_store.add_message(session_id, "user", body.message)
-
-    from langchain_core.messages import HumanMessage, AIMessage
-
-    history = await session_store.get_history(session_id)
-    messages: list = []
-    for msg in history:
-        if msg["role"] == "user":
-            messages.append(HumanMessage(content=msg["content"]))
-        elif msg["role"] == "assistant":
-            messages.append(AIMessage(content=msg["content"]))
-
-    if not messages:
-        messages = [HumanMessage(content=body.message)]
-
-    initial_state = {
-        "messages": messages,
-        "user_id": user.business_user_id,
-        "session_id": session_id,
-        "intent": "",
-        "sub_results": {},
-        "compliance_passed": True,
-        "final_response": "",
-        "current_agent": "",
-        "retry_count": 0,
-        "needs_clarification": False,
-    }
-
-    try:
-        result = await chat_orchestrator.ainvoke(initial_state)
-    except ContextError:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
-
-    final_response = result.get("final_response", "系统处理异常，请稍后重试")
-
-    await session_store.add_message(session_id, "assistant", final_response)
-
-    return ChatResponse(
-        response=final_response,
-        session_id=session_id,
-        intent=result.get("intent", "unknown"),
-        compliance_passed=result.get("compliance_passed", True),
+@app.post("/api/chat/stream")
+async def chat_stream(
+    body: ChatRequest,
+    user: UserContext = Depends(get_current_user),
+    user_token: str = Depends(_forward_user_token),
+):
+    """Unified SSE streaming chat entry forwarded to pi-harness (/api/chat/stream)."""
+    session_id = await _resolve_pi_session(body, user)
+    client_request_id = body.client_request_id or str(uuid.uuid4())
+    return StreamingResponse(
+        stream_chat(
+            account_id=user.account_id,
+            business_user_id=user.business_user_id,
+            session_id=session_id,
+            client_request_id=client_request_id,
+            message=body.message,
+            user_token=user_token,
+        ),
+        media_type="text/event-stream; charset=utf-8",
+        headers={
+            "Cache-Control": "no-store, no-transform",
+            "Connection": "keep-alive",
+            "X-SmartCS-Session-Id": session_id,
+            "X-SmartCS-Client-Request-Id": client_request_id,
+        },
     )
 
 
-def _chat_response(session_id, result):
-    return ChatResponse(response=result["final_response"], session_id=session_id,
-                        intent=result.get("intent", "unknown"), compliance_passed=result.get("compliance_passed", True),
-                        client_request_id=result.get("client_request_id"))
-
-
 def _harness_detail(response, fallback: str) -> str:
-    """A short, non-sensitive reason from the harness, when it sent one."""
     try:
         detail = response.json().get("detail")
     except ValueError:
@@ -727,11 +459,6 @@ def _harness_detail(response, fallback: str) -> str:
 
 
 async def _pi_chat(user_token: str, body: ChatRequest, session_id: str, user: UserContext) -> ChatResponse:
-    """Forward one turn of a pi session to the harness and adapt its answer.
-
-    No failure path here reaches the legacy orchestrator: a pi session that
-    cannot be served by the harness answers 503 and the client retries.
-    """
     client_request_id = body.client_request_id or str(uuid.uuid4())
     try:
         response = await forward_chat(
@@ -746,8 +473,6 @@ async def _pi_chat(user_token: str, body: ChatRequest, session_id: str, user: Us
         raise HTTPException(503, "pi harness unavailable") from None
 
     if response.status_code in (409, 429):
-        # The harness is healthy and is refusing this turn on purpose (receipt
-        # conflict, unfinished run, session busy) — retryable, not a fallback.
         raise HTTPException(response.status_code, _harness_detail(response, "pi harness refused the request"))
     if response.status_code != 200:
         raise HTTPException(502, "pi harness rejected the request")
@@ -759,7 +484,6 @@ async def _pi_chat(user_token: str, body: ChatRequest, session_id: str, user: Us
 
 
 def _pi_chat_response(session_id: str, client_request_id: str, payload) -> ChatResponse:
-    """Adapt the harness's answer to the workbench's ChatResponse shape."""
     message = payload.get("message") if isinstance(payload, dict) else None
     content = message.get("content") if isinstance(message, dict) else None
     if not isinstance(content, str) or not content:
@@ -770,44 +494,13 @@ def _pi_chat_response(session_id: str, client_request_id: str, payload) -> ChatR
         response=content,
         session_id=session_id,
         intent=intent if isinstance(intent, str) and intent else "unknown",
-        # The harness reviews compliance inside the turn (Phase 3): a final
-        # answer that reaches this point already passed the gate, or the
-        # extension replaced it with the safe fallback before it was stored.
         compliance_passed=True,
         client_request_id=returned_request_id if isinstance(returned_request_id, str) else client_request_id,
         harness_version="pi",
     )
 
 
-@app.get("/api/checkpoints/{session_id}")
-async def get_checkpoint(session_id: str, user: UserContext = Depends(get_current_user)):
-    await _owned_session(session_id, user)
-    if checkpoint_store is None:
-        raise HTTPException(status_code=503, detail="checkpoint unavailable")
-    cp = await checkpoint_store.load(session_id, user.business_user_id)
-    if cp is None:
-        raise HTTPException(status_code=404, detail="checkpoint not found")
-    return {"session_id": session_id, "client_request_id": cp.context.get("request_id"),
-            "current_stage": cp.current_stage, "status": cp.status, "version": cp.version,
-            "response": cp.context.get("state", {}).get("final_response") if cp.status != "running" else None}
-
-
-@app.post("/api/checkpoints/{session_id}/resume", response_model=ChatResponse)
-async def resume_checkpoint(session_id: str, request: ResumeRequest, user: UserContext = Depends(get_current_user)):
-    await _owned_session(session_id, user)
-    if checkpoint_store is None or chat_orchestrator is None:
-        raise HTTPException(status_code=503, detail="checkpoint unavailable")
-    try:
-        result = await chat_orchestrator.resume(session_id, user.business_user_id, request.client_request_id)
-    except (CheckpointError, ContextError):
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="恢复未完成，已保存断点；请检查服务或业务执行账本") from exc
-    return _chat_response(session_id, result)
-
-
 async def _pi_harness_call(method: str, session_id: str, user: UserContext) -> dict:
-    """Signed call to the pi-harness internal channel for a pi-harness session."""
     try:
         response = await call_harness(
             method,
@@ -819,7 +512,7 @@ async def _pi_harness_call(method: str, session_id: str, user: UserContext) -> d
     except HarnessUnavailable:
         raise HTTPException(503, "pi harness unavailable") from None
     if response.status_code == 409:
-        raise CheckpointConflict("unfinished request cannot be deleted")
+        raise HTTPException(409, "unfinished request cannot be deleted")
     if response.status_code == 404:
         raise HTTPException(404, "session not found")
     if response.status_code != 200:
@@ -829,46 +522,24 @@ async def _pi_harness_call(method: str, session_id: str, user: UserContext) -> d
 
 @app.get("/api/history/{session_id}")
 async def get_history(session_id: str, user: UserContext = Depends(get_current_user)):
-    """获取对话历史"""
     session = await _owned_session(session_id, user)
-    if session.get("harness_version") == "pi":
-        payload = await _pi_harness_call("GET", session_id, user)
-        return {"session_id": session_id, "messages": payload.get("messages", [])}
-    if checkpoint_store is not None:
-        history = await checkpoint_store.history(session_id, user.business_user_id)
-    else:
-        history = await session_store.get_history(session_id)
-    return {"session_id": session_id, "messages": history}
+    if (session.get("harness_version") or "legacy") != "pi":
+        raise HTTPException(409, "legacy orchestrator is retired; create a new session")
+    payload = await _pi_harness_call("GET", session_id, user)
+    return {"session_id": session_id, "messages": payload.get("messages", [])}
 
 
 @app.delete("/api/history/{session_id}")
 async def clear_history(session_id: str, user: UserContext = Depends(get_current_user)):
-    """清除会话消息和结构化状态。"""
     session = await _owned_session(session_id, user)
-    if session.get("harness_version") == "pi":
-        # Harness owns the transcript: it refuses while a run is active, disposes
-        # the runtime, deletes the session file and marks memory provenance.
-        await _pi_harness_call("DELETE", session_id, user)
-        return {"session_id": session_id, "cleared": True}
-    user_id = user.business_user_id
-    if checkpoint_store is not None:
-        async with checkpoint_store.session_lock(session_id):
-            cp = await checkpoint_store.load(session_id, user_id)
-            if cp is not None and cp.status == "running":
-                raise CheckpointConflict("unfinished request cannot be deleted")
-            await session_store.clear(session_id)
-            if cp is not None:
-                await checkpoint_store.delete(session_id, user_id, cp.version)
-            if context_manager is not None:
-                await context_manager.invalidate_session(session_id, user_id)
-    else:
-        await session_store.clear(session_id)
+    if (session.get("harness_version") or "legacy") != "pi":
+        raise HTTPException(409, "legacy orchestrator is retired; create a new session")
+    await _pi_harness_call("DELETE", session_id, user)
     return {"session_id": session_id, "cleared": True}
 
 
 @app.get("/api/demo/orders")
 async def list_demo_orders(limit: int = Query(default=6, ge=1, le=20), user: UserContext = Depends(get_current_user)):
-    """Expose recent local demo orders for the web workbench quick actions."""
     return {
         "data_source": order_repository.DEMO_DATA_SOURCE,
         "orders": order_repository.list_orders_for_user(user.business_user_id, limit),
@@ -877,36 +548,19 @@ async def list_demo_orders(limit: int = Query(default=6, ge=1, le=20), user: Use
 
 @app.get("/api/tools")
 async def list_tools(user: UserContext = Depends(get_current_user)):
-    """MCP工具发现接口"""
     return {"tools": mcp_server.list_tools()}
 
 
 @app.post("/api/tools/call")
 async def call_tool(request: ToolExecuteRequest, user: UserContext = Depends(get_current_user)):
-    """MCP工具调用接口"""
     name = request.name
     arguments = _customer_arguments(name, request.arguments, user)
     if request.session_id:
         await _owned_session(request.session_id, user)
     tool = mcp_server.get_tool(name)
     if tool is not None and str(tool.operation_type or "read").lower() == "write":
-        raise HTTPException(
-            status_code=409,
-            detail="write tools must use /api/tools/execute",
-        )
-    result = await mcp_server.call_tool(
-        name=name,
-        arguments=arguments,
-    )
-    if name == "order_query" and result.success and isinstance(result.result, dict):
-        await _persist_order_query_context(
-            session_id=request.session_id,
-            user_id=user.business_user_id,
-            order=result.result,
-            tool_arguments={"order_id": arguments.get("order_id")},
-            tool_result=result.result,
-            event_operation_id=request.idempotency_key,
-        )
+        raise HTTPException(status_code=409, detail="write tools must use /api/tools/execute")
+    result = await mcp_server.call_tool(name=name, arguments=arguments)
     return {
         "success": result.success,
         "result": result.result,
@@ -917,7 +571,6 @@ async def call_tool(request: ToolExecuteRequest, user: UserContext = Depends(get
 
 @app.post("/api/tools/execute")
 async def execute_tool(request: ToolExecuteRequest, user: UserContext = Depends(get_current_user)):
-    """通过统一执行层调用 MCP 工具。"""
     arguments = _customer_arguments(request.name, request.arguments, user)
     if request.session_id:
         await _owned_session(request.session_id, user)
@@ -935,32 +588,13 @@ async def execute_tool(request: ToolExecuteRequest, user: UserContext = Depends(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    if (
-        request.name == "order_query"
-        and result.success
-        and isinstance(result.result, dict)
-    ):
-        await _persist_order_query_context(
-            session_id=request.session_id,
-            user_id=user.business_user_id,
-            order=result.result,
-            tool_arguments={"order_id": arguments.get("order_id")},
-            tool_result=result.result,
-            event_operation_id=request.idempotency_key,
-        )
     return result.as_dict()
 
 
 @app.post("/api/approvals", dependencies=[Depends(_internal_only)])
 async def create_approval(request: ApprovalCreateRequest):
-    """创建本地 Sandbox 人工审批记录。"""
     try:
-        record = approval_service.create_request(
-            request.tool_name,
-            request.arguments,
-            request.requested_by,
-        )
+        record = approval_service.create_request(request.tool_name, request.arguments, request.requested_by)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return record.as_dict()
@@ -977,11 +611,7 @@ async def get_approval(approval_id: str):
 @app.post("/api/approvals/{approval_id}/approve", dependencies=[Depends(_internal_only)])
 async def approve_approval(approval_id: str, request: ApprovalDecisionRequest):
     try:
-        record = approval_service.approve(
-            approval_id,
-            request.decided_by,
-            request.reason,
-        )
+        record = approval_service.approve(approval_id, request.decided_by, request.reason)
     except ApprovalNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ApprovalStateError as exc:
@@ -992,11 +622,7 @@ async def approve_approval(approval_id: str, request: ApprovalDecisionRequest):
 @app.post("/api/approvals/{approval_id}/reject", dependencies=[Depends(_internal_only)])
 async def reject_approval(approval_id: str, request: ApprovalDecisionRequest):
     try:
-        record = approval_service.reject(
-            approval_id,
-            request.decided_by,
-            request.reason,
-        )
+        record = approval_service.reject(approval_id, request.decided_by, request.reason)
     except ApprovalNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ApprovalStateError as exc:
@@ -1006,7 +632,6 @@ async def reject_approval(approval_id: str, request: ApprovalDecisionRequest):
 
 @app.get("/api/metrics", dependencies=[Depends(_internal_only)])
 async def get_metrics():
-    """获取系统指标"""
     return {
         "agent_metrics": metrics.get_summary(),
         "tool_call_log": mcp_server.get_call_log(last_n=20),
@@ -1015,11 +640,7 @@ async def get_metrics():
 
 @app.get("/api/metrics/runtime")
 async def get_runtime_metrics(user: UserContext = Depends(get_current_user)):
-    """获取经认证的进程级数值运行时指标，不包含会话内容。"""
-    snapshot = runtime_metrics.snapshot()
-    context_snapshot = getattr(context_manager, "metrics_snapshot", None)
-    snapshot["context"] = context_snapshot() if callable(context_snapshot) else {}
-    return snapshot
+    return runtime_metrics.snapshot()
 
 
 @app.get("/health")
@@ -1029,6 +650,7 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
         "api.main:app",
         host=os.getenv("HOST", "0.0.0.0"),

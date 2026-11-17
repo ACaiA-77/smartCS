@@ -9,9 +9,6 @@ import xml.etree.ElementTree as ET
 
 REQUIRED_SUITES = (
     "tests.test_auth",
-    "tests.test_checkpoint",
-    "tests.test_context_storage",
-    "tests.test_short_term_memory",
     "tests.test_user_memory",
     "tests.test_user_sessions",
     "tests.test_pi_unified_entry_e2e",

@@ -163,13 +163,8 @@ async def test_review_requires_identity_and_ownership(gate):
 
 
 def test_shared_rule_table_is_the_source_of_truth():
-    """Both reviewers read one neutral rule module; neither keeps a copy."""
-    from agents.compliance_checker import ComplianceCheckerAgent
+    """The compliance gate reads the neutral rule module directly."""
     from policies.compliance_rules import FORBIDDEN_TERMS, SENSITIVE_PATTERNS
-
-    # The legacy agent's rule stage and this gate must produce the same verdict.
-    legacy = ComplianceCheckerAgent.__new__(ComplianceCheckerAgent)
-    assert legacy._rule_based_check("保证收益 13800138000") == rule_review("保证收益 13800138000")[0]
 
     violations, masked = rule_review("保证收益 13800138000")
     assert any("违规金融用语" in v for v in violations)

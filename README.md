@@ -27,7 +27,7 @@ SmartCS 是一个**双层**智能客服系统：**一个仓库，两套运行时
 
 ## 当前迭代范围
 
-本版保留认证、客户隔离、checkpoint 恢复和双域文本 RAG，增加 jieba 索引重建与可续跑的分词 A/B 评测工具。图片、音频和视频输入留待下一版本，本版不包含多模态功能。下方带日期的验收数据为历史记录，不代表当前 GitHub CI 或部署状态。
+本版已完成旧 Python Legacy 编排器与 Redis 缓存层退役，收敛为 **Pi Harness（Node/TS）+ Python Business Runtime（FastAPI）** 单轨架构；保留认证、客户隔离、账本幂等恢复和双域文本 RAG（含 jieba 索引重建与可续跑的分词 A/B 评测工具）。图片、音频和视频输入留待下一版本，本版不包含多模态功能。下方带日期的验收数据为历史迁移记录，不代表当前 GitHub CI 或部署状态。
 
 ## Historical Migration Record
 
@@ -166,21 +166,17 @@ npm run outbox:retry -- --receipt-id <id> | --failed --limit <n>
 投递语义是 **at-least-once delivery + idempotent consumer**：崩溃会导致重复投递，
 重复不会产生重复记忆结果。详见 [docs/recovery.md](docs/recovery.md)。
 
-简历表达、面试问答和演示脚本见 [docs/resume_interview.md](docs/resume_interview.md)。
-
 ## 技术栈
 
 | 组件 | 技术 |
 |------|------|
 | Agent 运行时（主链路） | `pi-harness`，Node 22 / TypeScript / Pi SDK |
-| Agent 编排（legacy 路径） | 显式 async `ChatOrchestrator` |
-| HTTP 框架 | FastAPI + Uvicorn |
-| LLM 调用 | LangChain `ChatOpenAI` |
-| 向量检索 | FAISS |
-| 短期记忆 | Redis async client + in-process fallback，Redis 状态带 TTL |
-| 聊天断点 | MySQL + PyMySQL，节点快照、乐观版本检查、会话连接锁 |
+| HTTP 业务运行时 | FastAPI + Uvicorn |
+| 向量检索 | FAISS + BM25（`jieba`）+ RRF + Cross-Encoder |
+| 长期记忆 | MySQL Outbox / 租约队列 + FAISS 向量库 |
+| 业务与平台持久化 | MySQL（平台用户/会话/待确认/运行回执）+ SQLite（订单/退款/工单/执行账本） |
 | 追踪 | OpenTelemetry，可选 OTLP-compatible collector |
-| 协议 | MCP 工具语义，HTTP `/api/tools`，内部 JSON-RPC 处理函数 |
+| 协议 | MCP 工具语义，HTTP `/api/tools` 与 `/internal/*` |
 
 ## 快速开始
 
@@ -227,28 +223,22 @@ python-impl/                    # 仓库根（Git root）
 │   ├── skills/                 # 技能披露
 │   ├── docs/                   # subagent 评估、MCP 可行性
 │   └── PHASEn_REPORT.md        # Python → Pi 迁移的历史验收记录
-├── agents/                     # Agent 实现（legacy 路径）
-│   ├── orchestrator.py         # 显式请求编排
-│   ├── intent_router.py        # 意图路由 Agent
-│   ├── knowledge_rag.py        # RAG 知识检索 Agent
-│   ├── ticket_handler.py       # 工单处理 Agent
-│   └── compliance_checker.py   # 合规审查 Agent
-├── memory/                     # 会话与长期记忆
-│   ├── session_store.py        # 会话状态与消息边界
-│   ├── short_term.py           # Redis / fallback 消息与状态后端，30 min TTL
-│   └── long_term.py            # 长期记忆，FAISS 向量库
+├── memory/                     # 长期记忆与异步提取消费者
+│   ├── user_memory.py          # MySQL 用户记忆服务与租约 Outbox 消费
+│   └── long_term.py            # 长期记忆 FAISS 向量库
+├── internal_api/               # 供 pi-harness 调用的服务间内部通道（Service JWT 鉴权）
 ├── tool_runtime/               # 进程内工具运行时（不是 MCP 线协议）
 │   ├── mcp_server.py           # 工具注册与调用，REST 暴露见 api/main.py
 │   └── tool_execution.py       # 确认、超时、幂等账簿与崩溃恢复
-├── policies/                   # 两条运行路径共享的合规与同意判定
+├── policies/                   # 合规规则与退款/创建显式同意判定
 ├── db/                         # MySQL 配置与取消时的线程等待
 │   └── mysql.py                # 事务、连接租约和错误映射由各 store 保留
 ├── tickets/                    # 持久化客服工单业务域
 │   └── service.py              # support_tickets 与客户端请求幂等
 ├── tracing/                    # OpenTelemetry 追踪
-│   └── otel_config.py          # 追踪配置与 Agent 装饰器
+│   └── otel_config.py          # 追踪配置与 Span 装饰器
 ├── api/                        # FastAPI 接口层
-│   └── main.py                 # REST API 入口
+│   └── main.py                 # REST API 入口（统一转发聊天至 pi-harness）
 ├── knowledge_sources/           # 网页采集源、raw HTML、metadata、抽样审查
 │   ├── urls.yml                 # 官方网页 URL 清单
 │   ├── raw_html/                # 原始 HTML
@@ -263,7 +253,7 @@ python-impl/                    # 仓库根（Git root）
 ├── tui/                        # 轻量终端聊天入口
 ├── requirements.txt
 ├── Dockerfile
-├── compose.yaml                # API、Harness、Redis 与自动更新服务编排
+├── compose.yaml                # API、Harness 与自动更新服务编排
 ├── .github/workflows/build-image.yml # PR 质量门禁（Python + Harness 两个 job），main push / dispatch 构建发布
 ├── .env.example                 # 本机运行环境变量示例
 └── .env.docker.example          # Docker 运行环境变量示例
@@ -271,47 +261,17 @@ python-impl/                    # 仓库根（Git root）
 
 ## 核心特性
 
-### 显式请求编排
+### Pi 单轨对话与业务授权隔离
 
-`ChatOrchestrator` 先恢复会话上下文，再调用 `IntentRouter`。置信度足够时，它最多选择一个响应分支，随后统一进行合规检查和响应合成；低置信度或未知路由直接返回澄清。问候、自我介绍、能力说明、致谢等进入 `ConversationAgent`，基于近期对话直接回复，不检索知识库或调用业务工具。具体产品知识和政策问题仍走 RAG；混合了寒暄的业务请求优先走业务分支。订单、退款和工单 Handler 通过 `ToolExecutor` 进入 MCP 和业务域，`KnowledgeRAGAgent` 通过共享 `HybridRetriever` 访问双域知识库。完整入口和分支见 [docs/architecture.md](docs/architecture.md)。
+所有新会话统一路由至 `pi-harness` 执行 Agent 循环、工具选择与本地 JSONL 会话持久化；历史 `legacy` 会话返回 HTTP `409 legacy_session_retired`。业务读取（订单、工单、RAG）和写操作（退款、工单）均由 Python `ToolExecutor` 与 `internal_api` 进行身份重绑定、确认核验与执行账本（`ExecutionLedger`）幂等保护。完整入口与边界见 [docs/architecture.md](docs/architecture.md) 与 [docs/runtime-boundaries.md](docs/runtime-boundaries.md)。
 
-工单写入同时使用执行层 `idempotency_key` 和业务域 `client_request_id`，分别覆盖执行回放与客户端请求幂等。`refund_create` 和 `ticket_create` 当前都是 medium risk 写操作，需要确认、幂等键和 ledger，但不因 medium risk 自动要求人工审批。
+工单写入同时使用执行层 `idempotency_key` 和业务域 `client_request_id`，分别覆盖执行回放与客户端请求幂等。`refund_create` 和 `ticket_create` 当前都是 medium risk 写操作，需要服务端构造确认标志、幂等键和 ledger，但不因 medium risk 自动要求人工审批。
 
-### 会话状态
+### 持久化状态与请求幂等恢复
 
-`SessionStore` 维护跨轮结构化状态，并通过 `sub_results["_session_context"]` 注入当前请求：
+API 与 Harness 以 MySQL 与 SQLite 为权威来源：`agent_run_receipt` 保存每轮请求回执（`processing` / `completed` / `failed_recoverable`）实现重复请求回放与崩溃回收；`memory_source_event` 与 MySQL Outbox 负责长期记忆异步投递；`/internal/context/snapshot` 直接从 `UserMemoryService` 与 `OrderRepository` 组装确定性用户上下文快照。
 
-| 字段 | 写入时机 | 消费者 |
-|------|---------|--------|
-| `last_intent` | `IntentRouter` 完成后 | `intent_router.classify` 跨轮意图消歧 |
-| `accumulated_entities` | 每轮实体合并（新覆盖旧） | `knowledge_rag` / `ticket_handler` 实体补全 |
-| `turn_count` | 每轮递增 | 会话状态与调试 |
-
-API checkpoint 路径以 MySQL 事件日志与快照为权威来源：`conversation_event` 表 append-only 记录完整会话流水，`session_digest` 保存滚动摘要与受保护字段，`agent_checkpoint` 只保留工作流恢复游标（不再复制整段消息历史）。`SessionStore` 在请求内使用独立上下文；Redis/进程内 Working Set 只是可丢失加速层，miss 或过期后从 MySQL digest + 最近事件 + checkpoint 无损重建。Redis 不可用、过期或含有旧 `pending_action` 都不会覆盖 MySQL；第一次使用新 checkpoint 时不会自动迁移旧 Redis 会话。上下文组装统一由 `context.ContextManager` 完成（接口见 [docs/context_manager_api.md](docs/context_manager_api.md)），预算与压缩阈值可用 `SMARTCS_CONTEXT_*` 环境变量调节（见 `.env.example`）。
-
-不传 `checkpoint_store` 的离线编排器仍保留原 Redis / 进程内存兼容路径，包括旧 `[wm_snapshot]` 的一次性读取。该兼容路径没有工作流断点恢复能力。详见下节。
-
-### MySQL 节点级断点恢复
-
-API 启动要求可连接 MySQL，缺少密码、连接失败或保存失败会停止推进，不静默降级。配置 `MYSQL_HOST`（默认 `127.0.0.1`）、`MYSQL_PORT`（默认 `3307`）、`MYSQL_DATABASE`（默认 `smartcs_checkpoint`）、`MYSQL_USER`（默认 `smartcs`）和必填 `MYSQL_PASSWORD`。本地独立依赖见 `compose.checkpoint.yaml`；容器访问宿主 MySQL 时必须配置可达地址，不能使用容器自身的 `127.0.0.1`。
-
-`agent_checkpoint` 包含 `id`、唯一 `session_id`、`user_id`、`state_json`、`status`、`version`、`created_at`、`updated_at`；`agent_checkpoint_request` 保存已完成请求回执，使旧请求在后续轮次之后仍可去重。快照只保存白名单文本消息和 JSON，不保存模型隐藏思考、API 凭据或可执行对象。
-
-```text
-PREPARED → ROUTED → EXECUTING → GENERATED → REVIEWED → FINISHED / WAIT_CONFIRM
-```
-
-`FINISHED` 对应设计方案的 `COMPLETED` 节点；状态使用 `running` / `finished` / `waiting`，其中 `waiting` 是已返回本轮回答、等待用户确认。恢复 `WAIT_CONFIRM` 只回放提示，必须通过新的聊天轮次明确确认或取消，不能代用户确认。
-
-- `POST /api/chat` 可带 `client_request_id`。同一会话、同一 ID 和相同内容回放；相同 ID 不同内容返回 409；不同 ID 正常开始下一轮。有未完成请求时拒绝新消息，不能吞掉新消息恢复旧请求。
-- `GET /api/checkpoints/{session_id}` 查询进度；`POST /api/checkpoints/{session_id}/resume` 只传可选 `client_request_id`，显式继续。身份来自登录状态。
-- GET / DELETE history 先检查认证账号的会话归属，再由 checkpoint 检查业务身份。清理会话同时清理回执；正在执行或尚未完成的请求不能删除。
-- 每会话使用 MySQL 连接持有的 `GET_LOCK`，每次更新使用版本 CAS。锁连接丢失后不能继续保存或执行新的写操作；不会按超时抢走仍在运行的请求。
-- 工单分析结果、WRITE 参数、幂等键与确认依据先落盘，再调用工具；退款、工单和合规转人工都复用同一防重入口。恢复时针对当前键检查 stale ledger，默认仍需 60 秒；结果不明时返回冲突并保留断点，不盲目重写。
-
-服务重启不会批量自动执行业务。未完成的模型生成步骤需要重新生成，不是逐 token 或模型内部状态恢复。MySQL 与业务 SQLite 之间没有分布式事务，恢复依赖已有权威业务查询，只覆盖当前退款/工单；不承诺任意外部工具 exactly-once。
-
-前端按认证账号保存当前标签页的会话和请求 ID，刷新后恢复历史，未完成请求提供“继续处理”。JWT 仅在 HttpOnly cookie 中，不存入 JavaScript 存储。切换账号时清空页面数据。请求未到达服务时，以原消息和原请求 ID 重发，不覆盖另一个运行中请求。MySQL 会话、事件日志和回执无自动过期；对话历史以 append-only 事件为完整档案，清空历史使用 cutoff 事件而不删除原始事件。旧匿名 checkpoint 不自动关联到新账号，避免认领他人历史。
+服务重启不会批量自动执行业务。未完成的模型生成步骤需要重新生成，不是逐 token 或模型内部状态恢复。MySQL 与业务 SQLite 之间没有分布式事务，恢复依赖已有权威业务查询（`ExecutionReconciler`），只覆盖当前退款/工单；不承诺任意外部工具 exactly-once。详见 [docs/recovery.md](docs/recovery.md)。
 
 ### RAG 管线
 
@@ -583,48 +543,36 @@ Invoke-RestMethod -Method Post `
 ```powershell
 python -m scripts.check_repository_readiness
 python -m pytest -q
-python -m evals.runner
-python -m evals.runner --json
 ```
 
-`pytest` 覆盖代码和集成回归，Eval runner 检查场景级 Agent 与业务不变量。当前默认离线回归最终为 `367 passed, 18 skipped`；认证专项和 checkpoint 专项均已包含在其中。2026-09-18 checkpoint 阶段的历史全量复验为 `284 passed in 58.14s`，验收报告见 [checkpoint_test_report.md](artifacts/checkpoint_20260918/checkpoint_test_report.md)，原始输出见 [full_suite.txt](artifacts/checkpoint_20260918/full_suite.txt)；同阶段原有 Eval 14 / 14 和 3 项 Node 测试的验收记录见同目录 `round1_acceptance.md`。复现真实 MySQL 测试需显式设置 `OTEL_SDK_DISABLED=true`、`EMBEDDING_BACKEND=hash` 和 `SMARTCS_CHECKPOINT_MYSQL_TEST=1`，并提供可用 MySQL。RAG runtime closure 的隔离语义、顺序回归、Node UI 和 API smoke 已于 2026-09-20 复验通过；这些结果不代表在线模型质量、真实流量、生产 SLA 或远程 CI 已执行。
+`pytest` 覆盖代码和集成回归。复现真实 MySQL 测试需显式设置 `OTEL_SDK_DISABLED=true`、`EMBEDDING_BACKEND=hash` 和 `SMARTCS_AUTH_MYSQL_TEST=1`，并提供可用 MySQL。
 
 真实 MySQL 定向验证必须显式开启，不会因本机存在 `.env` 自动运行外部集成测试：
 
 ```text
-niu -c 'env OTEL_SDK_DISABLED=true EMBEDDING_BACKEND=hash SMARTCS_CHECKPOINT_MYSQL_TEST=1 python -m pytest -q'
-niu -c 'env OTEL_SDK_DISABLED=true EMBEDDING_BACKEND=hash SMARTCS_CHECKPOINT_MYSQL_TEST=1 python -m pytest -q tests/test_checkpoint.py'
-niu -c 'node --test tests/test_checkpoint_ui.cjs'
+env OTEL_SDK_DISABLED=true EMBEDDING_BACKEND=hash SMARTCS_AUTH_MYSQL_TEST=1 python -m pytest -q
 ```
 
-不开启该测试开关时，13 项 MySQL 用例明确 skip；默认离线 pytest 的生命周期测试使用 fake store。每次真实测试使用随机 session 和隔离临时 SQLite，结束只删除测试会话，不操作真实订单库。253 项早期验收与 270 项增量前测试均保留为历史基线，不作为当前数量；旧证据入口见 [简历与面试说明](docs/resume_interview.md#主张来源和边界)。
+不开启该测试开关时，MySQL 集成用例在 CI 容器中启用；默认离线 pytest 使用 fake store。每次真实测试使用随机 session 和隔离临时 SQLite，结束只删除测试会话，不操作真实订单库。
 
 ## Suggested Demo
 
-1. 启动配置好 LLM provider 和认证密钥的 API，创建本地账号，在浏览器登录并新建会话。
+1. 启动配置好 LLM provider、MySQL 和认证密钥的 Harness 与 API，创建本地账号，在浏览器登录并新建会话。
 2. 查询该用户名下的本地演示订单，展示路由和订单归属检查。
 3. 使用同一用户、同一会话和一笔符合条件的订单发起退款请求，展示 `refund_evaluate` 的评估结果和会话中的待确认状态。
 4. 回复确认，展示 `refund_create`、待确认状态清除和 SQLite 中恰好一个持久化退款效果。
 5. 创建并查询一个持久化支持工单，展示业务请求幂等。
-6. 查看 `/api/metrics/runtime`，再运行离线 Eval 输出。
+6. 查看 `/api/metrics/runtime` 与追踪日志。
 
-不依赖 API 的确定性证据演示：
-
-```powershell
-python -m evals.runner
-```
-
-交互式 API 演示仍需要配置 LLM provider。
+交互式 API 演示需要配置 LLM provider。
 
 ## Current Boundaries
 
 - 业务数据使用本地 SQLite Sandbox，不代表真实平台或用户数据。
 - 客户 API 已接入认证；无生产 RBAC，内部审批接口不向客户开放。
-- checkpoint 有 MySQL 会话锁和 CAS，但本地业务 SQLite 不构成跨主机共享业务存储；不宣称完整多实例生产部署或分布式事务。
-- 离线确定性 Eval 不测量在线 LLM 回答质量。
+- 平台状态保存在 MySQL，但本地业务 SQLite 不构成跨主机共享业务存储；不宣称完整多实例生产部署或分布式事务。
 - 本次工作会话没有验证远程 GitHub Actions。
 - 项目不声明生产流量、生产 SLA 或已部署状态。
-- SSE 和更丰富的 UI 属于可选扩展，不是本地目标的必需条件。
 
 ## Terminal TUI
 
@@ -676,7 +624,7 @@ curl -X POST http://localhost:8000/api/chat \
 
 ## Docker
 
-Dockerfile 用于把 FastAPI 后端打包成可部署镜像。镜像内默认不打包真实 `.env` / `.env.docker`、`vector_store/`、raw HTML 和测试文件；运行时通过 `--env-file` 和 volume 挂载注入配置、向量库和模型缓存。镜像构建时会把 tiktoken `cl100k_base` BPE 文件烘焙进 `/home/app/.cache/tiktoken`，上下文预算计数在容器内无需任何运行期下载。
+Dockerfile 用于把 FastAPI 后端打包成可部署镜像。镜像内默认不打包真实 `.env` / `.env.docker`、`vector_store/`、raw HTML 和测试文件；运行时通过 `--env-file` 和 volume 挂载注入配置、向量库和模型缓存。
 
 本机 Python 直接运行使用 `.env`；Docker 容器运行建议使用 `.env.docker`。不要提交真实 `.env` / `.env.docker`，仓库只提交 `.env.example` / `.env.docker.example`。
 
@@ -705,11 +653,9 @@ FAISS_INDEX_PATH=/app/vector_store/faiss_index
 
 除 FAISS 外，Docker 运行还需要三块配置（`.env.docker.example` 已全部包含，真实 `.env.docker` 照抄后补密钥）：
 
-- **MySQL checkpoint/用户记忆**：容器内 `MYSQL_HOST` 不能写 `127.0.0.1`（那是容器自身），Docker Desktop 用 `host.docker.internal`；先 `docker compose -f compose.checkpoint.yaml up -d` 启动独立 MySQL。
+- **MySQL 平台与用户记忆库**：容器内 `MYSQL_HOST` 不能写 `127.0.0.1`（那是容器自身），Docker Desktop 用 `host.docker.internal`。
 - **JWT 认证**：`AUTH_JWT_SECRET` 必须填入至少 32 字节的随机密钥，留空会拒绝启动；首次需在容器内运行 `python -m scripts.init_demo_auth_user` 建演示账号。
 - **jieba 生产索引**：`compose.yaml` 已把 `./artifacts/rag_jieba` 只读挂载到 `/app/artifacts/rag_jieba`，容器内 `RAG_INDEX_ROOT=/app/artifacts/rag_jieba/production_indexes`；索引缺失或 embedding 模型不匹配时启动会 fail closed。
-
-中央上下文预算可用 `SMARTCS_CONTEXT_*` 环境变量调节（默认值见 `.env.docker.example` 注释）。
 
 先在宿主机完成网页采集与向量入库：
 
@@ -854,13 +800,12 @@ docker compose -f compose.yaml up -d --no-deps --no-build --pull never smartcs-a
 
 ```text
 test（Python + 跨服务集成，Python 3.12 / Node 22）
-    -> 独立 MySQL 8 + Redis 7 服务容器
+    -> 独立 MySQL 8 服务容器
     -> 安装 Python 和 Harness 依赖
     -> repository readiness
-    -> pytest -q -rs（显式开启真实 MySQL / Redis 测试）
+    -> pytest -q -rs（显式开启真实 MySQL 测试）
     -> 检查关键套件没有缺席或被跳过
     -> npm test（完整 Harness 套件，与 pytest 串行）
-    -> offline Eval
     -> 保存 JUnit 测试报告
 
 harness（独立离线检查，Node 22）
@@ -883,8 +828,8 @@ main push / workflow_dispatch
 
 `npm run test:ci` 保留为快速离线子集，成员列在
 `pi-harness/vitest.ci.config.ts`；完整集成套件由 `test` 任务运行。
-Python 结果由 `scripts/check_ci_test_results.py` 检查：认证、checkpoint、记忆、
-会话、Redis 和跨服务测试必须出现，跳过仅允许缺少可选 ONNX 运行时或本地
+Python 结果由 `scripts/check_ci_test_results.py` 检查：认证、用户记忆、
+会话和跨服务端到端测试必须出现，跳过仅允许缺少可选 ONNX 运行时或本地
 holdout 评测产物。`jieba` 是必需依赖，缺失不能作为正常跳过。
 测试报告保存在 `test-results` Actions artifact 中，保留七天；基线与验证记录见
 [重构前测试基线](docs/refactor-baseline.md)。
@@ -895,13 +840,13 @@ holdout 评测产物。`jieba` 是必需依赖，缺失不能作为正常跳过�
 ghcr.io/acaia-77/smartcs:<tag>
 ```
 
-Pull Request 只执行仓库就绪检查、测试和离线 Eval，不发布镜像。`main` push 和 `workflow_dispatch` 在同一质量门禁通过后，按 workflow 的标签规则构建并发布镜像，默认分支规则可能产生 `latest`，同时可以产生 commit SHA 等标签。workflow 使用 GitHub 自动提供的 `GITHUB_TOKEN`，不需要把 Docker Hub 或 GHCR 密钥写进仓库。实际远程验证记录见 [测试基线](docs/refactor-baseline.md)。
+Pull Request 只执行仓库就绪检查、Python/Harness 门禁，不发布镜像。`main` push 和 `workflow_dispatch` 在同一质量门禁通过后，按 workflow 的标签规则构建并发布镜像，默认分支规则可能产生 `latest`，同时可以产生 commit SHA 等标签。workflow 使用 GitHub 自动提供的 `GITHUB_TOKEN`，不需要把 Docker Hub 或 GHCR 密钥写进仓库。实际远程验证记录见 [测试基线](docs/refactor-baseline.md)。
 
 首次使用 GHCR 时，需要在 GitHub Packages 中将该镜像设置为 Public，或者在本机先执行 `docker login ghcr.io`。不要把个人访问令牌写入 `.env.docker` 或提交到 Git。
 
 ### 使用 Compose 更新 Docker 部署
 
-`compose.yaml` 会统一管理 SmartCS API、Redis 和可选的 Watchtower。API 默认使用宿主机 `8001` 端口，避免与其他占用 `8000` 的服务冲突：
+`compose.yaml` 会统一管理 `smartcs-api`、`smartcs-pi-harness` 和可选的 Watchtower。API 默认使用宿主机 `8001` 端口，避免与其他占用 `8000` 的服务冲突：
 
 ```powershell
 # 首次使用：准备 Docker 配置
@@ -910,13 +855,9 @@ Copy-Item .env.docker.example .env.docker
 # 当前手动部署已经创建过 smartcs-net 时无需执行；新机器首次部署时执行
 docker network create smartcs-net 2>$null
 
-# 如果旧 API 容器仍然占用相同名称，只删除旧 API 容器。
-# 不要直接删除已有 smartcs-redis，先确认是否需要保留其中的会话数据。
-docker rm -f smartcs-api 2>$null
-
-# 拉取 GHCR 镜像并启动 API 与 Redis
-docker compose pull smartcs-api smartcs-redis
-docker compose up -d smartcs-redis smartcs-api
+# 拉取 GHCR 镜像并启动服务
+docker compose pull smartcs-api
+docker compose up -d smartcs-api smartcs-pi-harness
 ```
 
 启动后访问：
@@ -930,7 +871,7 @@ http://localhost:8001/docs
 
 ```powershell
 $env:SMARTCS_HOST_PORT = "8000"
-docker compose up -d smartcs-redis smartcs-api
+docker compose up -d smartcs-api smartcs-pi-harness
 ```
 
 如果要让本机 Docker 自动检查 GHCR 新镜像，每 5 分钟拉取一次并重建 API 容器：
@@ -939,7 +880,7 @@ docker compose up -d smartcs-redis smartcs-api
 docker compose --profile auto-update up -d
 ```
 
-Watchtower 只监控 `smartcs-api`，不会自动更新 Redis。它需要访问 Docker Socket；这是自动重建容器所必需的权限，因此只建议在个人开发机或受控测试环境启用。更新链路如下：
+Watchtower 只监控 `smartcs-api`。它需要访问 Docker Socket；这是自动重建容器所必需的权限，因此只建议在个人开发机或受控测试环境启用。更新链路如下：
 
 ```text
 main push / workflow_dispatch
@@ -949,18 +890,8 @@ main push / workflow_dispatch
     -> 拉取新镜像并重建 smartcs-api
 ```
 
-重新创建 API 容器不会删除宿主机挂载的 `vector_store/`、`data/`，也不会删除 Redis volume 中的会话数据。若 GHCR 镜像为 Private，需要先完成 Docker 登录：
+重新创建 API 容器不会删除宿主机挂载的 `vector_store/`、`data/`。若 GHCR 镜像为 Private，需要先完成 Docker 登录：
 
 ```powershell
 docker login ghcr.io
 ```
-
-如果当前已经存在手动创建的 `smartcs-redis`，并且希望先只更新 API，可以保留旧 Redis，跳过 Compose 的 Redis 依赖：
-
-```powershell
-docker rm -f smartcs-api 2>$null
-docker compose pull smartcs-api
-docker compose up -d --no-deps smartcs-api
-```
-
-该方式要求旧 `smartcs-redis` 已经加入 `smartcs-net`，并且容器内地址仍为 `smartcs-redis:6379`。如果要让 Compose 接管 Redis，先确认不需要旧会话，或先使用 `docker exec smartcs-redis redis-cli BGSAVE` 和 `docker cp` 做备份，再删除旧 Redis 容器；不要使用 `docker compose down -v`，因为 `-v` 会删除 Compose 管理的持久化卷。

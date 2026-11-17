@@ -354,7 +354,7 @@ class MemoryPolicy:
             or not isinstance(candidate.user_id, str) or not candidate.user_id.strip()
             or not isinstance(candidate.source_session_id, str) or not candidate.source_session_id.strip()
             or not isinstance(candidate.source_event_id, str)
-            or not candidate.source_event_id.isdecimal() or int(candidate.source_event_id) <= 0
+            or not _valid_source_event_id(candidate.source_event_id)
             or type(candidate.source_seq) is not int or candidate.source_seq <= 0
             or _parse_dt(candidate.source_created_at) is None
             or not isinstance(value, dict) or not _is_strict_json_value(value)
@@ -507,41 +507,48 @@ class MySQLUserMemoryRepository:
             self._ensure_column(cursor, "user_memory_episode", "importance", "DOUBLE NOT NULL DEFAULT 0.5")
             self._ensure_column(cursor, "user_memory_episode", "episode_type", "VARCHAR(16) NOT NULL DEFAULT 'source'")
             self._ensure_column(cursor, "user_memory_episode", "source_refs_json", "TEXT NULL")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS memory_source_event (
+                event_id CHAR(36) COLLATE utf8mb4_bin NOT NULL,
+                session_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+                business_user_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+                client_request_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+                content MEDIUMTEXT NOT NULL,
+                created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+                cleared_at TIMESTAMP(3) NULL,
+                seq BIGINT NOT NULL AUTO_INCREMENT,
+                PRIMARY KEY (event_id),
+                UNIQUE KEY uq_source_event_request (session_id, client_request_id),
+                UNIQUE KEY uq_memory_source_seq (seq),
+                KEY idx_session (session_id, created_at),
+                KEY idx_cleared (cleared_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""")
+            self._ensure_column(cursor, "memory_source_event", "seq", "BIGINT NOT NULL AUTO_INCREMENT, ADD UNIQUE KEY uq_memory_source_seq (seq)")
 
         await self.db._call(create)
 
     async def source_event(self, user_id: str, session_id: str, event_id: str) -> dict[str, Any] | None:
-        """Verify exact immutable USER_MESSAGE provenance and the current clear cutoff.
-
-        No schema probing/fallback: an absent digest, mismatched owner/session,
-        non-user event, malformed payload, or cleared event fails closed.
-        """
-        if not event_id.isdecimal() or int(event_id) <= 0:
+        """Verify exact immutable USER_MESSAGE provenance in memory_source_event."""
+        if not isinstance(event_id, str) or not _valid_source_event_id(event_id):
             return None
 
         def read(_connection, cursor):
             cursor.execute(
-                """SELECT e.event_id, e.session_id, e.user_id, e.seq, e.event_type,
-                          e.payload, e.created_at, d.cutoff_seq, d.user_id AS digest_user_id
-                   FROM conversation_event AS e
-                   JOIN session_digest AS d ON d.session_id=e.session_id
-                   WHERE e.event_id=%s AND e.session_id=%s AND e.user_id=%s
-                     AND d.user_id=%s LIMIT 1""",
-                (int(event_id), session_id, user_id, user_id),
+                """SELECT event_id, session_id, business_user_id, content, cleared_at, seq, created_at
+                   FROM memory_source_event
+                   WHERE event_id=%s AND session_id=%s AND business_user_id=%s
+                   LIMIT 1""",
+                (event_id, session_id, user_id),
             )
             row = cursor.fetchone()
-            if not row or row["event_type"] != "USER_MESSAGE" or int(row["seq"]) <= int(row["cutoff_seq"] or 0):
+            if not row or row["cleared_at"] is not None:
                 return None
-            payload = _json_loads_any(row["payload"])
-            if not isinstance(payload, dict) or payload.get("synthetic") or payload.get("role", "user") != "user":
-                return None
-            content = payload.get("content")
+            content = row["content"]
             if not isinstance(content, str):
                 return None
             return {
-                "user_id": str(row["user_id"]), "session_id": row["session_id"],
+                "user_id": str(row["business_user_id"]), "session_id": row["session_id"],
                 "event_id": str(row["event_id"]), "seq": int(row["seq"]),
-                "event_type": row["event_type"], "content": content,
+                "event_type": "USER_MESSAGE", "content": content,
                 "created_at": row["created_at"],
             }
 
@@ -771,12 +778,11 @@ class MySQLUserMemoryRepository:
             cursor.execute(
                 """SELECT ep.*, ev.seq AS live_source_seq, ev.created_at AS live_source_created_at
                    FROM user_memory_episode AS ep
-                   JOIN conversation_event AS ev
-                     ON ev.event_id=CAST(ep.source_event_id AS UNSIGNED)
-                    AND ev.session_id=ep.source_session_id AND ev.user_id=ep.user_id
-                   JOIN session_digest AS d ON d.session_id=ev.session_id AND d.user_id=ev.user_id
+                   JOIN memory_source_event AS ev
+                     ON ev.event_id=ep.source_event_id
+                    AND ev.session_id=ep.source_session_id AND ev.business_user_id=ep.user_id
                    WHERE ep.user_id=%s AND ep.archived_at IS NULL
-                     AND ev.event_type='USER_MESSAGE' AND ev.seq>d.cutoff_seq
+                     AND ev.cleared_at IS NULL
                    ORDER BY ep.importance DESC, ev.created_at DESC, ep.id DESC LIMIT %s""",
                 (user_id, min(400, bounded * 4)),
             )
@@ -818,12 +824,11 @@ class MySQLUserMemoryRepository:
                 f"""SELECT ep.*, ev.seq AS live_source_seq, ev.created_at AS live_source_created_at,
                            ({score_expression}) AS lexical_matches
                     FROM user_memory_episode AS ep
-                    JOIN conversation_event AS ev
-                      ON ev.event_id=CAST(ep.source_event_id AS UNSIGNED)
-                     AND ev.session_id=ep.source_session_id AND ev.user_id=ep.user_id
-                    JOIN session_digest AS d ON d.session_id=ev.session_id AND d.user_id=ev.user_id
+                    JOIN memory_source_event AS ev
+                      ON ev.event_id=ep.source_event_id
+                     AND ev.session_id=ep.source_session_id AND ev.business_user_id=ep.user_id
                     WHERE ep.user_id=%s AND ep.archived_at IS NULL
-                      AND ev.event_type='USER_MESSAGE' AND ev.seq>d.cutoff_seq
+                      AND ev.cleared_at IS NULL
                       AND ({predicate})
                     ORDER BY lexical_matches DESC, ep.importance DESC,
                              ev.created_at DESC, ep.id DESC LIMIT %s""",
@@ -854,14 +859,13 @@ class MySQLUserMemoryRepository:
     def _source_ref_is_live(cursor, user_id: str, ref: dict[str, Any]) -> bool:
         event_id = str(ref.get("event_id", ""))
         session_id = ref.get("session_id")
-        if not event_id.isdecimal() or not session_id:
+        if not _valid_source_event_id(event_id) or not session_id:
             return False
         cursor.execute(
-            """SELECT e.event_id FROM conversation_event AS e
-               JOIN session_digest AS d ON d.session_id=e.session_id AND d.user_id=e.user_id
-               WHERE e.event_id=%s AND e.session_id=%s AND e.user_id=%s
-                 AND e.event_type='USER_MESSAGE' AND e.seq>d.cutoff_seq LIMIT 1""",
-            (int(event_id), session_id, user_id),
+            """SELECT event_id FROM memory_source_event
+               WHERE event_id=%s AND session_id=%s AND business_user_id=%s
+                 AND cleared_at IS NULL LIMIT 1""",
+            (event_id, session_id, user_id),
         )
         return cursor.fetchone() is not None
 
@@ -1778,3 +1782,16 @@ def _is_strict_json_value(value: Any) -> bool:
     if isinstance(value, dict):
         return all(type(key) is str and _is_strict_json_value(item) for key, item in value.items())
     return False
+
+
+def _valid_source_event_id(value: str) -> bool:
+    if not isinstance(value, str) or not value or len(value) > 64:
+        return False
+    if value.isdecimal():
+        return int(value) > 0
+    try:
+        uuid.UUID(value)
+        return True
+    except ValueError:
+        return False
+

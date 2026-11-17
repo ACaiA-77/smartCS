@@ -242,8 +242,6 @@ async def test_a_new_session_goes_through_the_unified_entry_into_the_harness(
         await database.initialize()
         sessions = Sessions(database)
         patch_app_state(monkeypatch, main.app, platform_sessions=sessions)
-        tripwire = _TripwireOrchestrator()
-        monkeypatch.setattr(main, "chat_orchestrator", tripwire)
 
         first = await main.chat(
             main.ChatRequest(message=TURN_TEXT, client_request_id="e2e-turn-1"),
@@ -264,7 +262,6 @@ async def test_a_new_session_goes_through_the_unified_entry_into_the_harness(
         assert [(r["client_request_id"], r["status"]) for r in _receipts(first.session_id)] == [
             ("e2e-turn-1", "completed")]
         assert _source_events(first.session_id) == ["e2e-turn-1"]
-        assert tripwire.calls == 0
 
         # (d) 回执幂等: the same request replays without a second model run
         replay = await main.chat(
@@ -281,7 +278,6 @@ async def test_a_new_session_goes_through_the_unified_entry_into_the_harness(
                 main.ChatRequest(message=TURN_TEXT, session_id=first.session_id, client_request_id="e2e-outage"),
                 user, token)
         assert excinfo.value.status_code == 503
-        assert tripwire.calls == 0
         assert [r["client_request_id"] for r in _receipts(first.session_id)] == ["e2e-turn-1"]
 
         # (f) P7-6 recovery: the same request, retried, now succeeds
@@ -294,7 +290,6 @@ async def test_a_new_session_goes_through_the_unified_entry_into_the_harness(
             assert recovered.response == HARNESS_ANSWER
             assert recovered.session_id == first.session_id
             assert recovered.harness_version == "pi"
-            assert tripwire.calls == 0
             assert {r["client_request_id"] for r in _receipts(first.session_id)} == {"e2e-turn-1", "e2e-outage"}
         finally:
             restarted.kill()

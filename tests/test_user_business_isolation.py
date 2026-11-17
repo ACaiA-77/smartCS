@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from auth.context import UserContext, current_user
-from checkpoint.models import active_checkpoint
 from tool_runtime.execution_ledger import ExecutionLedger
 from tool_runtime.mcp_server import MCPToolServer, create_default_tools
 from tool_runtime.order_repository import OrderRepository
@@ -93,20 +91,12 @@ async def test_missing_identity_is_injected_without_mutating_model_arguments(bus
     handler = AsyncMock(return_value={"ok": True})
     server.get_tool(name).handler = handler
     arguments = {}
-    checkpoint = SimpleNamespace(before_write=AsyncMock(), after_write=Mock())
-    token = active_checkpoint.set(checkpoint)
-    try:
-        with _as_user("user_002"):
-            result = await _call(business, entry, name, arguments)
-    finally:
-        active_checkpoint.reset(token)
+    with _as_user("user_002"):
+        result = await _call(business, entry, name, arguments)
 
     assert result.success is True
     handler.assert_awaited_once_with(user_id="user_002")
     assert arguments == {}
-    if entry == "executor" and name in {"refund_create", "ticket_create"}:
-        assert checkpoint.before_write.await_args.args[1]["user_id"] == "user_002"
-        checkpoint.after_write.assert_called_once_with(result)
 
 
 @pytest.mark.asyncio
@@ -178,7 +168,7 @@ async def test_ticket_query_and_request_conflict_never_leak_another_users_metada
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name", ["refund_create", "ticket_create"])
-async def test_identity_guard_precedes_checkpoint_hook_and_ledger_replay(business, name):
+async def test_identity_guard_precedes_ledger_replay(business, name):
     repository, _, executor = business
     arguments = _ticket_arguments() if name == "ticket_create" else {
         "order_id": ORDER_A, "user_id": "user_001", "reason": "own refund",
@@ -189,18 +179,11 @@ async def test_identity_guard_precedes_checkpoint_hook_and_ledger_replay(busines
     assert created.result["success"] is True
     assert replay.replayed is True and replay.result == created.result
     ledger_before = executor.ledger.get("isolation-write")
-    checkpoint = SimpleNamespace(before_write=AsyncMock(), after_write=Mock())
-    token = active_checkpoint.set(checkpoint)
-    try:
-        with _as_user("user_002"):
-            denied = await _call(business, "executor", name, arguments)
-    finally:
-        active_checkpoint.reset(token)
+    with _as_user("user_002"):
+        denied = await _call(business, "executor", name, arguments)
 
     assert denied.error_code == "user_identity_mismatch"
     assert denied.result is None and denied.replayed is False and denied.attempts == 0
-    checkpoint.before_write.assert_not_awaited()
-    checkpoint.after_write.assert_not_called()
     with _as_user("user_002"):
         missing_identity = {key: value for key, value in arguments.items() if key != "user_id"}
         conflict = await _call(business, "executor", name, missing_identity)

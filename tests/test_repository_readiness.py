@@ -19,8 +19,8 @@ def test_checker_passes_current_repository():
 
 
 def test_checker_detects_forbidden_production_pattern():
-    violations = find_source_violations({"agents/synthetic.py": "server.call_tool({})"})
-    assert any(".call_tool(" in violation for violation in violations)
+    violations = find_source_violations({"api/synthetic.py": "from evals import runner"})
+    assert any("from evals" in violation for violation in violations)
 
 
 def test_checker_detects_forbidden_tracked_artifact_without_index_mutation():
@@ -33,7 +33,7 @@ def test_checker_detects_forbidden_tracked_artifact_without_index_mutation():
 
 def test_docker_example_has_container_paths_and_placeholder_secret():
     text = (ROOT / ".env.docker.example").read_text(encoding="utf-8")
-    assert "REDIS_URL=redis://smartcs-redis:6379/0" in text
+    assert "REDIS_URL" not in text
     assert "ORDER_DB_PATH=/app/data/orders.db" in text
     assert "FAISS_INDEX_PATH=/app/vector_store/faiss_index" in text
     assert "OTEL_SDK_DISABLED=true" in text
@@ -54,12 +54,12 @@ def test_env_example_disables_local_otel_exporter():
     assert "OTEL_SDK_DISABLED=true" in text
 
 
-def test_gitignore_keeps_artifacts_local_but_not_evals():
+def test_gitignore_keeps_artifacts_local():
     lines = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert "/artifacts/" in lines
     assert "/nul" in lines
     for path, ignored in (
-        ("evals/runner.py", False),
+        ("api/main.py", False),
         ("artifacts/synthetic.txt", True),
         ("nul", True),
     ):
@@ -72,9 +72,9 @@ def test_gitignore_keeps_artifacts_local_but_not_evals():
         assert result.returncode == (0 if ignored else 1)
 
 
-def test_dockerignore_excludes_review_and_eval_inputs():
+def test_dockerignore_excludes_review_and_test_inputs():
     lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
-    for entry in ("artifacts/", "evals/", "tests/", "nul"):
+    for entry in ("artifacts/", "tests/", "nul"):
         assert entry in lines
 
 
@@ -84,7 +84,7 @@ def test_workflow_has_ordered_quality_gates_and_offline_environment():
     gates = (
         "python -m scripts.check_repository_readiness",
         "python -m pytest -q",
-        "python -m evals.runner --json",
+        "python -m scripts.check_ci_test_results",
     )
     positions = [quality.index(gate) for gate in gates]
     assert positions == sorted(positions)

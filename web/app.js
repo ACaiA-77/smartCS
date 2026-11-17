@@ -498,9 +498,59 @@ async function queryDemoOrder(orderId) {
   } finally { if (epoch === state.epoch && view === state.view) setSending(false); }
 }
 
-async function sendChatMessage(message, retry = false) {
+async function streamChat(body, onStatus) {
+  const response = await fetch("/api/chat/stream", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+    body: JSON.stringify(body),
+  });
+  if (response.status === 401) { handleUnauthorized(); throw new Error("登录已过期，请重新登录"); }
+  if (!response.ok || !response.body) {
+    let detail = `请求失败 (${response.status})`;
+    try { const err = await response.json(); if (err?.detail) detail = err.detail; } catch {}
+    const error = new Error(detail);
+    error.status = response.status;
+    throw error;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalText = null;
+  let meta = {};
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let boundary;
+    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      let eventName = "message";
+      let dataText = "";
+      for (const line of rawEvent.split("\n")) {
+        if (line.startsWith("event:")) eventName = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataText += line.slice(5).trim();
+      }
+      if (!dataText) continue;
+      let payload;
+      try { payload = JSON.parse(dataText); } catch { continue; }
+      if (eventName === "status" && payload.text && onStatus) onStatus(payload.text);
+      else if (eventName === "final" && typeof payload.text === "string") finalText = payload.text;
+      else if (eventName === "meta") meta = payload;
+      else if (eventName === "error") {
+        const err = new Error(payload.detail || "流式请求中断");
+        err.status = payload.status || 500;
+        throw err;
+      }
+    }
+  }
+  if (!finalText) throw new Error("未收到模型最终回复");
+  return { response: finalText, session_id: meta.session_id || body.session_id, intent: "pi" };
+}
+
+async function sendChatMessage(message) {
   if (!state.user || state.sending || !message.trim()) return;
-  if (state.pending && !retry) { showResumeButton(); return; }
   const epoch = state.epoch, view = state.view;
   setSending(true);
   const startedAt = performance.now();
@@ -508,23 +558,27 @@ async function sendChatMessage(message, retry = false) {
   try {
     await ensureSession();
     assertCurrent(epoch, view);
-    if (!state.pending) {
-      state.pending = {client_request_id: crypto.randomUUID(), message: message.trim()};
-      saveSession();
-    }
+    const clientRequestId = crypto.randomUUID();
     appendMessage("user", message.trim(), "当前会话");
     elements.input.value = "";
     loading = appendMessage("assistant loading", "正在处理你的问题…");
-    const payload = await request("/api/chat", jsonPost({
+    const bubbleText = loading.querySelector(".message-text");
+    const payload = await streamChat(
+      {
         message: message.trim(),
         session_id: state.sessionId,
-        client_request_id: state.pending.client_request_id,
-    }));
+        client_request_id: clientRequestId,
+      },
+      (statusText) => {
+        if (bubbleText && epoch === state.epoch && view === state.view) {
+          bubbleText.textContent = `${statusText}…`;
+        }
+      },
+    );
     assertCurrent(epoch, view);
     loading.remove();
     state.pending = null;
     saveSession();
-    elements.messageList.querySelector("[data-resume]")?.closest("article")?.remove();
     appendMessage(
       "assistant",
       payload.response,
@@ -535,7 +589,6 @@ async function sendChatMessage(message, retry = false) {
     if (epoch !== state.epoch || view !== state.view || error instanceof StaleResponse) return;
     loading?.remove();
     appendMessage("assistant", `本次请求未完成：${error.message}`, "请求错误");
-    if (state.pending) showResumeButton();
   } finally {
     if (epoch === state.epoch && view === state.view) { setSending(false); elements.input.focus(); }
   }
@@ -543,56 +596,10 @@ async function sendChatMessage(message, retry = false) {
 
 function resetSession() {
   if (!state.user || state.sending) return;
-  if (state.pending) { showResumeButton(); return; }
   clearConversation();
   updateSessionUi();
   refreshIcons();
   elements.input.focus();
-}
-
-function showResumeButton() {
-  if (elements.messageList.querySelector("[data-resume]")) return;
-  const node = appendMessage("assistant", "有一条请求尚未完成。继续处理会恢复已保存步骤，不会自动确认新的退款。", "请求已保留");
-  const button = document.createElement("button");
-  button.type = "button";
-  button.dataset.resume = "true";
-  button.textContent = "继续处理";
-  button.addEventListener("click", resumeChat);
-  node.querySelector(".message-bubble").append(button);
-}
-
-async function resumeChat() {
-  if (!state.user || state.sending || !state.pending || !state.sessionId) return;
-  const session = state.sessionId;
-  const epoch = state.epoch, view = state.view;
-  setSending(true);
-  try {
-    try {
-      await request(`/api/checkpoints/${encodeURIComponent(session)}/resume`, jsonPost({client_request_id: state.pending.client_request_id}));
-    } catch (error) {
-      assertCurrent(epoch, view);
-      if (![404, 409].includes(error.status)) throw error;
-      // A disconnected initial POST may never have reached the server. Query before explicit retry.
-      let checkpoint = null;
-      try { checkpoint = await request(`/api/checkpoints/${encodeURIComponent(session)}`); }
-      catch (statusError) { if (statusError.status !== 404) throw statusError; }
-      assertCurrent(epoch, view);
-      const missingRequest = !checkpoint || (checkpoint.status !== "running" && checkpoint.client_request_id !== state.pending.client_request_id);
-      if (missingRequest && state.pending.message) {
-        setSending(false);
-        await sendChatMessage(state.pending.message, true);
-        return;
-      }
-      throw error;
-    }
-    assertCurrent(epoch, view);
-    state.pending = null;
-    saveSession();
-    await restoreSession();
-  } catch (error) {
-    if (epoch !== state.epoch || view !== state.view || error instanceof StaleResponse) return;
-    appendMessage("assistant", `恢复未完成：${error.message}`, "断点已保留");
-  } finally { if (epoch === state.epoch && view === state.view) setSending(false); }
 }
 
 async function restoreSession() {
@@ -604,24 +611,12 @@ async function restoreSession() {
     elements.sessionName.textContent = payload.title || "客服咨询";
     elements.messageList.innerHTML = "";
     for (const message of payload.messages) appendMessage(message.role, message.content, "已保存会话");
-    let cp;
-    try { cp = await request(`/api/checkpoints/${encodeURIComponent(session)}`); }
-    catch (error) { if (error.status !== 404) throw error; }
-    assertCurrent(epoch, view);
-    if (cp) {
-      if (cp.status === "running") {
-        if (!state.pending) state.pending = {client_request_id: cp.client_request_id};
-      } else if (state.pending?.client_request_id === cp.client_request_id) {
-        state.pending = null;
-      }
-      saveSession();
-    }
-    if (state.pending) showResumeButton();
+    state.pending = null;
+    saveSession();
   } catch (error) {
     if (epoch !== state.epoch || view !== state.view || error instanceof StaleResponse) return;
-    if ([403, 404].includes(error.status)) { clearConversation(); updateSessionUi(); }
+    if ([403, 404, 409].includes(error.status)) { clearConversation(); updateSessionUi(); }
     appendMessage("assistant", "暂时无法读取这条会话，请刷新历史后重试。");
-    if (state.pending) showResumeButton();
   }
 }
 

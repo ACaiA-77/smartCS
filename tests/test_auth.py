@@ -244,7 +244,6 @@ async def test_unauthenticated_customer_api_surface_is_closed(auth_env, monkeypa
     routes = [
         ("POST", "/api/chat", {"message": "hello"}),
         ("GET", f"/api/history/{sid}", None), ("DELETE", f"/api/history/{sid}", None),
-        ("GET", f"/api/checkpoints/{sid}", None), ("POST", f"/api/checkpoints/{sid}/resume", {}),
         ("GET", "/api/sessions", None), ("POST", "/api/sessions", None),
         ("GET", f"/api/sessions/{sid}", None), ("DELETE", f"/api/sessions/{sid}", None),
         ("GET", "/api/demo/orders", None), ("GET", "/api/tools", None),
@@ -298,7 +297,7 @@ async def test_api_login_and_authenticated_cookie_writes_reject_cross_origin(aut
         client.cookies.set(COOKIE_NAME, issue_token(47))
         for path, body in [("/api/sessions", None), ("/api/chat", {"message": "hello"}),
                            ("/api/tools/call", {"name": "order_query"}),
-                           ("/api/checkpoints/csrf-test/resume", {}), ("/api/auth/logout", None)]:
+                           ("/api/auth/logout", None)]:
             response = await client.post(path, json=body)
             assert response.status_code == 403, path
             assert response.json() == {"detail": "request origin not allowed"}

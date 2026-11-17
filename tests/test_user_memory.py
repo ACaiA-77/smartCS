@@ -471,46 +471,62 @@ async def test_real_mysql_memory_roundtrip_is_opt_in_and_uuid_scoped():
     if os.getenv("SMARTCS_CHECKPOINT_MYSQL_TEST") != "1":
         pytest.skip("real MySQL disabled; set SMARTCS_CHECKPOINT_MYSQL_TEST=1 explicitly")
     from dotenv import load_dotenv
-    from checkpoint.store import CheckpointStore
     from platform_db.database import PlatformDatabase
 
     load_dotenv()
-    checkpoint = CheckpointStore.from_env()
     database = PlatformDatabase.from_env()
-    await checkpoint.initialize()
+    await database.initialize()
     service = UserMemoryService(database=database)
     await service.initialize()
     session_id = "um-test-" + uuid.uuid4().hex
     user_id = "um-owner-" + uuid.uuid4().hex
     content = "Please keep it concise."
+
+    async def append_user_event(text: str) -> dict:
+        event_id = str(uuid.uuid4())
+        req_id = f"req-{event_id}"
+
+        def insert(_connection, cursor):
+            cursor.execute(
+                """INSERT INTO memory_source_event
+                   (event_id, session_id, business_user_id, client_request_id, content)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                (event_id, session_id, user_id, req_id, text),
+            )
+            cursor.execute(
+                "SELECT event_id, seq FROM memory_source_event WHERE event_id=%s",
+                (event_id,),
+            )
+            row = cursor.fetchone()
+            return {"event_id": str(row["event_id"]), "seq": int(row["seq"])}
+
+        return await database._call(insert)
+
     try:
-        event = await checkpoint.append_event(session_id, user_id, "USER_MESSAGE", {"content": content})
-        synthetic = await checkpoint.append_event(
-            session_id, user_id, "USER_MESSAGE", {"content": "Please reply in English.", "synthetic": True}
-        )
+        event = await append_user_event(content)
         with pytest.raises(MemoryProvenanceError):
-            await service.process_message(user_id, session_id, synthetic["event_id"], "Please reply in English.")
+            await service.process_message(user_id, session_id, str(uuid.uuid4()), "Please reply in English.")
         queued = await service.process_message(user_id, session_id, event["event_id"], content)
         assert queued["status"] == "queued"
         assert (await service.process_pending(user_id))["accepted_count"] == 1
         assert len(await service.retrieve(user_id, "concise")) == 1
 
         same_content = "Please keep it concise."
-        same_event = await checkpoint.append_event(session_id, user_id, "USER_MESSAGE", {"content": same_content})
+        same_event = await append_user_event(same_content)
         await service.process_message(user_id, session_id, same_event["event_id"], same_content)
         assert (await service.process_pending(user_id))["decisions"][0]["decision"] == "MERGE"
         merged_card = (await service.profile_cards(user_id, limit=10))[0]
         assert len(merged_card["source_refs"]) == 2
 
         initial_language = "Please reply in Chinese."
-        initial_language_event = await checkpoint.append_event(session_id, user_id, "USER_MESSAGE", {"content": initial_language})
+        initial_language_event = await append_user_event(initial_language)
         await service.process_message(user_id, session_id, initial_language_event["event_id"], initial_language)
         assert (await service.process_pending(user_id))["decisions"][0]["decision"] == "ADD"
 
         delayed_content = "Please reply in Chinese."
-        delayed_event = await checkpoint.append_event(session_id, user_id, "USER_MESSAGE", {"content": delayed_content})
+        delayed_event = await append_user_event(delayed_content)
         newer_content = "Please reply in English."
-        newer_event = await checkpoint.append_event(session_id, user_id, "USER_MESSAGE", {"content": newer_content})
+        newer_event = await append_user_event(newer_content)
         await service.process_message(user_id, session_id, newer_event["event_id"], newer_content)
         assert (await service.process_pending(user_id))["decisions"][0]["decision"] == "UPDATE"
         await service.process_message(user_id, session_id, delayed_event["event_id"], delayed_content)
@@ -520,7 +536,7 @@ async def test_real_mysql_memory_roundtrip_is_opt_in_and_uuid_scoped():
 
         for name in ("Alice", "Bob"):
             name_content = f"Call me {name}."
-            name_event = await checkpoint.append_event(session_id, user_id, "USER_MESSAGE", {"content": name_content})
+            name_event = await append_user_event(name_content)
             await service.process_message(user_id, session_id, name_event["event_id"], name_content)
         first_worker, second_worker = await asyncio.gather(
             service.process_pending(user_id, limit=1),
@@ -531,11 +547,11 @@ async def test_real_mysql_memory_roundtrip_is_opt_in_and_uuid_scoped():
         assert active_name["value_json"]["name"] == "Bob"
 
         old_content = "My refund request was approved in an earlier conversation."
-        old_event = await checkpoint.append_event(session_id, user_id, "USER_MESSAGE", {"content": old_content})
+        old_event = await append_user_event(old_content)
         await service.process_message(user_id, session_id, old_event["event_id"], old_content)
         for index in range(30):
             unrelated = f"My order was shipped, unrelated update {index}."
-            event = await checkpoint.append_event(session_id, user_id, "USER_MESSAGE", {"content": unrelated})
+            event = await append_user_event(unrelated)
             await service.process_message(user_id, session_id, event["event_id"], unrelated)
         await service.process_pending(user_id, limit=100)
         old_match = await service.retrieve(user_id, "refund", top_k=1)
@@ -543,18 +559,14 @@ async def test_real_mysql_memory_roundtrip_is_opt_in_and_uuid_scoped():
         assert old_match[0]["source_event_id"] == str(old_event["event_id"])
 
         await database._call(lambda _connection, cursor: cursor.execute(
-            "UPDATE session_digest SET cutoff_seq=%s WHERE session_id=%s AND user_id=%s",
-            (event["seq"], session_id, user_id),
+            "UPDATE memory_source_event SET cleared_at=CURRENT_TIMESTAMP(3) WHERE session_id=%s AND business_user_id=%s AND seq<=%s",
+            (session_id, user_id, event["seq"]),
         ))
         assert await service.retrieve(user_id, "refund", top_k=1) == []
         assert len(await service.retrieve(user_id, "concise", top_k=3)) == 1
 
-        # A genuinely delayed queued update must not resurrect an explicitly
-        # deactivated preference, and both prior versions remain in history.
         delayed_content = "Please reply in Chinese."
-        delayed_deactivation_event = await checkpoint.append_event(
-            session_id, user_id, "USER_MESSAGE", {"content": delayed_content}
-        )
+        delayed_deactivation_event = await append_user_event(delayed_content)
         await service.process_message(
             user_id, session_id, delayed_deactivation_event["event_id"], delayed_content
         )
@@ -578,17 +590,11 @@ async def test_real_mysql_memory_roundtrip_is_opt_in_and_uuid_scoped():
         with pytest.raises(MemoryProvenanceError):
             await service.process_message(user_id + "-wrong", session_id, event["event_id"], content)
     finally:
-        # Isolated UUID owner/session only. No tables, service data, or shared rows are dropped.
         def cleanup(_connection, cursor):
             for table in ("user_memory_episode", "user_memory_candidate", "user_memory_profile_card", "user_memory_profile_lock"):
                 cursor.execute(f"DELETE FROM {table} WHERE user_id=%s", (user_id,))
-            # Keep append-only source events and their digest row; logically clear
-            # this UUID-scoped fixture instead of deleting test history.
             cursor.execute(
-                """UPDATE session_digest SET cutoff_seq=COALESCE(
-                       (SELECT MAX(e.seq) FROM conversation_event AS e
-                        WHERE e.session_id=%s AND e.user_id=%s),cutoff_seq)
-                   WHERE session_id=%s AND user_id=%s""",
-                (session_id, user_id, session_id, user_id),
+                "DELETE FROM memory_source_event WHERE session_id=%s AND business_user_id=%s",
+                (session_id, user_id),
             )
         await database._call(cleanup)

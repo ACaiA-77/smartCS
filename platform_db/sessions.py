@@ -17,7 +17,7 @@ class Sessions:
         account_id: int,
         title: str = "",
         client_request_id: str | None = None,
-        harness_version: str = "legacy",
+        harness_version: str = "pi",
     ) -> dict:
         if type(account_id) is not int or account_id <= 0:
             raise ValueError("invalid account_id")

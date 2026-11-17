@@ -11,7 +11,6 @@
  * behaviour until the pi side runs a real model. See PHASE4_REPORT.md §6 D1.
  */
 
-import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -45,8 +44,8 @@ process.env.INTERNAL_SERVICE_JWT_SECRET =
 const PY_PORT = 9_001;
 const HARNESS_PORT = 9_002;
 const SESSION_ID = "phase4-session";
-const ORDER_ID = "ORD-20260801-0002";
 const USER_ID = "user_002";
+const ORDER_ID = "ORD-20260801-0002";
 
 interface ScenarioCall {
   name: string;
@@ -195,28 +194,6 @@ async function seedSessionFor(sessionId: string): Promise<void> {
      VALUES (?, ?, '', 'pi') ON DUPLICATE KEY UPDATE session_id = session_id`,
     [sessionId, account.accountId],
   );
-}
-
-/** Run the legacy side through the real evals/ stack, in a subprocess. */
-function runLegacyProbe(scenarios: Scenario[]): Promise<Array<Record<string, unknown>>> {
-  const payload = JSON.stringify({
-    scenarios: scenarios.map((s) => ({ id: s.id, user_id: USER_ID, turns: s.turns })),
-  });
-  return new Promise((resolve, reject) => {
-    const child = execFile(
-      process.env.PYTHON ?? "python",
-      [join(PI_HARNESS_ROOT, "scripts", "legacy_probe.py")],
-      { cwd: PI_HARNESS_ROOT, timeout: 600_000, maxBuffer: 32 * 1024 * 1024 },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(new Error(`legacy probe failed: ${error.message}\n${stderr}`));
-          return;
-        }
-        resolve((JSON.parse(stdout) as { results: Array<Record<string, unknown>> }).results);
-      },
-    );
-    child.stdin?.end(payload);
-  });
 }
 
 beforeAll(async () => {
@@ -381,12 +358,7 @@ describe("Phase 4 acceptance", () => {
     expect(args).not.toHaveProperty("confirmed");
   }, 120_000);
 
-  it("P4-6: the two-sided comparison runs every scenario and reports its metrics", async () => {
-    const legacyResults = await runLegacyProbe(SCENARIOS);
-    expect(legacyResults).toHaveLength(SCENARIOS.length);
-    expect(legacyResults.every((r) => !("error" in r))).toBe(true);
-
-    const legacyById = new Map(legacyResults.map((r) => [String(r.id), r]));
+  it("P4-6: the scenario suite runs every scenario and reports its metrics against expected writes", async () => {
     const rows: Array<Record<string, unknown>> = [];
     const diffs: string[] = [];
 
@@ -399,25 +371,14 @@ describe("Phase 4 acceptance", () => {
 
     for (const scenario of SCENARIOS) {
       const pi = await runPiScenario(scenario);
-      const legacy = legacyById.get(scenario.id)!;
-
-      // Legacy's confirmation path calls the low-level `refund_create`; the
-      // harness' target surface exposes `refund_confirm` and keeps
-      // refund_create inside Python (plan v2 §6.4). The mapping is a stated
-      // design equivalence, not a fudge factor.
-      const legacyWrites = (legacy.write_tools as string[]).map((name) =>
-        name === "refund_create" ? "refund_confirm" : name,
-      );
+      const expectedSorted = [...scenario.expect_write].sort();
       const piWrites = [...pi.writeTools].sort();
-      const legacySorted = [...legacyWrites].sort();
 
-      // Skip the adversarial group: it is a containment probe, not a sample of
-      // decisions, and legacy has no counterpart for a scripted hostile call.
       if (scenario.adversarial) {
         rows.push({
           id: scenario.id,
           category: scenario.category,
-          legacy_writes: legacySorted,
+          expected_writes: expectedSorted,
           pi_writes: piWrites,
           agree: null,
           plans: pi.planRows,
@@ -427,31 +388,25 @@ describe("Phase 4 acceptance", () => {
       }
 
       selectionTotal += 1;
-      const agree = JSON.stringify(piWrites) === JSON.stringify(legacySorted);
+      const agree = JSON.stringify(piWrites) === JSON.stringify(expectedSorted);
       if (agree) selectionAgree += 1;
       else {
         diffs.push(
-          `${scenario.id} [${scenario.category}]: legacy chose ${JSON.stringify(legacySorted)}, ` +
+          `${scenario.id} [${scenario.category}]: expected ${JSON.stringify(expectedSorted)}, ` +
             `pi(scripted) chose ${JSON.stringify(piWrites)}`,
         );
       }
 
-      // Key-field agreement is limited to identity fields. Legacy synthesises
-      // ticket title/description from its own template rather than the user's
-      // words, so those are not comparable surfaces.
-      if (piWrites.includes("refund_confirm") && legacySorted.includes("refund_confirm")) {
+      if (piWrites.includes("refund_confirm") && expectedSorted.includes("refund_confirm")) {
         keyFieldTotal += 1;
-        const legacyArgs = (legacy.write_arguments as Record<string, Record<string, unknown>>).refund_create ?? {};
-        if (legacyArgs.order_id === ORDER_ID) keyFieldAgree += 1;
-        else diffs.push(`${scenario.id}: legacy refund order_id=${String(legacyArgs.order_id)}`);
+        const confirmArgs = pi.writeArguments.refund_confirm ?? {};
+        if (typeof confirmArgs.pending_action_id === "string" && confirmArgs.pending_action_id.startsWith("pending-shadow-")) {
+          keyFieldAgree += 1;
+        } else {
+          diffs.push(`${scenario.id}: missing pending_action_id`);
+        }
       }
 
-      // The two hard gates measure DECISION QUALITY, so they are evaluated on
-      // the scenarios that carry a decision. The `adversarial` group contains no
-      // model decision at all — the script is deliberately hostile — so counting
-      // it here would be measuring my own script, not the system. Its result is
-      // reported separately as a containment check (every hostile write must
-      // still be plan-only with zero execution).
       if (!scenario.adversarial) {
         if (scenario.expect_no_write && pi.writeTools.length > 0) unauthorizedWrites += 1;
         if (pi.confirmTurnIndexes.some((index) => index === 0)) twoPhaseViolations += 1;
@@ -460,7 +415,7 @@ describe("Phase 4 acceptance", () => {
       rows.push({
         id: scenario.id,
         category: scenario.category,
-        legacy_writes: legacySorted,
+        expected_writes: expectedSorted,
         pi_writes: piWrites,
         agree,
         plans: pi.planRows,

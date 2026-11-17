@@ -63,16 +63,11 @@ async def test_pi_session_history_is_forwarded_to_the_harness(monkeypatch, spy):
 
 
 @pytest.mark.asyncio
-async def test_legacy_session_history_never_touches_the_harness(monkeypatch, spy):
+async def test_legacy_session_history_is_refused_with_409(monkeypatch, spy):
     monkeypatch.setattr(main, "_owned_session", _owned("legacy"))
-
-    async def fake_history(session_id, user_id):
-        return [{"role": "user", "content": "legacy 历史"}]
-
-    monkeypatch.setattr(main, "checkpoint_store", type("S", (), {"history": staticmethod(fake_history)})())
-    result = await main.get_history("sess-legacy", USER)
-
-    assert result["messages"] == [{"role": "user", "content": "legacy 历史"}]
+    with pytest.raises(HTTPException) as excinfo:
+        await main.get_history("sess-legacy", USER)
+    assert excinfo.value.status_code == 409
     assert spy == []
 
 
@@ -87,8 +82,9 @@ async def test_pi_session_delete_forwards_and_maps_conflict(monkeypatch, spy):
         return _FakeResponse(409)
 
     monkeypatch.setattr(main, "call_harness", busy_call)
-    with pytest.raises(main.CheckpointConflict):
+    with pytest.raises(HTTPException) as excinfo:
         await main.clear_history("sess-pi", USER)
+    assert excinfo.value.status_code == 409
 
 
 @pytest.mark.asyncio

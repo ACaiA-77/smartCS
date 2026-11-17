@@ -20,6 +20,7 @@ Read-only: it never calls `invoke_agent`, never writes anything.
 
 from __future__ import annotations
 
+from copy import deepcopy
 import os
 from typing import Any
 
@@ -28,12 +29,69 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from auth.context import UserContext, current_user
-from context.compression import extract_protected_fields
 from internal_api.auth import resolve_service_session
 from internal_api.service_jwt import ServiceAuthUnavailable, decode_service_token
 from internal_api.tools import _bearer_token, _error
 
 router = APIRouter(prefix="/internal", tags=["internal"])
+
+PROTECTED_KEYS = {
+    "order_id",
+    "ticket_id",
+    "refund_id",
+    "user_id",
+    "client_request_id",
+    "idempotency_key",
+    "amount",
+    "currency",
+    "timestamp",
+    "pending_action",
+    "orderId",
+    "ticketId",
+    "refundId",
+    "clientRequestId",
+    "idempotencyKey",
+}
+
+
+def _set_path(target: dict[str, Any], path: list[str], value: Any) -> None:
+    cursor = target
+    for item in path[:-1]:
+        nested = cursor.get(item)
+        if not isinstance(nested, dict):
+            nested = {}
+            cursor[item] = nested
+        cursor = nested
+    cursor[path[-1]] = deepcopy(value)
+
+
+def _merge_nested(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    for key, value in right.items():
+        if isinstance(value, dict):
+            if not isinstance(left.get(key), dict):
+                left[key] = {}
+            _merge_nested(left[key], value)
+        else:
+            left[key] = deepcopy(value)
+    return left
+
+
+def extract_protected_fields(value: Any, *, prefix: list[str] | None = None) -> dict[str, Any]:
+    """Extract protected identifiers/actions without copying arbitrary tool args."""
+    prefix = prefix or []
+    found: dict[str, Any] = {}
+    if isinstance(value, dict):
+        for key, item in value.items():
+            path = [*prefix, str(key)]
+            if str(key) in PROTECTED_KEYS:
+                _set_path(found, path, item)
+            nested = extract_protected_fields(item, prefix=path)
+            _merge_nested(found, nested)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            nested = extract_protected_fields(item, prefix=[*prefix, str(index)])
+            _merge_nested(found, nested)
+    return found
 
 #: Total character ceiling for the injected snapshot. Bounded so the snapshot
 #: can never crowd out the conversation itself.

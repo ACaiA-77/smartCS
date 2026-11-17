@@ -460,7 +460,6 @@ async def test_startup_recovery_logs_only_aggregate_counts(monkeypatch, caplog) 
     from unittest.mock import AsyncMock, Mock
 
     # Lifecycle logging test must not connect to MySQL because a real .env exists.
-    monkeypatch.setattr(api_main.CheckpointStore, "from_env", Mock(return_value=Mock(initialize=AsyncMock())))
     monkeypatch.setattr(api_main.PlatformDatabase, "from_env", Mock(return_value=Mock(initialize=AsyncMock())))
     memory_service = SimpleNamespace(initialize=AsyncMock())
     monkeypatch.setattr(api_main, "UserMemoryService", Mock(return_value=memory_service))
@@ -482,11 +481,6 @@ async def test_startup_recovery_logs_only_aggregate_counts(monkeypatch, caplog) 
             return summary
 
     monkeypatch.setattr(api_main, "execution_reconciler", StubReconciler())
-    monkeypatch.setattr(
-        api_main,
-        "create_chat_orchestrator",
-        lambda **_kwargs: object(),
-    )
 
     with caplog.at_level(logging.INFO, logger="api.main"):
         async with api_main.lifespan(api_main.app):

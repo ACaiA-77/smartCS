@@ -12,25 +12,20 @@ ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_FILES = (
     ".env.example",
     ".env.docker.example",
-    "evals/runner.py",
-    "evals/scenarios.py",
     "tracing/observability.py",
-    "tests/test_agent_eval.py",
-    "tests/test_eval_failure_injection.py",
     "tests/test_runtime_observability.py",
 )
-PRODUCTION_DIRS = ("agents", "api", "db", "tool_runtime", "policies", "memory", "refunds", "tickets", "sandbox", "tracing")
+PRODUCTION_DIRS = ("api", "db", "internal_api", "tool_runtime", "policies", "memory", "refunds", "tickets", "sandbox", "tracing")
 SOURCE_RULES = (
-    (("agents",), (".call_tool(",)),
     (
         PRODUCTION_DIRS,
         ("import evals", "from evals", "FaultInject", "INJECT_FAILURE", "FAULT_MODE"),
     ),
     (
-        ("agents", "api", "requirements.txt", "requirements-dev.txt"),
+        ("api", "requirements.txt", "requirements-dev.txt"),
         ("langgraph", "StateGraph", "MemorySaver"),
     ),
-    (("agents", "api", "memory"), ("WorkingMemory", "_wm_context")),
+    (("api", "memory"), ("WorkingMemory", "_wm_context")),
 )
 
 

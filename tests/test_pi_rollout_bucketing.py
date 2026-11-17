@@ -49,12 +49,12 @@ def _clean_rollout(monkeypatch):
     monkeypatch.delenv(ROLLOUT_PERCENT_ENV, raising=False)
 
 
-def test_default_is_zero_legacy_only():
-    assert rollout_percent() == 0
-    assert {harness_version_for_account(a) for a in ACCOUNTS} == {"legacy"}
+def test_default_is_hundred_pi_only():
+    assert rollout_percent() == 100
+    assert {harness_version_for_account(a) for a in ACCOUNTS} == {"pi"}
 
 
-@pytest.mark.parametrize("raw,expected", [("0", 0), ("37", 37), ("100", 100), (" 50 ", 50), ("", 0)])
+@pytest.mark.parametrize("raw,expected", [("0", 0), ("37", 37), ("100", 100), (" 50 ", 50), ("", 100)])
 def test_rollout_percent_reads_the_environment(monkeypatch, raw, expected):
     monkeypatch.setenv(ROLLOUT_PERCENT_ENV, raw)
     assert rollout_percent() == expected

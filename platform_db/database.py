@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import pymysql
 
 from db.mysql import connection_config, environment_config, run_in_thread
+
+_MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 
 
 class PlatformUnavailable(RuntimeError):
@@ -86,4 +89,12 @@ class PlatformDatabase:
                 KEY account_recent_session (account_id, updated_at),
                 CONSTRAINT session_account_fk FOREIGN KEY (account_id) REFERENCES platform_user(id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""")
+            for migration in sorted(_MIGRATIONS_DIR.glob("*.sql")):
+                for statement in migration.read_text(encoding="utf-8").split(";"):
+                    stripped = statement.strip()
+                    if not stripped or all(
+                        line.strip().startswith("--") or not line.strip() for line in stripped.splitlines()
+                    ):
+                        continue
+                    cursor.execute(stripped)
         await self._call(create)

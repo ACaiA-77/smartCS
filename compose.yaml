@@ -6,10 +6,9 @@ services:
     env_file:
       - .env.docker
     environment:
-      # Phase 7 unified entry: pi sessions are forwarded to the harness service.
-      # Grayscale switch stays explicit here; 0 (all legacy) unless overridden.
+      # Unified entry: sessions are forwarded to the harness service.
       PI_HARNESS_BASE_URL: http://smartcs-pi-harness:8971
-      SMARTCS_PI_ROLLOUT_PERCENT: "${SMARTCS_PI_ROLLOUT_PERCENT:-0}"
+      SMARTCS_PI_ROLLOUT_PERCENT: "${SMARTCS_PI_ROLLOUT_PERCENT:-100}"
     ports:
       - "${SMARTCS_HOST_PORT:-8001}:8000"
     volumes:
@@ -19,9 +18,6 @@ services:
       - ./artifacts/rag_jieba:/app/artifacts/rag_jieba:ro
       - smartcs-hf-cache:/home/app/.cache/huggingface
       - smartcs-st-cache:/home/app/.cache/sentence-transformers
-    depends_on:
-      smartcs-redis:
-        condition: service_healthy
     networks:
       - smartcs-net
     healthcheck:
@@ -172,23 +168,6 @@ services:
       start_period: 60s
       retries: 3
 
-  smartcs-redis:
-    image: redis:7-alpine
-    container_name: smartcs-redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-    ports:
-      - "127.0.0.1:6379:6379"
-    volumes:
-      - smartcs-redis-data:/data
-    networks:
-      - smartcs-net
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   watchtower:
     image: containrrr/watchtower:latest
     container_name: smartcs-watchtower
@@ -208,4 +187,3 @@ volumes:
   smartcs-pi-runtime:
   smartcs-hf-cache:
   smartcs-st-cache:
-  smartcs-redis-data:

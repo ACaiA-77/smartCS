@@ -17,8 +17,6 @@ from typing import Any
 from tool_runtime.approval_store import ApprovalService
 from tool_runtime.execution_ledger import ExecutionLedger, LedgerClaimLost, canonical_arguments_hash
 from tool_runtime.mcp_server import MCPToolServer, ToolCallResult, ToolDefinition, customer_tool_arguments
-from checkpoint.models import active_checkpoint
-from context.manager import active_context
 
 
 @dataclass(frozen=True)
@@ -117,27 +115,7 @@ class ToolExecutor:
                 risk_level=tool.risk_level if tool is not None else "low",
                 requires_confirmation=bool(tool and (tool.requires_confirmation or tool.operation_type == "write")),
             )
-        # Authenticate before persisting a write plan or returning a cached ledger result.
-        checkpoint = active_checkpoint.get()
-        is_write = tool is not None and str(tool.operation_type or "read").lower() == "write"
-        if checkpoint is not None and is_write:
-            await checkpoint.before_write(name, arguments, context or ToolExecutionContext())
-
-        request_context = active_context.get()
-        context_manager = getattr(request_context, "manager", None)
-        if context_manager is not None:
-            await context_manager.record_tool_call(name, arguments)
-
-        result = await self._execute(name, arguments, context)
-
-        # Persist the full result before applying unresolved-outcome handling. If
-        # event persistence fails after a write, the checkpoint remains fenced
-        # and the execution ledger is the sole recovery authority on resume.
-        if context_manager is not None:
-            await context_manager.record_tool_result(result)
-        if checkpoint is not None and is_write:
-            checkpoint.after_write(result)
-        return result
+        return await self._execute(name, arguments, context)
 
     async def _execute(
         self, name: str, arguments: dict[str, Any], context: ToolExecutionContext | None = None,

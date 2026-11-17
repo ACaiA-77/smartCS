@@ -38,15 +38,6 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=10
     env:
       OTEL_SDK_DISABLED: "true"
       EMBEDDING_BACKEND: "hash"
@@ -58,8 +49,6 @@ jobs:
       SMARTCS_TEST_DATABASE: "smartcs_phase1_test"
       SMARTCS_CHECKPOINT_MYSQL_TEST: "1"
       SMARTCS_AUTH_MYSQL_TEST: "1"
-      SMARTCS_CONTEXT_REDIS_TEST: "1"
-      REDIS_URL: "redis://127.0.0.1:6379/0"
       PYTHON: python
       # CI-only credentials: the Harness integration suites sign and verify real
       # JWTs with both runtimes. Never production values.
@@ -119,9 +108,6 @@ jobs:
       - name: Run full Harness suite
         working-directory: pi-harness
         run: npm test -- --reporter=default --reporter=junit --outputFile.junit=../test-results/harness.xml
-
-      - name: Run offline evaluation
-        run: python -m evals.runner --json
 
       - name: Upload test results
         if: ${{ !cancelled() }}
