@@ -21,6 +21,8 @@ from auth.context import UserContext
 from auth.dependency import check_request_origin, cors_allowed_origins, get_current_user
 from auth.jwt import COOKIE_NAME, TOKEN_TTL_SECONDS, cookie_options, issue_token
 from auth.password import verify_password
+from api.copilot_bootstrap import build_copilot_dependencies, is_copilot_profile
+from api.feishu_bot import configure_feishu_client, router as feishu_router
 from internal_api import internal_router
 from internal_api.harness_client import (
     HarnessUnavailable,
@@ -60,6 +62,10 @@ shared_retriever = long_term_memory.get_retriever()
 order_repository = OrderRepository(os.getenv("ORDER_DB_PATH", "./data/orders.db"))
 refund_service = RefundService(order_repository)
 ticket_service = TicketService(order_repository)
+# Copilot profile only: build connectors whose environment is complete. The
+# default e-commerce deployment passes no extra dependencies, so its tool
+# surface is byte-for-byte unchanged.
+copilot_dependencies = build_copilot_dependencies() if is_copilot_profile() else {}
 mcp_server = create_default_tools(
     MCPToolServer(),
     long_term_memory=long_term_memory,
@@ -67,7 +73,10 @@ mcp_server = create_default_tools(
     order_repository=order_repository,
     refund_service=refund_service,
     ticket_service=ticket_service,
+    **copilot_dependencies,
 )
+if is_copilot_profile():
+    configure_feishu_client(copilot_dependencies.get("feishu_client"))
 execution_ledger = ExecutionLedger(order_repository.db_path)
 approval_service = ApprovalService(order_repository.db_path)
 runtime_metrics = RuntimeMetrics()
@@ -207,6 +216,7 @@ async def private_api_responses(request: Request, call_next):
 
 
 app.include_router(internal_router)
+app.include_router(feishu_router)
 
 if _HAS_FASTAPI_OTEL:
     FastAPIInstrumentor.instrument_app(app)

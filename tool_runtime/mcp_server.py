@@ -250,6 +250,12 @@ def create_default_tools(
     refund_service=None,
     ticket_service=None,
     retriever=None,
+    vault=None,
+    ontology=None,
+    wiki_compiler=None,
+    mail_router=None,
+    github_client=None,
+    feishu_client=None,
 ) -> MCPToolServer:
     """注册默认的MCP工具集"""
 
@@ -588,5 +594,28 @@ def create_default_tools(
             "risk_level": risk_level,
             "requires_manual_review": risk_level == "high",
         }
+
+    if any(
+        dependency is not None
+        for dependency in (
+            vault,
+            ontology,
+            wiki_compiler,
+            mail_router,
+            github_client,
+            feishu_client,
+        )
+    ):
+        from tool_runtime.copilot_tools import register_copilot_tools
+
+        register_copilot_tools(
+            server,
+            vault=vault,
+            ontology=ontology,
+            wiki_compiler=wiki_compiler,
+            mail_router=mail_router,
+            github_client=github_client,
+            feishu_client=feishu_client,
+        )
 
     return server

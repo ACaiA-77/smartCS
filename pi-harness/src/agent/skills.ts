@@ -24,6 +24,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@earendil-works/pi-ai";
+import type { AgentProfile } from "./profile.js";
 
 export const SKILLS_ENV = "SMARTCS_SKILLS";
 export const SKILLS_DIR_ENV = "SMARTCS_SKILLS_DIR";
@@ -39,11 +40,19 @@ export function resolveSkillsEnabled(raw = process.env[SKILLS_ENV]): boolean {
 /**
  * The server-owned skills directory. Never a user home directory: an explicit
  * override (tests, deployments) or this package's own `skills/`.
+ *
+ * The profile selects the shipped set. Both live beside the package, so the
+ * e-commerce directory keeps exactly its three skills and the copilot
+ * directory owns exactly its four — no profile ever sees the other's text.
  */
-export function skillsDir(override = process.env[SKILLS_DIR_ENV]): string {
-  return override && override.trim() !== ""
-    ? override
-    : fileURLToPath(new URL("../../skills/", import.meta.url));
+export function skillsDir(
+  override = process.env[SKILLS_DIR_ENV],
+  profile: AgentProfile = "ecommerce",
+): string {
+  if (override && override.trim() !== "") return override;
+  return fileURLToPath(
+    new URL(profile === "copilot" ? "../../skills-copilot/" : "../../skills/", import.meta.url),
+  );
 }
 
 /**

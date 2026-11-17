@@ -51,6 +51,7 @@ const OFFLINE_SUITES = [
   "tests/phase5d-live-wiring.test.ts",
   "tests/phase8-skills.test.ts",
   "tests/phase10-tool-surface.test.ts",
+  "tests/copilot-profile.test.ts",
   "tests/phase11-readiness.test.ts",
   "tests/phase11-outbox-ops.test.ts",
 ];

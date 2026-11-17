@@ -39,6 +39,8 @@ MIGRATIONS = [
     # are unaffected; the Phase 5 tests that need pending_action now get it from
     # this list instead of depending on a previous run having created it.
     PYTHON_IMPL / "migrations" / "004_phase6_audit.sql",
+    # Milestone 3: allow pending_action type='tool' for Copilot external actions.
+    PYTHON_IMPL / "migrations" / "005_phase7_copilot_actions.sql",
 ]
 
 #: Test-only credentials. Never the production values; injected per-test via
