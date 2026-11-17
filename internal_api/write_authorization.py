@@ -26,12 +26,38 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from policies.consent import has_explicit_create_consent, is_refund_confirmation
+from policies.consent import (
+    has_copilot_local_write_consent,
+    has_explicit_create_consent,
+    is_copilot_action_confirmation,
+    is_refund_confirmation,
+)
 
 PENDING_TTL_MINUTES = 30
 
+#: External side-effect actions the Copilot may prepare.  Each one must pass
+#: through the two-phase pending_action snapshot: the first turn only records
+#: intent, the second turn confirms the frozen payload.
+COPILOT_EXTERNAL_ACTIONS = frozenset(
+    {"mail_send", "gh_create_issue", "gh_post_comment", "feishu_send_message"}
+)
+
+#: Low-risk local writes.  They mutate only the vault, ontology, wiki or the
+#: mail draft folder and require same-turn explicit consent, not a snapshot.
+COPILOT_LOCAL_WRITE_TOOLS = frozenset(
+    {
+        "vault_append_daily",
+        "vault_propose_edit",
+        "wiki_compile_doc",
+        "onto_upsert",
+        "mail_save_draft",
+    }
+)
+
 #: Tool operation types this service is allowed to authorize.
-LIVE_WRITE_TOOLS = frozenset({"ticket_create", "refund_confirm"})
+LIVE_WRITE_TOOLS = frozenset(
+    {"ticket_create", "refund_confirm", "copilot_action_confirm"}
+) | COPILOT_LOCAL_WRITE_TOOLS
 
 
 class AuthorizationDenied(Exception):
@@ -59,6 +85,11 @@ def _canonical_hash(arguments: dict[str, Any]) -> str:
 
     canonical = json.dumps(arguments, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+#: Public alias: the internal tool channel needs the same hash the service uses
+#: for a prepared copilot action's target.
+canonical_hash = _canonical_hash
 
 
 class WriteAuthorizationService:
@@ -262,6 +293,127 @@ class WriteAuthorizationService:
             return cursor.rowcount == 1
 
         return await self.db._call(write)
+
+    # -- copilot external actions (two-phase) -------------------------------
+
+    async def authorize_copilot_action_confirm(
+        self,
+        *,
+        session_id: str,
+        client_request_id: str,
+        account_user_id: str,
+        arguments: dict[str, Any],
+    ) -> AuthorizationDecision:
+        """Authorize the confirmation turn of a prepared Copilot action.
+
+        Mirrors :meth:`authorize_refund_confirm`: the pending action is the only
+        authority for what runs, and the model's turn-2 arguments may name the
+        pending id but can never replace the frozen payload.
+        """
+        pending_id = str(arguments.get("pending_action_id") or "").strip()
+        if not pending_id:
+            raise AuthorizationDenied("missing_pending_action", "缺少待确认的操作")
+
+        pending = await self.load_pending_action(pending_id)
+        if pending is None:
+            raise AuthorizationDenied("pending_action_not_found", "待确认操作不存在或已失效")
+        if str(pending["session_id"]) != session_id:
+            raise AuthorizationDenied("pending_action_session_mismatch", "待确认操作不属于当前会话")
+        if str(pending["user_id"]) != account_user_id:
+            raise AuthorizationDenied("pending_action_owner_mismatch", "待确认操作不属于当前用户")
+        if str(pending["type"]) != "tool":
+            raise AuthorizationDenied(
+                "pending_action_not_copilot_action", "待确认操作不是 Copilot 外部操作"
+            )
+        if str(pending["status"]) != "pending":
+            raise AuthorizationDenied("pending_action_not_pending", "待确认操作已处理或已取消")
+
+        if await self.expire_pending_action(pending_id):
+            raise AuthorizationDenied("pending_action_expired", "待确认操作已过期，请重新发起")
+
+        message = await self.raw_user_message(session_id, client_request_id)
+        if message is None:
+            raise AuthorizationDenied("provenance_unavailable", "无法核验本轮用户确认")
+        if not is_copilot_action_confirmation(message):
+            raise AuthorizationDenied(
+                "explicit_confirmation_required",
+                "未检测到明确的外部操作确认，请回复“确认发送”或“确认执行”。",
+            )
+
+        payload = pending["payload"]
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        payload = dict(payload or {})
+        action_tool = str(payload.get("tool") or "").strip()
+        action_arguments = payload.get("arguments")
+        if action_tool not in COPILOT_EXTERNAL_ACTIONS:
+            raise AuthorizationDenied(
+                "unsupported_copilot_action", "待确认操作不是受支持的外部副作用"
+            )
+        if not isinstance(action_arguments, dict):
+            raise AuthorizationDenied("invalid_pending_payload", "待确认操作的参数快照无效")
+
+        frozen = dict(action_arguments)
+        snapshot = {"tool": action_tool, "arguments": frozen}
+        target_hash = _canonical_hash(snapshot)
+        operation_id = await self.reserve_operation(
+            session_id=session_id,
+            client_request_id=client_request_id,
+            tool=action_tool,
+            target_hash=target_hash,
+            pending_action_id=pending_id,
+        )
+        return AuthorizationDecision(
+            operation_id=operation_id,
+            tool=action_tool,
+            target_hash=target_hash,
+            pending_action_id=pending_id,
+            arguments=frozen,
+        )
+
+    # -- copilot local writes (same-turn consent) ---------------------------
+
+    async def authorize_copilot_local_write(
+        self,
+        *,
+        session_id: str,
+        client_request_id: str,
+        tool: str,
+        arguments: dict[str, Any],
+    ) -> AuthorizationDecision:
+        """Authorize a low-risk local write from the raw user message.
+
+        No pending_action is created: the effect is local and reversible, so the
+        same-turn rule is the whole gate.  The operation id is still reserved
+        before execution so a retry/restart cannot duplicate it.
+        """
+        if tool not in COPILOT_LOCAL_WRITE_TOOLS:
+            raise AuthorizationDenied(
+                "unsupported_copilot_local_write", f"{tool} is not a local Copilot write"
+            )
+        message = await self.raw_user_message(session_id, client_request_id)
+        if message is None:
+            raise AuthorizationDenied(
+                "provenance_unavailable", "cannot verify user consent for this request"
+            )
+        if not has_copilot_local_write_consent(message):
+            raise AuthorizationDenied(
+                "explicit_consent_required",
+                "用户未在本轮明确要求执行该本地写入，请先确认后再执行。",
+            )
+        target_hash = _canonical_hash(arguments)
+        operation_id = await self.reserve_operation(
+            session_id=session_id,
+            client_request_id=client_request_id,
+            tool=tool,
+            target_hash=target_hash,
+        )
+        return AuthorizationDecision(
+            operation_id=operation_id,
+            tool=tool,
+            target_hash=target_hash,
+            pending_action_id=None,
+        )
 
 
 # --- refund two-phase (Phase 5b) -------------------------------------------
