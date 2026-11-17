@@ -472,7 +472,8 @@ class MySQLUserMemoryRepository:
                 updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
                     ON UPDATE CURRENT_TIMESTAMP(6),
                 UNIQUE KEY user_memory_candidate_once (user_id, source_event_id, candidate_key),
-                KEY user_memory_candidate_retry (user_id, decision, updated_at)
+                KEY user_memory_candidate_retry (user_id, decision, updated_at),
+                KEY user_memory_candidate_order (user_id, id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"""
             )
             cursor.execute(
@@ -502,6 +503,7 @@ class MySQLUserMemoryRepository:
             self._ensure_column(cursor, "user_memory_candidate", "claim_token", "VARCHAR(64) NULL")
             self._ensure_column(cursor, "user_memory_candidate", "claim_until", "DATETIME(6) NULL")
             self._ensure_column(cursor, "user_memory_candidate", "last_error", "VARCHAR(64) NULL")
+            self._ensure_index(cursor, "user_memory_candidate", "user_memory_candidate_order", "(user_id, id)")
             self._ensure_column(cursor, "user_memory_episode", "source_seq", "BIGINT NULL")
             self._ensure_column(cursor, "user_memory_episode", "source_created_at", "DATETIME(6) NULL")
             self._ensure_column(cursor, "user_memory_episode", "importance", "DOUBLE NOT NULL DEFAULT 0.5")
@@ -610,11 +612,15 @@ class MySQLUserMemoryRepository:
         token = uuid.uuid4().hex
 
         def claim(_connection, cursor):
+            # READ COMMITTED avoids gap locks on user_memory_candidate_retry that
+            # deadlock with secondary-index updates (PENDING -> CLAIMED), and
+            # SKIP LOCKED lets concurrent workers claim disjoint rows without waiting.
+            cursor.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
             cursor.execute(
-                """SELECT * FROM user_memory_candidate
+                """SELECT * FROM user_memory_candidate FORCE INDEX (user_memory_candidate_order)
                    WHERE user_id=%s AND (decision='PENDING' OR
                      (decision='CLAIMED' AND claim_until < CURRENT_TIMESTAMP(6)))
-                   ORDER BY id LIMIT %s FOR UPDATE""",
+                   ORDER BY id LIMIT %s FOR UPDATE SKIP LOCKED""",
                 (user_id, bounded),
             )
             rows = list(cursor.fetchall())
@@ -1028,6 +1034,16 @@ class MySQLUserMemoryRepository:
         )
         if cursor.fetchone() is None:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    @staticmethod
+    def _ensure_index(cursor, table: str, index_name: str, columns_sql: str) -> None:
+        cursor.execute(
+            """SELECT 1 FROM information_schema.statistics
+               WHERE table_schema=DATABASE() AND table_name=%s AND index_name=%s""",
+            (table, index_name),
+        )
+        if cursor.fetchone() is None:
+            cursor.execute(f"ALTER TABLE {table} ADD KEY {index_name} {columns_sql}")
 
 
 @dataclass
