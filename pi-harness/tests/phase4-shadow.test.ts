@@ -156,6 +156,19 @@ function scriptTurn(calls: ScenarioCall[], answer: string): void {
   ]);
 }
 
+function latestPendingActionId(sessionId: string): string | undefined {
+  const entry = harness?.registry.get(sessionId);
+  if (!entry) return undefined;
+  const toolResults = entry.session.sessionManager
+    .buildSessionContext()
+    .messages.filter((m) => (m as { role?: string }).role === "toolResult");
+  for (let i = toolResults.length - 1; i >= 0; i -= 1) {
+    const match = /pending-shadow-[0-9a-f]{8}/.exec(JSON.stringify(toolResults[i]));
+    if (match) return match[0];
+  }
+  return undefined;
+}
+
 async function runPiScenario(scenario: Scenario): Promise<{
   writeTools: string[];
   writeArguments: Record<string, Record<string, unknown>>;
@@ -170,7 +183,14 @@ async function runPiScenario(scenario: Scenario): Promise<{
   const before = 0;
 
   for (const [index, turn] of scenario.turns.entries()) {
-    const calls = scenario.pi_scripted_calls[index] ?? [];
+    const calls = (scenario.pi_scripted_calls[index] ?? []).map((call) => {
+      if (call.arguments.pending_action_id !== "$PENDING") return call;
+      const pendingId = latestPendingActionId(sessionId);
+      if (!pendingId) {
+        throw new Error(`${scenario.id} turn ${index}: expected a prior pending-shadow-* id to resolve $PENDING`);
+      }
+      return { ...call, arguments: { ...call.arguments, pending_action_id: pendingId } };
+    });
     scriptTurn(calls, "好的，已处理。");
     const response = await chat(`${scenario.id}-t${index}`, turn, sessionId);
     expect(response.status, `${scenario.id} turn ${index}`).toBe(200);
