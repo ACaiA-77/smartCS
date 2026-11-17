@@ -22,6 +22,8 @@ import {
 import { registerFauxProvider, type FauxProviderRegistration } from "@earendil-works/pi-ai/compat";
 import { loadLlmConfigFromPythonEnv, resolveProviderMode, resolveSmartCsPaths, type SmartCsPaths } from "../config/env.js";
 import { systemPromptFor } from "./prompt/customer-service.js";
+import { copilotPromptFor } from "./prompt/copilot.js";
+import { resolveProfile, type AgentProfile } from "./profile.js";
 import { createFakeTools, SMARTCS_TOOL_WHITELIST } from "./tools/fake-tools.js";
 import { createSkillLoadTool, resolveSkillsEnabled, SKILL_LOAD_TOOL, skillsDir } from "./skills.js";
 import {
@@ -31,6 +33,12 @@ import {
   resolveKnowledgeTransport,
 } from "./mcp/knowledge-mcp.js";
 import { createBusinessReadTools, READ_TOOL_NAMES } from "./tools/business-tools.js";
+import {
+  createCopilotReadTools,
+  createCopilotWriteTools,
+  COPILOT_READ_TOOL_NAMES,
+  COPILOT_WRITE_TOOL_NAMES,
+} from "./tools/copilot-tools.js";
 import {
   createShadowWriteTools,
   shadowPendingActionId,
@@ -73,6 +81,8 @@ export interface CreateSmartCsAgentOptions {
   paths?: Partial<SmartCsPaths>;
   /** Force a provider mode instead of auto-detecting from python-impl/.env. */
   provider?: "openai" | "faux";
+  /** Agent shape; defaults to SMARTCS_PROFILE (ecommerce). */
+  profile?: AgentProfile;
   /** Pre-registered faux provider (tests own its lifecycle). */
   faux?: FauxProviderRegistration;
   /**
@@ -142,6 +152,8 @@ export interface SmartCsAgentHandle {
   /** Snapshot holder the pipeline fills before each prompt. */
   snapshotHolder: SnapshotHolder;
   toolMode: "business" | "fake";
+  /** Effective agent profile (prompt + skills + tool surface). */
+  profile: AgentProfile;
   /** Effective Phase 4 write mode for this agent. */
   writeMode: WriteMode;
   providerMode: "openai" | "faux";
@@ -219,6 +231,7 @@ export async function createSmartCsAgent(options: CreateSmartCsAgentOptions = {}
 
   const providerMode = options.provider ?? resolveProviderMode();
   const toolMode = options.toolMode ?? "business";
+  const profile = options.profile ?? resolveProfile();
   const turnContext = options.turnContext ?? new TurnContext();
   const writeMode = options.writeMode ?? resolveWriteMode();
   // `live` is a reviewed act: refuse to run rather than silently degrade into a
@@ -319,14 +332,19 @@ export async function createSmartCsAgent(options: CreateSmartCsAgentOptions = {}
     settingsManager,
     noExtensions: true,
     noSkills: true,
-    ...(skillsEnabled ? { additionalSkillPaths: [skillsDir()] } : {}),
+    ...(skillsEnabled ? { additionalSkillPaths: [skillsDir(undefined, profile)] } : {}),
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
     // Phase 10 §②: the prompt is composed from the same switch that mounts the
     // write tools, so what the model is told it can do and what its tool face
-    // actually offers cannot drift apart.
-    systemPrompt: systemPromptFor(knowledgeToolName, { writeTools: writeToolsMounted }),
+    // actually offers cannot drift apart. The Copilot profile swaps persona,
+    // tools and skills together; `fake` tool mode stays the SDK probe surface
+    // and keeps the customer-service prompt.
+    systemPrompt:
+      profile === "copilot" && toolMode !== "fake"
+        ? copilotPromptFor(knowledgeToolName, { writeTools: writeToolsMounted })
+        : systemPromptFor(knowledgeToolName, { writeTools: writeToolsMounted }),
     // The skills section is composed here rather than by the SDK: the harness
     // owns its prompt in full, so it owns the disclosure that goes into it.
     // Only names and descriptions — the bodies stay on disk until the model
@@ -358,6 +376,32 @@ export async function createSmartCsAgent(options: CreateSmartCsAgentOptions = {}
   let customTools;
   if (toolMode === "fake") {
     customTools = createFakeTools();
+  } else if (profile === "copilot") {
+    // The Copilot surface: READ shells plus (when mounted) local/draft writes
+    // and the two-phase external action pair. Same transport rule as the
+    // e-commerce profile: with MCP the knowledge tool is declared by the MCP
+    // extension, so the HTTP shell must not also be declared.
+    const client = businessClient ?? new PythonInternalClient();
+    customTools = createCopilotReadTools({ client, turnContext });
+    if (knowledgeTransport === "mcp") {
+      customTools = customTools.filter((tool) => tool.name !== KNOWLEDGE_HTTP_TOOL);
+    }
+    if (writeToolsMounted) {
+      customTools = [
+        ...customTools,
+        ...createCopilotWriteTools({
+          mode: writeMode,
+          store: shadowStore,
+          turnContext,
+          client: businessClient,
+          receipts: options.receiptStore,
+          turnIndex:
+            options.shadowTurnContext?.turnIndex ?? (() => userTurns(sessionManager) - 1),
+          lastUserMessage:
+            options.shadowTurnContext?.lastUserMessage ?? (() => lastUserText(sessionManager)),
+        }),
+      ];
+    }
   } else {
     const client = businessClient ?? new PythonInternalClient();
     customTools = createBusinessReadTools({
@@ -422,9 +466,14 @@ export async function createSmartCsAgent(options: CreateSmartCsAgentOptions = {}
   // the MCP transport the knowledge tool therefore appears under its MCP name
   // instead of the HTTP name: same size, exactly one knowledge tool either way.
   const readToolNames =
-    knowledgeTransport === "mcp"
-      ? READ_TOOL_NAMES.filter((name) => name !== KNOWLEDGE_HTTP_TOOL)
-      : [...READ_TOOL_NAMES];
+    profile === "copilot"
+      ? knowledgeTransport === "mcp"
+        ? COPILOT_READ_TOOL_NAMES.filter((name) => name !== KNOWLEDGE_HTTP_TOOL)
+        : [...COPILOT_READ_TOOL_NAMES]
+      : knowledgeTransport === "mcp"
+        ? READ_TOOL_NAMES.filter((name) => name !== KNOWLEDGE_HTTP_TOOL)
+        : [...READ_TOOL_NAMES];
+  const writeToolNames = profile === "copilot" ? COPILOT_WRITE_TOOL_NAMES : SHADOW_WRITE_TOOL_NAMES;
   if (options.additionalTools?.length) {
     customTools = [...customTools, ...options.additionalTools];
   }
@@ -436,7 +485,7 @@ export async function createSmartCsAgent(options: CreateSmartCsAgentOptions = {}
     toolMode === "fake"
       ? [...SMARTCS_TOOL_WHITELIST]
       : writeToolsMounted
-        ? [...readToolNames, ...SHADOW_WRITE_TOOL_NAMES]
+        ? [...readToolNames, ...writeToolNames]
         : [...readToolNames];
   if (toolMode !== "fake" && knowledgeTransport === "mcp") {
     defaultWhitelist.push(KNOWLEDGE_MCP_TOOL);
@@ -481,6 +530,7 @@ export async function createSmartCsAgent(options: CreateSmartCsAgentOptions = {}
     turnContext,
     snapshotHolder,
     toolMode,
+    profile,
     writeMode,
     providerMode,
     modelId,

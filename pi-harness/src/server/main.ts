@@ -20,6 +20,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { AuditDispatcher, AuditQueue } from "../tracing/audit-queue.js";
 import { MemoryOutboxDispatcher } from "../session/outbox.js";
 import { initTracing } from "../tracing/provider.js";
+import { resolveProfile } from "../agent/profile.js";
 import { resolveWriteMode } from "../agent/write-mode.js";
 
 const PORT = Number(process.env.PORT ?? 8971);
@@ -38,7 +39,8 @@ async function main(): Promise<void> {
   const db = createDatabase();
   const providerMode = resolveProviderMode();
   // Resolved once, at startup: an invalid value is a hard error before the
-  // port is bound rather than a surprise on the first write.
+  // port is bound rather than a surprise on the first write or session.
+  const profile = resolveProfile();
   const writeMode = resolveWriteMode();
 
   // Offline mode exists so a real OS process can be started, killed and
@@ -148,6 +150,7 @@ async function main(): Promise<void> {
       runtimeCwd: paths.runtimeCwd,
       agentDir: paths.agentDir,
       providerMode,
+      profile,
       // The switches that decide what the model is ALLOWED to ask for. They
       // were invisible in the startup line, which is how a restart can quietly
       // come back with writes off and nothing say so (Phase 10 §④'s lesson).

@@ -27,9 +27,9 @@ import { Type } from "@earendil-works/pi-ai";
 import type { ShadowPlanStore } from "../../db/shadow-plans.js";
 import type { ReceiptStore } from "../../db/receipts.js";
 import type { PythonInternalClient } from "../../business/python-client.js";
-import type { TurnContext, TurnIdentity } from "../../business/turn-context.js";
-import { hitCrashPoint } from "../../test-support/crash-point.js";
+import type { TurnContext } from "../../business/turn-context.js";
 import type { WriteMode } from "../write-mode.js";
+import { executeLiveWrite } from "./live-write-executor.js";
 
 export const SHADOW_WRITE_TOOL_NAMES = ["refund_confirm", "ticket_create"] as const;
 export type ShadowWriteToolName = (typeof SHADOW_WRITE_TOOL_NAMES)[number];
@@ -67,7 +67,19 @@ async function intercept(
   signal?: AbortSignal,
   toolCallId?: string,
 ): Promise<AgentToolResult<unknown>> {
-  if (deps.mode === "live") return liveExecute(deps, toolName, params, signal, toolCallId);
+  if (deps.mode === "live") {
+    if (!deps.client || !deps.receipts) {
+      throw new Error(`live write mode is not fully wired for ${toolName}`);
+    }
+    return executeLiveWrite(
+      { client: deps.client, receipts: deps.receipts },
+      deps.turnContext.require(),
+      toolName,
+      params,
+      signal,
+      toolCallId,
+    );
+  }
   if (deps.mode !== "shadow") throw new WriteToolNotPermittedError(toolName);
 
   if (!deps.store) throw new Error(`shadow mode requires a plan store for ${toolName}`);
@@ -154,105 +166,4 @@ export function shadowPendingActionId(parts: {
     hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
   }
   return `pending-shadow-${hash.toString(16).padStart(8, "0")}`;
-}
-
-// --- live mode (Phase 5d) ---------------------------------------------------
-
-/**
- * Execute a real write through the runtime, then make the OUTCOME authoritative.
- *
- * The dangerous case is a transport failure: the write may or may not have
- * happened. The harness never guesses there — it finds the operation id from
- * the durable receipt record (written by the runtime BEFORE sending) and asks
- * the ledger. A blind retry would be the one thing that can duplicate a refund,
- * so `UNKNOWN` is surfaced as an error, never as "try again".
- */
-async function liveExecute(
-  deps: ShadowWriteDeps,
-  toolName: ShadowWriteToolName,
-  params: Record<string, unknown>,
-  signal?: AbortSignal,
-  toolCallId?: string,
-): Promise<AgentToolResult<unknown>> {
-  if (!deps.client || !deps.receipts) {
-    throw new Error(`live write mode is not fully wired for ${toolName}`);
-  }
-  const identity = deps.turnContext.require();
-
-  // F3 window: the model decided to write, nothing has left this process. The
-  // runtime has not reserved an operation, so a resend is safe by definition.
-  hitCrashPoint("before_write_send");
-
-  try {
-    const response = await deps.client.executeTool({
-      tool: toolName,
-      arguments: params,
-      identity,
-      toolCallId,
-      signal,
-    });
-    const details = (response.details ?? {}) as Record<string, unknown>;
-    // F5 window: the runtime reports the side effect as executed, so it IS
-    // durable — but Pi has not appended the toolResult. This is the one place
-    // where "it happened but the transcript does not know" is true.
-    if (details.authorized === true && details.executed === true) hitCrashPoint("after_write_success");
-    if (details.authorized === false) {
-      // A business refusal is a normal result the model must see.
-      return { content: [{ type: "text" as const, text: response.content }], details };
-    }
-    return { content: [{ type: "text" as const, text: response.content }], details };
-  } catch (error) {
-    return reconcileAfterTransportFailure(deps, toolName, identity, error);
-  }
-}
-
-async function reconcileAfterTransportFailure(
-  deps: ShadowWriteDeps,
-  toolName: ShadowWriteToolName,
-  identity: TurnIdentity,
-  error: unknown,
-): Promise<AgentToolResult<unknown>> {
-  const operations = await deps.receipts!.openWriteOperations(identity.sessionId, identity.clientRequestId);
-  const operation = [...operations].reverse().find((item) => item.tool === toolName);
-
-  if (!operation) {
-    // No durable record ⇒ the write was never sent. Failing is correct and
-    // safe: the user can simply retry.
-    throw new Error(
-      `工具 ${toolName} 未能提交（未发出任何写操作）：${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-
-  const verdict = await deps.client!.operationStatus({ identity, operationId: operation.operation_id });
-
-  if (verdict.status === "COMPLETED") {
-    // Deterministic recovery (design §4 / F5): the side effect DID happen, so
-    // finish the request from the authority instead of replaying anything.
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: `[业务已完成] ${toolName} 已由业务系统执行完成（恢复自账簿，未重复执行）。`,
-        },
-      ],
-      details: {
-        recovered: true,
-        executed: true,
-        operationId: operation.operation_id,
-        ledgerStatus: verdict.status,
-        result: verdict.result,
-      },
-    };
-  }
-
-  if (verdict.status === "FAILED") {
-    throw new Error(`工具 ${toolName} 执行失败（账簿权威结论），未产生任何业务变更。`);
-  }
-
-  // UNKNOWN or PROVABLY_NOT_EXECUTED: do not act automatically. Note that
-  // PROVABLY_NOT_EXECUTED is safe to retry by a human/orchestrator, but this
-  // shell deliberately does not retry — retry policy is not a transport concern.
-  throw new Error(
-    `工具 ${toolName} 结果未确定（${verdict.status}），已停止自动处理，需人工核对后再决定。`,
-  );
 }
