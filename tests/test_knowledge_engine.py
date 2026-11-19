@@ -568,3 +568,118 @@ def test_lint_before_index_reports_every_page(
     assert report["unindexed_pages"] == ["wiki/one.md", "wiki/two.md"]
     assert report["orphan_pages"] == ["wiki/one.md", "wiki/two.md"]
     assert report["broken_links"] == []
+
+
+def test_dual_root_read_only_source_vault_supports_nested_reads_search_and_backlinks(
+    tmp_path: Path,
+) -> None:
+    managed = tmp_path / "managed"
+    source = tmp_path / "external_vault"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _write_note(outside / "secret.md", "# Outside Secret\n\nmust stay unreachable\n")
+
+    _write_note(source / "RootNote.md", "# Root Note\n\nSee [[deep/Target]] for context.\n")
+    _write_note(
+        source / "projects" / "deep" / "Target.md",
+        "---\ntitle: Deep Target\ntags: [architecture, alpha]\n---\n\nNested target body.\n",
+    )
+    _write_note(
+        source / "projects" / "Ref.md",
+        "Links to [[projects/deep/Target]] and [[../outside/secret]] and [[.obsidian/hidden]].\n",
+    )
+    _write_note(source / ".obsidian" / "workspace.md", "# Hidden Workspace\n\nsecret config\n")
+    _write_note(source / ".hidden.md", "# Dotfile\n\nhidden dotfile\n")
+    _create_escape_link(source / "escape_dir", outside)
+
+    vault = ObsidianVault(managed, source_root=source)
+
+    # Read-only source vault was NEVER initialized with four-zone directories.
+    for zone in ("wiki", "raw", "notes", "daily"):
+        assert not (source / zone).exists()
+        assert (managed / zone).is_dir()
+
+    listed = [vault.relative_path(path) for path in vault.list_notes()]
+    assert listed == [
+        "source/projects/deep/Target.md",
+        "source/projects/Ref.md",
+        "source/RootNote.md",
+    ]
+    assert [vault.relative_path(p) for p in vault.list_notes("source")] == listed
+
+    # Reading via source/ prefix and clean relative path inside source_root both work.
+    note = vault.read_note("source/projects/deep/Target.md")
+    assert note["title"] == "Deep Target"
+    assert note["zone"] == "source"
+    assert note["tags"] == ["architecture", "alpha"]
+    assert vault.read_note("projects/deep/Target")["path"] == "source/projects/deep/Target.md"
+
+    # Search covers nested source notes and respects zone="source", ignoring hidden/escape.
+    hits = vault.search("Nested target", zone="source")
+    assert [hit["path"] for hit in hits] == ["source/projects/deep/Target.md"]
+    assert vault.search("Hidden Workspace") == []
+    assert vault.search("Outside Secret") == []
+
+    # Backlinks match both basename [[Target]] and nested [[projects/deep/Target]].
+    bl_paths = {item["path"] for item in vault.backlinks("source/projects/deep/Target.md")}
+    assert bl_paths == {"source/projects/Ref.md", "source/RootNote.md"}
+    assert {item["path"] for item in vault.backlinks("projects/deep/Target")} == bl_paths
+
+    # Hidden files, escaping symlinks, path traversal (POSIX & backslash), and writes to source are blocked.
+    for bad in (
+        ".obsidian/workspace.md",
+        "source/.obsidian/workspace.md",
+        "source/.hidden.md",
+        "source/escape_dir/secret.md",
+        "source/../outside/secret.md",
+        "source\\..\\outside\\secret.md",
+        "escape_dir/secret.md",
+    ):
+        with pytest.raises(VaultSecurityError):
+            vault.read_note(bad)
+
+    with pytest.raises(VaultSecurityError):
+        vault.backlinks("../outside/secret")
+    with pytest.raises(VaultSecurityError):
+        vault.backlinks(".obsidian/workspace")
+    with pytest.raises(VaultSecurityError):
+        vault.propose_note_edit("source/RootNote.md", "try edit", "nope")
+    with pytest.raises(VaultSecurityError):
+        vault._resolve("source/New.md", for_write=True)
+
+
+def test_standalone_read_only_vault_refuses_initialization_and_writes(tmp_path: Path) -> None:
+    source = tmp_path / "ro_vault"
+    _write_note(source / "folder" / "Note.md", "# Note\n\n[[Other]]\n")
+    _write_note(source / "Other.md", "# Other\n\nbody\n")
+    _write_note(source / ".git" / "ignored.md", "# Git\n\nsecret\n")
+
+    vault = ObsidianVault(source, read_only=True)
+    for zone in ("wiki", "raw", "notes", "daily"):
+        assert not (source / zone).exists()
+
+    assert [vault.relative_path(p) for p in vault.list_notes()] == [
+        "source/folder/Note.md",
+        "source/Other.md",
+    ]
+    assert vault.read_note("folder/Note")["zone"] == "source"
+    assert [item["path"] for item in vault.backlinks("Other")] == ["source/folder/Note.md"]
+
+    with pytest.raises(VaultSecurityError):
+        vault.initialize()
+    with pytest.raises(VaultSecurityError):
+        vault.append_daily("entry", date_str="2026-11-19")
+    with pytest.raises(VaultSecurityError):
+        vault.write_wiki_page("x", "X", "body")
+    with pytest.raises(VaultSecurityError):
+        vault.archive_raw("x", "X", "body")
+    with pytest.raises(VaultSecurityError):
+        vault.propose_note_edit("folder/Note.md", "reason", "body")
+
+
+def test_overlapping_managed_and_source_roots_are_rejected(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    with pytest.raises(VaultSecurityError):
+        ObsidianVault(root, source_root=root)
+    with pytest.raises(VaultSecurityError):
+        ObsidianVault(root, source_root=root / "notes")

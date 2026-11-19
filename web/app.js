@@ -19,6 +19,8 @@ const state = {
   inspectorTab: "knowledge",
   knowledgeTab: "notes",
   filterQuery: "",
+  vaultSearchResults: null,
+  vaultSearchQuery: "",
   copilotData: null,
   selectedCopilotKey: null,
 };
@@ -314,7 +316,12 @@ function renderInlineMarkdown(value, { interactiveWikilinks = false } = {}) {
     .replace(/\[\[([^\[\]\n]+?)\]\]/g, (_match, inner) => {
       const target = inner.split("|")[0].split("#")[0].trim();
       const label = inner.includes("|") ? inner.split("|").slice(1).join("|").trim() : inner;
-      if (interactiveWikilinks && target) {
+      if (
+        interactiveWikilinks &&
+        target &&
+        !target.startsWith("/") &&
+        !target.split("/").some((part) => part === ".." || part.startsWith("."))
+      ) {
         return `<button class="wikilink-chip" type="button" data-wikilink="${target}">[[${label}]]</button>`;
       }
       return `<span class="wikilink-chip">[[${label}]]</span>`;
@@ -534,7 +541,11 @@ function setKnowledgeTab(tab) {
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-selected", active ? "true" : "false");
   });
-  renderCopilotItems();
+  if (state.knowledgeTab === "notes" && state.filterQuery.trim()) {
+    scheduleVaultSearch(state.filterQuery);
+  } else {
+    renderCopilotItems();
+  }
 }
 
 function renderWorkspaceBadges(data) {
@@ -574,9 +585,11 @@ function renderCopilotConnectors(data) {
   }
 
   const obsidianZones = c.obsidian?.zones || {};
+  const sourceSegment = c.obsidian?.source_enabled ? ` · source ${obsidianZones.source || 0}` : "";
+  const ragSegment = c.obsidian?.rag_index_enabled ? ` · RAG ${c.obsidian.rag_documents || 0} 片段` : "";
   const zoneText = c.obsidian?.enabled
-    ? `wiki ${obsidianZones.wiki || 0} · notes ${obsidianZones.notes || 0} · daily ${obsidianZones.daily || 0} · raw ${obsidianZones.raw || 0}`
-    : "未设置 OBSIDIAN_VAULT_PATH";
+    ? `wiki ${obsidianZones.wiki || 0} · notes ${obsidianZones.notes || 0} · daily ${obsidianZones.daily || 0} · raw ${obsidianZones.raw || 0}${sourceSegment}${ragSegment}`
+    : "未设置 OBSIDIAN_VAULT_PATH / OBSIDIAN_SOURCE_VAULT_PATH";
   const mailAccounts = (c.mail?.accounts || []).join(" / ");
   const rows = [
     {
@@ -681,23 +694,48 @@ function renderPendingActions(data) {
 
   elements.copilotPendingList.querySelectorAll("[data-confirm-action]").forEach((button) => {
     button.addEventListener("click", () =>
-      submitPendingDecision(button.dataset.confirmAction, button.dataset.actionSession, true),
+      confirmPendingAction(button.dataset.confirmAction, button.dataset.actionSession),
     );
   });
   elements.copilotPendingList.querySelectorAll("[data-cancel-action]").forEach((button) => {
     button.addEventListener("click", () =>
-      submitPendingDecision(button.dataset.cancelAction, button.dataset.actionSession, false),
+      cancelPendingAction(button.dataset.cancelAction, button),
     );
   });
 }
 
-async function submitPendingDecision(actionId, targetSessionId, approved) {
+async function cancelPendingAction(actionId, button) {
+  if (!state.user || !actionId) return;
+  const epoch = state.epoch;
+  const card = button?.closest(".pending-card");
+  const cardButtons = card ? Array.from(card.querySelectorAll("button")) : button ? [button] : [];
+  cardButtons.forEach((btn) => {
+    btn.disabled = true;
+  });
+  try {
+    await request(`/api/copilot/pending/${encodeURIComponent(actionId)}/cancel`, { method: "POST" });
+    assertCurrent(epoch);
+    await loadCopilotContext();
+  } catch (error) {
+    if (epoch !== state.epoch || error instanceof StaleResponse) return;
+    if (error.status === 404 || error.status === 409) {
+      await loadCopilotContext();
+      appendMessage("assistant", `该待确认操作当前不可取消（${error.message}），已刷新待确认队列。`);
+      return;
+    }
+    cardButtons.forEach((btn) => {
+      btn.disabled = false;
+    });
+    appendMessage("assistant", `取消待确认操作未完成：${error.message}`);
+  }
+}
+
+async function confirmPendingAction(actionId, targetSessionId) {
   if (!state.user || state.sending) return;
   if (targetSessionId && state.sessionId !== targetSessionId) {
     await selectSession(targetSessionId);
   }
-  const phrase = approved ? `确认执行 ${actionId}` : `取消操作 ${actionId}`;
-  await sendChatMessage(phrase);
+  await sendChatMessage(`确认执行 ${actionId}`);
 }
 
 function renderCopilotItems() {
@@ -732,19 +770,24 @@ function renderCopilotItems() {
     return;
   }
 
-  const notes = (data.notes || []).filter((note) => {
-    if (!needle) return true;
-    const tags = (note.tags || []).join(" ");
-    return `${note.title || ""} ${note.path || ""} ${note.zone || ""} ${tags}`.toLowerCase().includes(needle);
-  });
-  elements.copilotItemCount.textContent = `${notes.length} 篇`;
+  const useServerSearch = Boolean(needle && state.vaultSearchQuery === needle && Array.isArray(state.vaultSearchResults));
+  const notes = useServerSearch
+    ? state.vaultSearchResults
+    : (data.notes || []).filter((note) => {
+        if (!needle) return true;
+        const tags = (note.tags || []).join(" ");
+        return `${note.title || ""} ${note.path || ""} ${note.zone || ""} ${tags}`.toLowerCase().includes(needle);
+      });
+  const totalNotes = data.connectors?.obsidian?.total_notes || notes.length;
+  elements.copilotItemCount.textContent = needle ? `${notes.length} 命中` : `${notes.length} / ${totalNotes} 篇`;
   elements.copilotItemList.innerHTML =
     notes
       .map((note) => {
         const selected = state.selectedCopilotKey === `note:${note.path}` ? " is-selected" : "";
+        const matchLabel = note.match_type ? ` · ${note.match_type}` : "";
         return `
           <button class="copilot-item${selected}" type="button" data-note-path="${escapeHtml(note.path)}">
-            <span class="zone-badge">${escapeHtml(note.zone || "note")}</span>
+            <span class="zone-badge">${escapeHtml((note.zone || "note") + matchLabel)}</span>
             <span>
               <span class="copilot-item-title">${escapeHtml(note.title || note.path)}</span>
               <span class="copilot-item-sub">${escapeHtml(note.path)}</span>
@@ -757,7 +800,51 @@ function renderCopilotItems() {
   });
 }
 
-function resolveWikilinkPath(target) {
+let vaultSearchTimer = null;
+let vaultSearchController = null;
+
+function scheduleVaultSearch(rawQuery) {
+  const query = String(rawQuery || "").trim();
+  if (vaultSearchTimer) {
+    clearTimeout(vaultSearchTimer);
+    vaultSearchTimer = null;
+  }
+  if (vaultSearchController) {
+    vaultSearchController.abort();
+    vaultSearchController = null;
+  }
+  if (!query || !state.user || state.knowledgeTab !== "notes") {
+    state.vaultSearchQuery = "";
+    state.vaultSearchResults = null;
+    renderCopilotItems();
+    return;
+  }
+  const epoch = state.epoch;
+  vaultSearchTimer = setTimeout(async () => {
+    const controller = new AbortController();
+    vaultSearchController = controller;
+    try {
+      const payload = await request(`/api/copilot/vault/search?query=${encodeURIComponent(query)}&limit=15`, {
+        signal: controller.signal,
+      });
+      if (epoch !== state.epoch || state.filterQuery.trim() !== query) return;
+      state.vaultSearchQuery = query.toLowerCase();
+      state.vaultSearchResults = payload.hits || [];
+      renderCopilotItems();
+    } catch (error) {
+      if (error?.name === "AbortError" || epoch !== state.epoch) return;
+      state.vaultSearchQuery = "";
+      state.vaultSearchResults = null;
+      renderCopilotItems();
+    } finally {
+      if (vaultSearchController === controller) {
+        vaultSearchController = null;
+      }
+    }
+  }, 280);
+}
+
+async function resolveWikilinkPath(target) {
   const clean = String(target || "")
     .trim()
     .replace(/\\/g, "/")
@@ -767,14 +854,31 @@ function resolveWikilinkPath(target) {
   const notes = state.copilotData?.notes || [];
   const exact = notes.find((n) => n.path.replace(/\.md$/i, "").toLowerCase() === clean.toLowerCase());
   if (exact) return exact.path;
+  const stem = clean.split("/").pop()?.toLowerCase() || "";
   if (!clean.includes("/")) {
     const bySlug = notes.find((n) => {
-      const stem = n.path.split("/").pop()?.replace(/\.md$/i, "") || "";
-      return stem.toLowerCase() === clean.toLowerCase();
+      const nStem = n.path.split("/").pop()?.replace(/\.md$/i, "") || "";
+      return nStem.toLowerCase() === clean.toLowerCase();
     });
     if (bySlug) return bySlug.path;
-    return `wiki/${clean}.md`;
   }
+  try {
+    const found = await request(`/api/copilot/vault/notes?q=${encodeURIComponent(stem)}&limit=20`);
+    const candidates = found.notes || [];
+    const direct = candidates.find(
+      (n) =>
+        n.path.replace(/\.md$/i, "").toLowerCase() === clean.toLowerCase() ||
+        n.path.replace(/^source\//i, "").replace(/\.md$/i, "").toLowerCase() === clean.toLowerCase(),
+    );
+    if (direct) return direct.path;
+    const byName = candidates.find(
+      (n) => (n.path.split("/").pop()?.replace(/\.md$/i, "") || "").toLowerCase() === stem,
+    );
+    if (byName) return byName.path;
+  } catch {
+    /* Fall back to direct path construction below. */
+  }
+  if (!clean.includes("/")) return `wiki/${clean}.md`;
   return `${clean}.md`;
 }
 
@@ -817,6 +921,12 @@ async function loadCopilotNote(path) {
           `<button class="wikilink-chip" type="button" data-wikilink="${escapeHtml(link.target)}">[[${escapeHtml(link.target)}]]</button>`,
       )
       .join(" ");
+    const backlinksHtml = (note.backlinks || [])
+      .map(
+        (item) =>
+          `<button class="wikilink-chip" type="button" data-backlink-path="${escapeHtml(item.path)}">← ${escapeHtml(item.title || item.path)}</button>`,
+      )
+      .join(" ");
     elements.copilotDetail.innerHTML = `
       <div class="detail-status">
         <strong>${escapeHtml(note.title || note.path)}</strong>
@@ -826,13 +936,19 @@ async function loadCopilotNote(path) {
       ${tagsHtml ? `<div class="tag-row">${tagsHtml}</div>` : ""}
       <div class="note-preview markdown-content">${renderMarkdown(note.content || "", { interactiveWikilinks: true })}</div>
       ${linksHtml ? `<div class="tag-row">${linksHtml}</div>` : ""}
+      ${backlinksHtml ? `<div class="tag-row"><span class="source-note">反向链接：</span>${backlinksHtml}</div>` : ""}
       <div class="detail-actions">
         <button class="secondary-action" type="button" id="ask-copilot-note">让 Copilot 解读这篇笔记</button>
       </div>`;
     elements.copilotDetail.querySelectorAll("[data-wikilink]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const resolved = resolveWikilinkPath(button.dataset.wikilink);
+      button.addEventListener("click", async () => {
+        const resolved = await resolveWikilinkPath(button.dataset.wikilink);
         if (resolved) loadCopilotNote(resolved);
+      });
+    });
+    elements.copilotDetail.querySelectorAll("[data-backlink-path]").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (button.dataset.backlinkPath) loadCopilotNote(button.dataset.backlinkPath);
       });
     });
     document.querySelector("#ask-copilot-note")?.addEventListener("click", () => {
@@ -1183,7 +1299,11 @@ document.querySelectorAll("[data-knowledge-tab]").forEach((button) => {
 });
 elements.copilotFilterInput?.addEventListener("input", () => {
   state.filterQuery = elements.copilotFilterInput.value;
-  renderCopilotItems();
+  if (state.knowledgeTab === "notes") {
+    scheduleVaultSearch(state.filterQuery);
+  } else {
+    renderCopilotItems();
+  }
 });
 document.querySelector("#new-session").addEventListener("click", resetSession);
 document.querySelector("#history-button").addEventListener("click", loadSessions);
@@ -1192,6 +1312,7 @@ elements.refreshContext?.addEventListener("click", loadCopilotContext);
 updateInputPlaceholder();
 setSending(false);
 refreshIcons();
+document.querySelector("#lucide-script")?.addEventListener("load", refreshIcons);
 checkHealth();
 initializeAuth();
 window.addEventListener("resize", updateInputPlaceholder);

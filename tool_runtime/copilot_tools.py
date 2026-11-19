@@ -14,8 +14,10 @@ backed by a real object rather than a half-configured one.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
+from knowledge_engine.vault import READ_ZONES, VaultSecurityError
 from tool_runtime.mcp_server import MCPToolServer
 
 _READ_DEFAULTS: dict[str, Any] = {
@@ -62,6 +64,114 @@ def _compile_result(result: dict[str, Any]) -> dict[str, Any]:
     return converted
 
 
+def search_obsidian_vault(
+    vault,
+    query: str,
+    *,
+    zone: str | None = None,
+    limit: int = 10,
+    obsidian_retriever=None,
+    mode: str = "hybrid",
+) -> list[dict[str, Any]]:
+    """Search Obsidian notes lexically and (when configured) via the isolated Obsidian RAG index."""
+
+    if vault is None:
+        return []
+    if zone is not None and zone not in READ_ZONES:
+        raise ValueError(f"unknown vault zone: {zone}")
+    if mode not in {"hybrid", "lexical", "rag"}:
+        raise ValueError(f"unknown search mode: {mode}")
+    bounded_limit = max(0, int(limit))
+    clean_query = str(query or "").strip()
+    if not clean_query or bounded_limit <= 0:
+        return []
+
+    lexical_hits = (
+        vault.search(clean_query, zone=zone, limit=bounded_limit)
+        if mode in {"hybrid", "lexical"}
+        else []
+    )
+    if obsidian_retriever is None or mode == "lexical":
+        return lexical_hits
+
+    merged: dict[str, dict[str, Any]] = {}
+    for item in lexical_hits:
+        path_key = str(item["path"])
+        merged[path_key] = {
+            **item,
+            "match_type": "lexical",
+            "_lex": float(item.get("score") or 0.0),
+            "_rag": None,
+        }
+
+    rag_top_k = (
+        min(max(bounded_limit * 2, 12), 30)
+        if zone is not None
+        else min(max(bounded_limit, 10), 25)
+    )
+    rag_hits = obsidian_retriever.retrieve(
+        clean_query,
+        top_k=rag_top_k,
+        rerank=True,
+    )
+    for raw_hit in rag_hits:
+        meta = dict(getattr(raw_hit, "metadata", {}) or {})
+        rel_candidate = str(meta.get("vault_path") or "").strip()
+        if not rel_candidate:
+            continue
+        try:
+            resolved = vault._resolve(rel_candidate)
+        except (VaultSecurityError, ValueError, OSError):
+            continue
+        if not resolved.is_file():
+            continue
+        canonical_path = vault.relative_path(resolved)
+        if canonical_path.startswith("wiki/proposals/"):
+            continue
+        hit_zone = vault._zone_of(resolved)
+        if zone is not None and hit_zone != zone:
+            continue
+        rag_score = float(getattr(raw_hit, "score", 0.0) or 0.0)
+        if canonical_path in merged:
+            entry = merged[canonical_path]
+            entry["match_type"] = "hybrid"
+            if entry["_rag"] is None or rag_score > entry["_rag"]:
+                entry["_rag"] = rag_score
+                entry["rag_score"] = round(rag_score, 4)
+            continue
+        try:
+            note = vault.read_note(canonical_path)
+        except (VaultSecurityError, FileNotFoundError, OSError, UnicodeDecodeError):
+            continue
+        snippet_raw = " ".join(str(getattr(raw_hit, "content", "") or "").split())
+        snippet = snippet_raw[:200] + ("…" if len(snippet_raw) > 200 else "")
+        merged[canonical_path] = {
+            "path": note["path"],
+            "title": note["title"],
+            "zone": note["zone"],
+            "tags": note["tags"],
+            "score": round(rag_score, 4),
+            "rag_score": round(rag_score, 4),
+            "snippet": snippet,
+            "match_type": "rag",
+            "_lex": 0.0,
+            "_rag": rag_score,
+        }
+
+    ordered = sorted(
+        merged.values(),
+        key=lambda item: (
+            -float(item["_lex"]),
+            -(float(item["_rag"]) if item["_rag"] is not None else float("-inf")),
+            str(item["path"]).casefold(),
+        ),
+    )[:bounded_limit]
+    for item in ordered:
+        item.pop("_lex", None)
+        item.pop("_rag", None)
+    return ordered
+
+
 def register_copilot_tools(
     server: MCPToolServer,
     *,
@@ -71,6 +181,7 @@ def register_copilot_tools(
     mail_router=None,
     github_client=None,
     feishu_client=None,
+    obsidian_retriever=None,
 ) -> MCPToolServer:
     """Register every copilot tool whose backing dependency is available."""
 
@@ -79,12 +190,12 @@ def register_copilot_tools(
 
         @server.register(
             name="vault_search",
-            description="Search Obsidian notes by title, tag or content",
+            description="Search Obsidian notes by title, tag, content or personal RAG index",
             input_schema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
-                    "zone": {"type": "string", "enum": ["wiki", "raw", "notes", "daily"]},
+                    "zone": {"type": "string", "enum": ["wiki", "raw", "notes", "daily", "source"]},
                     "limit": {"type": "integer", "default": 10},
                 },
                 "required": ["query"],
@@ -94,7 +205,14 @@ def register_copilot_tools(
         async def vault_search(
             query: str, zone: str | None = None, limit: int = 10
         ) -> list[dict[str, Any]]:
-            return vault.search(query, zone=zone, limit=int(limit))
+            return await asyncio.to_thread(
+                search_obsidian_vault,
+                vault,
+                query,
+                zone=zone,
+                limit=int(limit),
+                obsidian_retriever=obsidian_retriever,
+            )
 
         @server.register(
             name="vault_read_note",

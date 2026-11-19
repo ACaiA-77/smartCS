@@ -223,6 +223,7 @@ def create_default_tools(
     mail_router=None,
     github_client=None,
     feishu_client=None,
+    obsidian_retriever=None,
 ) -> MCPToolServer:
     """注册 Personal Copilot 默认工具集（共享知识检索 + 已配置连接器工具）。"""
 
@@ -285,6 +286,7 @@ def create_default_tools(
             mail_router=mail_router,
             github_client=github_client,
             feishu_client=feishu_client,
+            obsidian_retriever=obsidian_retriever,
         )
 
     return server

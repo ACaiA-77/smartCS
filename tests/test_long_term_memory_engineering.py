@@ -104,3 +104,33 @@ def test_save_and_reload_preserves_documents_and_index(tmp_path):
     results = reloaded.search("理财产品A收益率", top_k=1)
 
     assert results[0]["source"] == "product.md"
+
+
+def test_chunk_text_bounds_oversized_blocks_and_remove_reuses_vectors(tmp_path):
+    oversized = "# Big Block\n\n" + ("word " * 400).strip() + "\n" + ("线" * 1200)
+    chunks = LongTermMemory._chunk_text(oversized, chunk_size=512, overlap=128)
+    assert len(chunks) >= 4
+    assert all(len(chunk) <= 512 for chunk in chunks)
+
+    class CountingBackend(TinyEmbeddingBackend):
+        def __init__(self) -> None:
+            self.embed_calls = 0
+
+        def embed_batch(self, texts: list[str]) -> list[np.ndarray]:
+            self.embed_calls += 1
+            return [self.embed_text(text) for text in texts]
+
+    backend = CountingBackend()
+    mem = LongTermMemory(index_path=str(tmp_path / "faiss_index"), embedding_backend=backend)
+    mem.add_documents_batch(
+        [
+            {"content": "理财产品A年化收益率说明", "source": "a.md", "metadata": {"source_path": "/v/a.md"}},
+            {"content": "退款政策说明", "source": "b.md", "metadata": {"source_path": "/v/b.md"}},
+        ]
+    )
+    assert backend.embed_calls == 1
+    removed = mem.remove_documents_by_source_paths(["/v/b.md"])
+    assert removed == 1
+    assert backend.embed_calls == 1
+    assert len(mem.documents) == 1
+    assert [hit["source"] for hit in mem.search("理财产品", top_k=2)] == ["a.md"]

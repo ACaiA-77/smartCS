@@ -138,7 +138,7 @@ class WriteAuthorizationService:
         def write(_connection, cursor):
             cursor.execute(
                 """SELECT open_write_operations FROM agent_run_receipt
-                   WHERE session_id=%s AND client_request_id=%s LIMIT 1""",
+                   WHERE session_id=%s AND client_request_id=%s LIMIT 1 FOR UPDATE""",
                 (session_id, client_request_id),
             )
             row = cursor.fetchone()
@@ -149,15 +149,47 @@ class WriteAuthorizationService:
                 except json.JSONDecodeError:
                     existing = []
             operations = list(existing or [])
+            existing_op_id = None
+            for item in operations:
+                if (
+                    isinstance(item, dict)
+                    and item.get("tool") == tool
+                    and item.get("target_hash") == target_hash
+                    and item.get("operation_id")
+                    and (
+                        pending_action_id is None
+                        or item.get("pending_action_id") == pending_action_id
+                    )
+                ):
+                    existing_op_id = str(item["operation_id"])
+                    break
+
             if pending_action_id is None:
-                for item in operations:
+                if existing_op_id is not None:
+                    return existing_op_id
+            else:
+                entry["pending_action_id"] = pending_action_id
+                if existing_op_id is not None:
+                    cursor.execute(
+                        """SELECT status, operation_id
+                           FROM pending_action
+                           WHERE id=%s AND session_id=%s AND type='tool'
+                           LIMIT 1
+                           FOR UPDATE""",
+                        (pending_action_id, session_id),
+                    )
+                    pending_row = cursor.fetchone()
                     if (
-                        isinstance(item, dict)
-                        and item.get("tool") == tool
-                        and item.get("target_hash") == target_hash
-                        and item.get("operation_id")
+                        pending_row is not None
+                        and str(pending_row.get("status") or "") == "pending"
+                        and str(pending_row.get("operation_id") or "") == existing_op_id
                     ):
-                        return str(item["operation_id"])
+                        return existing_op_id
+                    raise AuthorizationDenied(
+                        "pending_action_not_reserved",
+                        "pending action could not be reserved for this operation",
+                    )
+
             operations.append(entry)
             cursor.execute(
                 """UPDATE agent_run_receipt SET open_write_operations=CAST(%s AS JSON)
@@ -173,8 +205,10 @@ class WriteAuthorizationService:
             if pending_action_id is not None:
                 cursor.execute(
                     """UPDATE pending_action SET operation_id=%s
-                       WHERE id=%s AND status='pending' AND operation_id IS NULL""",
-                    (operation_id, pending_action_id),
+                       WHERE id=%s AND session_id=%s AND type='tool'
+                         AND status='pending' AND operation_id IS NULL
+                         AND expires_at > CURRENT_TIMESTAMP(3)""",
+                    (operation_id, pending_action_id, session_id),
                 )
                 if cursor.rowcount != 1:
                     raise AuthorizationDenied(
@@ -193,7 +227,7 @@ class WriteAuthorizationService:
         def write(_connection, cursor):
             cursor.execute(
                 """SELECT open_write_operations FROM agent_run_receipt
-                   WHERE session_id=%s AND client_request_id=%s LIMIT 1""",
+                   WHERE session_id=%s AND client_request_id=%s LIMIT 1 FOR UPDATE""",
                 (session_id, client_request_id),
             )
             row = cursor.fetchone()
@@ -244,13 +278,53 @@ class WriteAuthorizationService:
 
         return await self.db._call(read)
 
+    async def list_active_pending_actions(
+        self,
+        *,
+        user_id: str,
+        session_id: str | None = None,
+        limit: int = 15,
+    ) -> list[dict[str, Any]]:
+        """List active, unexpired, unreserved tool pending actions for a user."""
+
+        if not user_id or limit <= 0:
+            return []
+
+        def read(_connection, cursor):
+            if session_id is not None:
+                cursor.execute(
+                    """SELECT id, session_id, type, payload, expires_at
+                       FROM pending_action
+                       WHERE session_id=%s AND user_id=%s AND type='tool'
+                         AND status='pending' AND operation_id IS NULL
+                         AND expires_at > CURRENT_TIMESTAMP(3)
+                       ORDER BY created_at DESC
+                       LIMIT %s""",
+                    (session_id, user_id, int(limit)),
+                )
+            else:
+                cursor.execute(
+                    """SELECT id, session_id, type, payload, expires_at
+                       FROM pending_action
+                       WHERE user_id=%s AND type='tool'
+                         AND status='pending' AND operation_id IS NULL
+                         AND expires_at > CURRENT_TIMESTAMP(3)
+                       ORDER BY created_at DESC
+                       LIMIT %s""",
+                    (user_id, int(limit)),
+                )
+            return cursor.fetchall() or []
+
+        return await self.db._call(read)
+
     async def expire_pending_action(self, pending_id: str) -> bool:
         """Atomic transition pending -> expired. Only one caller can win."""
 
         def write(_connection, cursor):
             cursor.execute(
                 """UPDATE pending_action SET status='expired'
-                   WHERE id=%s AND status='pending' AND expires_at <= CURRENT_TIMESTAMP(3)""",
+                   WHERE id=%s AND status='pending' AND operation_id IS NULL
+                     AND expires_at <= CURRENT_TIMESTAMP(3)""",
                 (pending_id,),
             )
             return cursor.rowcount == 1
@@ -263,6 +337,27 @@ class WriteAuthorizationService:
                 """UPDATE pending_action SET status='consumed'
                    WHERE id=%s AND status='pending' AND operation_id=%s""",
                 (pending_id, operation_id),
+            )
+            return cursor.rowcount == 1
+
+        return await self.db._call(write)
+
+    async def cancel_pending_action(
+        self, pending_id: str, *, session_id: str, user_id: str
+    ) -> bool:
+        """Atomic transition pending -> cancelled for unreserved active tool entries."""
+
+        def write(_connection, cursor):
+            cursor.execute(
+                """UPDATE pending_action SET status='cancelled'
+                   WHERE id=%s
+                     AND session_id=%s
+                     AND user_id=%s
+                     AND type='tool'
+                     AND status='pending'
+                     AND operation_id IS NULL
+                     AND expires_at > CURRENT_TIMESTAMP(3)""",
+                (pending_id, session_id, user_id),
             )
             return cursor.rowcount == 1
 

@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import uuid
 
 import httpx
 import pytest
 
 import api.main as api_main
 from auth.context import UserContext
+from internal_api.write_authorization import WriteAuthorizationService
 from knowledge_engine import ObsidianVault, OntologyStore
+from tests.app_state import patch_app_state
+from tests.internal_api_helpers import TEST_DATABASE, apply_migration, platform_database
 from tool_runtime.mcp_server import MCPToolServer, create_default_tools
 
 
@@ -42,6 +46,7 @@ def copilot_web_runtime(tmp_path, monkeypatch):
 
     monkeypatch.setattr(api_main, "copilot_dependencies", deps)
     monkeypatch.setattr(api_main, "mcp_server", server)
+    monkeypatch.setattr(api_main, "obsidian_retriever", None)
     monkeypatch.setitem(
         api_main.app.dependency_overrides,
         api_main.get_current_user,
@@ -70,6 +75,10 @@ async def test_workbench_is_single_track_copilot():
         assert 'data-profile="copilot"' in page.text
         assert "<title>Personal Copilot · 个人受控工作台</title>" in page.text
         assert "ecommerce-context" not in page.text
+        app_script_idx = page.text.index('/ui/app.js')
+        lucide_idx = page.text.index('https://unpkg.com/lucide@latest')
+        assert app_script_idx < lucide_idx
+        assert '<script async src="https://unpkg.com/lucide@latest"' in page.text
 
 
 @pytest.mark.asyncio
@@ -83,6 +92,10 @@ async def test_copilot_routes_require_auth():
             res = await client.get(path)
             assert res.status_code == 401
             assert res.json() == {"detail": "authentication required"}
+
+        cancel_res = await client.post("/api/copilot/pending/missing/cancel")
+        assert cancel_res.status_code == 401
+        assert cancel_res.json() == {"detail": "authentication required"}
 
 
 @pytest.mark.asyncio
@@ -166,3 +179,237 @@ async def test_copilot_context_note_and_entity_endpoints(copilot_web_runtime, mo
         assert ent["neighbors"][0]["entity"]["name"] == "Project Alpha"
 
         assert (await client.get("/api/copilot/ontology/entity/nonexistent")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_copilot_web_source_vault_list_search_backlinks_and_rag(tmp_path, monkeypatch):
+    from api.copilot_bootstrap import build_obsidian_retriever
+    from memory.long_term import HashEmbeddingBackend
+    from scripts.ingest_obsidian_vault import ingest_obsidian_vault
+
+    managed = tmp_path / "managed"
+    source = tmp_path / "source_vault"
+    (source / "topics").mkdir(parents=True)
+    (source / "topics" / "alpha.md").write_text(
+        "# Alpha Concept\n\nsemantic phrase about distributed consensus.\n",
+        encoding="utf-8",
+    )
+    (source / "topics" / "beta.md").write_text(
+        "# Beta Ref\n\nReferences [[topics/alpha]] here.\n",
+        encoding="utf-8",
+    )
+    (source / ".obsidian").mkdir()
+    (source / ".obsidian" / "secret.md").write_text("# Hidden\n\nmust stay hidden", encoding="utf-8")
+
+    index_path = tmp_path / "obsidian_index"
+    ingest_obsidian_vault(
+        managed,
+        source_vault_dir=source,
+        index_path=index_path,
+        embedding_backend=HashEmbeddingBackend(dimension=32),
+        reset=True,
+    )
+    retriever = build_obsidian_retriever(
+        {"OBSIDIAN_INDEX_PATH": str(index_path)},
+        embedding_backend=HashEmbeddingBackend(dimension=32),
+    )
+    assert retriever is not None
+
+    vault = ObsidianVault(managed, source_root=source)
+    deps = {
+        "vault": vault,
+        "ontology": None,
+        "wiki_compiler": None,
+        "mail_router": None,
+        "github_client": None,
+        "feishu_client": None,
+    }
+    server = create_default_tools(MCPToolServer(), obsidian_retriever=retriever, **deps)
+    monkeypatch.setattr(api_main, "copilot_dependencies", deps)
+    monkeypatch.setattr(api_main, "mcp_server", server)
+    monkeypatch.setattr(api_main, "obsidian_retriever", retriever)
+    monkeypatch.setitem(
+        api_main.app.dependency_overrides,
+        api_main.get_current_user,
+        lambda: UserContext(account_id=1, username="copilot", business_user_id="user_003"),
+    )
+
+    async with await _client() as client:
+        ctx = (await client.get("/api/copilot/context")).json()
+        assert ctx["connectors"]["obsidian"]["source_enabled"] is True
+        assert ctx["connectors"]["obsidian"]["rag_index_enabled"] is True
+        assert ctx["connectors"]["obsidian"]["rag_documents"] == 2
+        assert ctx["connectors"]["obsidian"]["zones"]["source"] == 2
+
+        listed = (await client.get("/api/copilot/vault/notes", params={"zone": "source"})).json()
+        assert listed["total"] == 2
+        assert {item["path"] for item in listed["notes"]} == {
+            "source/topics/alpha.md",
+            "source/topics/beta.md",
+        }
+
+        rag_res = await client.get(
+            "/api/copilot/vault/search",
+            params={"query": "distributed consensus", "zone": "source", "mode": "rag"},
+        )
+        assert rag_res.status_code == 200
+        rag_body = rag_res.json()
+        assert rag_body["rag_enabled"] is True
+        assert any(hit["path"] == "source/topics/alpha.md" for hit in rag_body["hits"])
+
+        bl_res = await client.get(
+            "/api/copilot/vault/backlinks",
+            params={"target": "source/topics/alpha.md"},
+        )
+        assert bl_res.status_code == 200
+        assert [item["path"] for item in bl_res.json()["backlinks"]] == ["source/topics/beta.md"]
+
+        note_res = await client.get(
+            "/api/copilot/vault/note",
+            params={"path": "source/topics/alpha.md"},
+        )
+        assert note_res.status_code == 200
+        assert [item["path"] for item in note_res.json()["backlinks"]] == ["source/topics/beta.md"]
+
+        for hidden_path in ("source/.obsidian/secret.md", ".obsidian/secret.md", "source/../secret.md"):
+            assert (
+                await client.get("/api/copilot/vault/note", params={"path": hidden_path})
+            ).status_code == 400
+        assert (
+            await client.get("/api/copilot/vault/search", params={"query": "x", "zone": "bogus"})
+        ).status_code == 400
+        assert (
+            await client.get("/api/copilot/vault/backlinks", params={"target": "../outside"})
+        ).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_copilot_pending_cancel_endpoint_real_mysql(copilot_web_runtime, monkeypatch):
+    monkeypatch.setenv("MYSQL_DATABASE", TEST_DATABASE)
+    apply_migration()
+    db = platform_database()
+    store = WriteAuthorizationService(db)
+
+    owner_id = f"user-cancel-{uuid.uuid4().hex}"
+    other_id = f"user-other-{uuid.uuid4().hex}"
+    session_id = f"sess-cancel-{uuid.uuid4().hex}"
+
+    monkeypatch.setitem(
+        api_main.app.dependency_overrides,
+        api_main.get_current_user,
+        lambda: UserContext(account_id=1, username="copilot", business_user_id=owner_id),
+    )
+    patch_app_state(monkeypatch, api_main.app, platform_database=db)
+
+    payload = {
+        "tool": "mail_send",
+        "arguments": {
+            "account": "163",
+            "to": "bob@example.com",
+            "subject": "Weekly Sync",
+        },
+    }
+    own_id = (
+        await store.create_pending_action(
+            session_id=session_id,
+            user_id=owner_id,
+            action_type="tool",
+            payload=payload,
+        )
+    )["pending_action_id"]
+    other_id_action = (
+        await store.create_pending_action(
+            session_id=session_id,
+            user_id=other_id,
+            action_type="tool",
+            payload=payload,
+        )
+    )["pending_action_id"]
+    consumed_id = (
+        await store.create_pending_action(
+            session_id=session_id,
+            user_id=owner_id,
+            action_type="tool",
+            payload=payload,
+        )
+    )["pending_action_id"]
+    reserved_id = (
+        await store.create_pending_action(
+            session_id=session_id,
+            user_id=owner_id,
+            action_type="tool",
+            payload=payload,
+        )
+    )["pending_action_id"]
+
+    await db._call(
+        lambda _c, cur: (
+            cur.execute(
+                "UPDATE pending_action SET status='consumed', operation_id='op-consumed-1' WHERE id=%s",
+                (consumed_id,),
+            ),
+            cur.execute(
+                "UPDATE pending_action SET operation_id='op-reserved-1' WHERE id=%s",
+                (reserved_id,),
+            ),
+        )
+    )
+
+    try:
+        async with await _client() as client:
+            before_ctx = await client.get("/api/copilot/context")
+            assert before_ctx.status_code == 200
+            before_ids = [item["pending_action_id"] for item in before_ctx.json()["pending_actions"]]
+            assert own_id in before_ids
+            assert other_id_action not in before_ids
+            assert consumed_id not in before_ids
+            assert reserved_id not in before_ids
+
+            ok_res = await client.post(f"/api/copilot/pending/{own_id}/cancel")
+            assert ok_res.status_code == 200, ok_res.text
+            assert ok_res.json() == {
+                "pending_action_id": own_id,
+                "session_id": session_id,
+                "status": "cancelled",
+                "cancelled": True,
+            }
+
+            after_ctx = await client.get("/api/copilot/context")
+            assert after_ctx.status_code == 200
+            after_ids = [item["pending_action_id"] for item in after_ctx.json()["pending_actions"]]
+            assert own_id not in after_ids
+
+            row = await store.load_pending_action(own_id)
+            assert row is not None and row["status"] == "cancelled"
+
+            again_res = await client.post(f"/api/copilot/pending/{own_id}/cancel")
+            assert again_res.status_code == 409
+
+            reserved_res = await client.post(f"/api/copilot/pending/{reserved_id}/cancel")
+            assert reserved_res.status_code == 409
+            reserved_row = await store.load_pending_action(reserved_id)
+            assert reserved_row is not None and reserved_row["status"] == "pending"
+
+            other_res = await client.post(f"/api/copilot/pending/{other_id_action}/cancel")
+            assert other_res.status_code == 404
+            other_row = await store.load_pending_action(other_id_action)
+            assert other_row is not None and other_row["status"] == "pending"
+
+            missing_res = await client.post(f"/api/copilot/pending/{uuid.uuid4()}/cancel")
+            assert missing_res.status_code == 404
+
+            consumed_res = await client.post(f"/api/copilot/pending/{consumed_id}/cancel")
+            assert consumed_res.status_code == 409
+            consumed_row = await store.load_pending_action(consumed_id)
+            assert consumed_row is not None and consumed_row["status"] == "consumed"
+
+            patch_app_state(monkeypatch, api_main.app, platform_database=None)
+            no_db_res = await client.post(f"/api/copilot/pending/{own_id}/cancel")
+            assert no_db_res.status_code == 503
+    finally:
+        await db._call(
+            lambda _c, cur: cur.execute(
+                "DELETE FROM pending_action WHERE id IN (%s,%s,%s,%s)",
+                (own_id, other_id_action, consumed_id, reserved_id),
+            )
+        )

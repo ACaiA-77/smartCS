@@ -13,7 +13,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Iterable, Protocol
 
 import numpy as np
 
@@ -309,18 +309,48 @@ class KnowledgeMemory:
         return doc_id
 
     def remove_documents_by_source_path(self, source_path: str) -> int:
+        return self.remove_documents_by_source_paths([source_path])
+
+    def remove_documents_by_source_paths(self, source_paths: Iterable[str]) -> int:
+        targets = {str(path) for path in source_paths if str(path)}
+        if not targets:
+            return 0
         before = len(self._documents)
-        self._documents = [
-            doc
-            for doc in self._documents
-            if doc.get("metadata", {}).get("source_path") != source_path
-        ]
-        removed = before - len(self._documents)
-        if removed:
-            self._rebuild_index()
+        keep_indices: list[int] = []
+        kept_docs: list[dict[str, Any]] = []
+        for idx, doc in enumerate(self._documents):
+            if doc.get("metadata", {}).get("source_path") not in targets:
+                keep_indices.append(idx)
+                kept_docs.append(doc)
+        removed = before - len(kept_docs)
+        if not removed:
+            return 0
+
+        self._documents = kept_docs
+        if (
+            faiss is not None
+            and self._index is not None
+            and int(self._index.ntotal) == before
+        ):
+            try:
+                rebuilt = faiss.IndexFlatIP(self.embedding_dim)
+                if keep_indices:
+                    vectors = [self._index.reconstruct(idx) for idx in keep_indices]
+                    matrix = np.vstack(vectors).astype(np.float32)
+                    rebuilt.add(matrix)
+                self._index = rebuilt
+                return removed
+            except Exception:
+                pass
+        self._rebuild_index()
         return removed
 
-    def add_documents_batch(self, documents: list[dict]) -> list[str]:
+    def add_documents_batch(
+        self,
+        documents: list[dict],
+        *,
+        embeddings: Iterable[np.ndarray] | None = None,
+    ) -> list[str]:
         prepared_docs: list[dict[str, Any]] = []
         doc_ids: list[str] = []
 
@@ -343,7 +373,11 @@ class KnowledgeMemory:
         self._documents.extend(prepared_docs)
 
         if self._index is not None and prepared_docs:
-            vectors = self._embed_batch([doc["content"] for doc in prepared_docs])
+            vectors = (
+                [np.asarray(vec, dtype=np.float32) for vec in embeddings]
+                if embeddings is not None
+                else self._embed_batch([doc["content"] for doc in prepared_docs])
+            )
             matrix = np.vstack(vectors).astype(np.float32)
             self._index.add(matrix)
 
@@ -492,10 +526,60 @@ class KnowledgeMemory:
         return datetime.now(timezone.utc).isoformat()
 
     @staticmethod
+    def _split_oversized_piece(piece: str, chunk_size: int, overlap: int) -> list[str]:
+        if len(piece) <= chunk_size:
+            return [piece] if piece else []
+        lines = [line.strip() for line in piece.splitlines() if line.strip()]
+        units = lines if len(lines) > 1 else [piece]
+        parts: list[str] = []
+        current = ""
+        step = max(1, chunk_size - max(0, min(overlap, chunk_size // 2)))
+        for unit in units:
+            if len(unit) > chunk_size:
+                if current:
+                    parts.append(current.strip())
+                    current = ""
+                for start in range(0, len(unit), step):
+                    segment = unit[start : start + chunk_size].strip()
+                    if segment:
+                        parts.append(segment)
+                continue
+            candidate = f"{current}\n{unit}".strip() if current else unit
+            if len(candidate) <= chunk_size:
+                current = candidate
+            else:
+                if current:
+                    parts.append(current.strip())
+                current = unit
+        if current.strip():
+            parts.append(current.strip())
+        return parts
+
+    @staticmethod
     def _chunk_text(text: str, chunk_size: int = 512, overlap: int = 128) -> list[str]:
         paragraphs = text.split("\n\n")
         chunks = []
         current_chunk = ""
+
+        def _append_unit(unit: str) -> None:
+            nonlocal current_chunk
+            if not unit:
+                return
+            if len(current_chunk) + len(unit) <= chunk_size:
+                current_chunk += unit + "\n\n"
+                return
+            if current_chunk.strip():
+                chunks.append(current_chunk.strip())
+                overlap_text = current_chunk[-overlap:] if len(current_chunk) > overlap else current_chunk
+            else:
+                overlap_text = ""
+            if len(unit) <= chunk_size:
+                candidate = overlap_text + unit + "\n\n"
+                current_chunk = candidate if len(candidate) <= chunk_size else (unit + "\n\n")
+                return
+            current_chunk = ""
+            for piece in KnowledgeMemory._split_oversized_piece(unit, chunk_size, overlap):
+                _append_unit(piece)
 
         for para in paragraphs:
             para = para.strip()
@@ -506,23 +590,31 @@ class KnowledgeMemory:
                 current_chunk += para + "\n\n"
                 continue
 
-            if current_chunk:
-                chunks.append(current_chunk.strip())
-                overlap_text = current_chunk[-overlap:] if len(current_chunk) > overlap else current_chunk
-                current_chunk = overlap_text + para + "\n\n"
+            if len(para) <= chunk_size:
+                _append_unit(para)
                 continue
+
+            if current_chunk.strip():
+                chunks.append(current_chunk.strip())
+                current_chunk = ""
 
             sentences = re.split(r"(?<=[。！？.!?])\s*", para)
             for sentence in sentences:
                 sentence = sentence.strip()
                 if not sentence:
                     continue
-                if len(current_chunk) + len(sentence) <= chunk_size:
-                    current_chunk += sentence
+                if len(sentence) <= chunk_size:
+                    if len(current_chunk) + len(sentence) <= chunk_size:
+                        current_chunk += sentence
+                    else:
+                        if current_chunk.strip():
+                            chunks.append(current_chunk.strip())
+                        current_chunk = sentence
                 else:
-                    if current_chunk:
+                    if current_chunk.strip():
                         chunks.append(current_chunk.strip())
-                    current_chunk = sentence
+                        current_chunk = ""
+                    chunks.extend(KnowledgeMemory._split_oversized_piece(sentence, chunk_size, overlap))
 
         if current_chunk.strip():
             chunks.append(current_chunk.strip())

@@ -275,7 +275,7 @@ export function createCopilotReadTools(deps: CopilotReadDeps): ToolDefinition[] 
         {
           query: Type.String({ description: "搜索查询" }),
           zone: Type.Optional(
-            Type.String({ enum: ["wiki", "raw", "notes", "daily"], description: "限定区域" }),
+            Type.String({ enum: ["wiki", "raw", "notes", "daily", "source"], description: "限定区域" }),
           ),
           limit: Type.Optional(Type.Integer({ description: "返回数量", default: 10 })),
         },

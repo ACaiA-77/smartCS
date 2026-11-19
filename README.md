@@ -21,7 +21,7 @@ Python Runtime /internal/* (FastAPI)       ← 决定「是否允许发生」
 **核心边界规则（由构造保证）**：
 - Harness 只负责 Agent 循环、技能披露、SSE 状态推送与会话转录，不持久化业务状态、不自铸身份。
 - 低风险本地写入（Obsidian 日记追加、笔记提案、Wiki 编译、Ontology 写入、邮件草稿）经同轮确定性同意判定后由 `ExecutionLedger` 幂等执行。
-- 高风险外部副作用（发邮件、创建 GitHub Issue、发表评论、发送飞书消息）强制走两段式 **准备（`copilot_action_prepare` 冻结 `pending_action`）→ 人工明确确认 → 执行（`copilot_action_confirm`）**。
+- 高风险外部副作用（发邮件、创建 GitHub Issue、发表评论、发送飞书消息）强制走两段式 **准备（`copilot_action_prepare` 冻结 `pending_action`）→ 人工明确确认 → 执行（`copilot_action_confirm`）**；取消待确认操作由运行时直接将 `pending_action` 置为 `cancelled`，不经过模型。
 
 相关设计文档见 [docs/personal_copilot_plan.md](docs/personal_copilot_plan.md)，Harness 侧说明见 [pi-harness/README.md](pi-harness/README.md)。
 
@@ -56,9 +56,9 @@ Copy-Item .env.example .env
 - `COPILOT_DB_PATH=./data/copilot.db`（执行账本与审批存储）
 - `AUTH_JWT_SECRET`、`INTERNAL_SERVICE_JWT_SECRET`（至少 32 字节随机密钥）
 - 可选连接器（未完整配置自动保持未挂载）：
-  - `OBSIDIAN_VAULT_PATH`、`COPILOT_ONTOLOGY_DB_PATH`
+  - `OBSIDIAN_VAULT_PATH=./data/obsidian_vault`（受管写区）、`OBSIDIAN_SOURCE_VAULT_PATH`（可选只读源 Vault，从不初始化或写入）、`OBSIDIAN_INDEX_PATH=./vector_store/obsidian_index`（独立个人本地 RAG 索引）、`COPILOT_ONTOLOGY_DB_PATH=./data/ontology.sqlite`
   - `GITHUB_TOKEN`
-  - `FEISHU_APP_ID`、`FEISHU_APP_SECRET`
+  - `FEISHU_APP_ID`、`FEISHU_APP_SECRET`（回调卡片取消还需 `FEISHU_VERIFICATION_TOKEN` / `FEISHU_ENCRYPT_KEY` 与 `FEISHU_OWNER_OPEN_ID` + `FEISHU_CHAT_BUSINESS_USER_ID`）
   - `MAIL_163_USERNAME` / `MAIL_163_PASSWORD`、`GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN`
 
 ### 2. 初始化登录账号并启动服务
@@ -82,7 +82,7 @@ cd pi-harness && npm ci && npm run dev
 
 ```text
 python-impl/
-├── api/                   # FastAPI 入口、Copilot 依赖装配、Web 只读接口、飞书 Bot Webhook
+├── api/                   # FastAPI 入口、Copilot 依赖装配、Web 工作台接口、飞书 Bot Webhook
 ├── auth/                  # HttpOnly Cookie JWT 签发与用户上下文鉴权
 ├── connectors/            # 163/Gmail、GitHub、飞书异步客户端
 ├── knowledge_engine/      # Obsidian Vault 沙箱、SQLite Ontology、WikiCompiler
@@ -108,8 +108,8 @@ python-impl/
 通用混合检索位于 `rag/`（支持 `agent_engineering` 语料与 Obsidian Vault 入库）：
 
 ```powershell
-# 导入 Obsidian Vault 到向量库
-python -m scripts.ingest_obsidian_vault --vault-dir ./data/obsidian_vault --index-path ./vector_store/faiss_index
+# 导入受管工作区与只读源 Vault 到独立个人 Obsidian 向量库（仅允许本地嵌入后端，保留共享索引且不暴露给共享 MCP 服务）
+python -m scripts.ingest_obsidian_vault --vault-dir ./data/obsidian_vault --source-vault-dir <read-only-vault-path> --index-path ./vector_store/obsidian_index --embedding-backend local
 
 # 构建双域/单域混合检索索引（默认 hash backend 离线验证；生产请指定 --embedding-backend local）
 python -m scripts.build_rag_indexes --domain agent_engineering --embedding-backend local --embedding-model BAAI/bge-m3 --output-dir artifacts/rag_jieba/production_indexes

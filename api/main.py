@@ -17,7 +17,13 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from api.copilot_bootstrap import build_copilot_dependencies
+from api.copilot_bootstrap import (
+    build_copilot_dependencies,
+    build_obsidian_retriever,
+    is_local_embedding_backend,
+    is_local_reranker,
+    obsidian_rag_document_count,
+)
 from api.copilot_web import configure_copilot_web, router as copilot_web_router
 from api.feishu_bot import configure_feishu_client, router as feishu_router
 from auth.context import UserContext
@@ -69,10 +75,23 @@ _PUBLIC_READ_TOOLS = frozenset(
 long_term_memory = KnowledgeMemory(index_path=os.getenv("FAISS_INDEX_PATH", "./vector_store/faiss_index"))
 shared_retriever = long_term_memory.get_retriever()
 copilot_dependencies = build_copilot_dependencies()
+obsidian_retriever = build_obsidian_retriever(
+    embedding_backend=(
+        long_term_memory.embedding_backend
+        if is_local_embedding_backend(long_term_memory.embedding_backend)
+        else None
+    ),
+    reranker=(
+        shared_retriever.reranker
+        if is_local_reranker(getattr(shared_retriever, "reranker", None))
+        else None
+    ),
+)
 mcp_server = create_default_tools(
     MCPToolServer(),
     long_term_memory=long_term_memory,
     retriever=shared_retriever,
+    obsidian_retriever=obsidian_retriever,
     **copilot_dependencies,
 )
 configure_feishu_client(copilot_dependencies.get("feishu_client"))
@@ -103,13 +122,17 @@ def _log_rag_runtime() -> None:
         domains = ",".join(shared_retriever._domains(None)) or "none"
     except Exception:
         domains = "unknown"
+    vault = copilot_dependencies.get("vault")
+    obsidian_docs = obsidian_rag_document_count(obsidian_retriever)
     logger.warning(
-        "RAG runtime: mode=%s sparse_mode=%s domains=%s embedding=%s reranker=%s",
+        "RAG runtime: mode=%s sparse_mode=%s domains=%s embedding=%s reranker=%s obsidian_source=%s obsidian_rag_docs=%d",
         "artifact" if shared_retriever.is_artifact_mode else "legacy",
         getattr(shared_retriever, "sparse_mode", "unknown"),
         domains,
         os.getenv("EMBEDDING_MODEL", "default"),
         os.getenv("RAG_RERANKER_BACKEND", "fake"),
+        bool(vault is not None and getattr(vault, "source_root", None) is not None),
+        obsidian_docs,
     )
 
 
@@ -214,6 +237,7 @@ async def private_api_responses(request: Request, call_next):
 configure_copilot_web(
     dependencies_getter=lambda: copilot_dependencies,
     mcp_server_getter=lambda: mcp_server,
+    obsidian_retriever_getter=lambda: obsidian_retriever,
 )
 app.include_router(internal_router)
 app.include_router(feishu_router)

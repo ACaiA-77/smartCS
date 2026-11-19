@@ -246,12 +246,35 @@ class FakeCursor:
                 self.rowcount = 1
         elif upper.startswith("UPDATE PENDING_ACTION SET OPERATION_ID"):
             pending = self.database.pending.get(values[1])
+            expires_at = pending["expires_at"] if pending is not None else None
+            if expires_at is not None and expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
             if (
                 pending is not None
+                and pending["session_id"] == values[2]
+                and pending["type"] == "tool"
                 and pending["status"] == "pending"
                 and pending["operation_id"] is None
+                and expires_at is not None
+                and expires_at > datetime.now(timezone.utc)
             ):
                 pending["operation_id"] = values[0]
+                self.rowcount = 1
+        elif upper.startswith("SELECT STATUS, OPERATION_ID"):
+            pending = self.database.pending.get(values[0])
+            if (
+                pending is not None
+                and pending["session_id"] == values[1]
+                and pending["type"] == "tool"
+            ):
+                expires_at = pending["expires_at"]
+                if expires_at is not None and expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                self._row = {
+                    "status": pending["status"],
+                    "operation_id": pending["operation_id"],
+                    "is_live": int(expires_at is not None and expires_at > datetime.now(timezone.utc)),
+                }
                 self.rowcount = 1
         elif upper.startswith("INSERT INTO PENDING_ACTION"):
             pending_id, session_id, user_id, action_type, payload, expires_at = values
@@ -1091,3 +1114,150 @@ def test_ingest_obsidian_vault_builds_updates_and_skips_proposals(tmp_path: Path
 def test_ingest_obsidian_vault_rejects_unknown_zones(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         ingest_obsidian_vault(tmp_path / "vault", zones=("private",))
+
+
+def test_ingest_read_only_source_vault_prunes_deletions_and_isolates_mcp_gateway(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from internal_api import mcp_gateway
+    from memory.long_term import OpenAIEmbeddingBackend
+
+    managed = tmp_path / "managed"
+    source = tmp_path / "source_vault"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("# Outside\n\nmust never enter index", encoding="utf-8")
+
+    (source / "nested" / "sub").mkdir(parents=True)
+    note_a = source / "nested" / "sub" / "a.md"
+    note_b = source / "nested" / "b.md"
+    note_a.write_text("# Note A\n\nprivate topic one", encoding="utf-8")
+    note_b.write_text("# Note B\n\nprivate topic two", encoding="utf-8")
+    (source / ".obsidian").mkdir()
+    (source / ".obsidian" / "hidden.md").write_text("# Hidden\n\nmust skip", encoding="utf-8")
+
+    index_path = tmp_path / "obsidian_index"
+    backend = HashEmbeddingBackend(dimension=32)
+
+    first = ingest_obsidian_vault(
+        managed,
+        source_vault_dir=source,
+        index_path=index_path,
+        embedding_backend=backend,
+        reset=True,
+    )
+    assert first.loaded_count == 2
+    assert first.removed_count == 0
+    assert first.total_documents == 2
+    assert first.zones == ("raw", "notes", "source")
+    for zone in ("wiki", "raw", "notes", "daily"):
+        assert not (source / zone).exists()
+
+    metadata = json.loads(index_path.with_suffix(".meta.json").read_text(encoding="utf-8"))
+    vault_paths = {doc["metadata"]["vault_path"] for doc in metadata}
+    assert vault_paths == {"source/nested/sub/a.md", "source/nested/b.md"}
+
+    # Deleting a note from source removes its chunks during incremental ingest.
+    note_b.unlink()
+    second = ingest_obsidian_vault(
+        managed,
+        source_vault_dir=source,
+        index_path=index_path,
+        embedding_backend=HashEmbeddingBackend(dimension=32),
+    )
+    assert second.removed_count == 1
+    assert second.skipped_count == 1
+    assert second.total_documents == 1
+
+    # Remote embedding backends are strictly rejected for private Obsidian notes.
+    fake_remote = object.__new__(OpenAIEmbeddingBackend)
+    with pytest.raises(ValueError, match="local embedding backend"):
+        ingest_obsidian_vault(
+            managed,
+            source_vault_dir=source,
+            index_path=index_path,
+            embedding_backend=fake_remote,
+        )
+    monkeypatch.setenv("EMBEDDING_BACKEND", "openai")
+    with pytest.raises(ValueError, match="local embedding backend"):
+        ingest_obsidian_vault(managed, source_vault_dir=source, index_path=index_path)
+    monkeypatch.setenv("EMBEDDING_BACKEND", "hash")
+
+    # Independent Obsidian RAG search works via vault_search even when RAG_INDEX_ROOT
+    # points elsewhere, and never leaks into knowledge_search or mcp_gateway.
+    from api.copilot_bootstrap import build_obsidian_retriever
+
+    monkeypatch.setenv("RAG_INDEX_ROOT", str(tmp_path / "other_rag_root"))
+    obsidian_retriever = build_obsidian_retriever(
+        {"OBSIDIAN_INDEX_PATH": str(index_path)},
+        embedding_backend=HashEmbeddingBackend(dimension=32),
+    )
+    assert obsidian_retriever is not None
+
+    vault = ObsidianVault(managed, source_root=source)
+    shared_memory = LongTermMemory(index_path=str(tmp_path / "shared_index"), embedding_dim=32)
+    shared_memory.add_document("Shared enterprise policy doc", "policy.md")
+
+    server = create_default_tools(
+        MCPToolServer(),
+        long_term_memory=shared_memory,
+        vault=vault,
+        obsidian_retriever=obsidian_retriever,
+    )
+    import asyncio
+
+    vault_hits = asyncio.run(
+        server.call_tool("vault_search", {"query": "private topic one", "zone": "source", "limit": 5})
+    )
+    assert vault_hits.success is True
+    assert [hit["path"] for hit in vault_hits.result] == ["source/nested/sub/a.md"]
+
+    shared_hits = asyncio.run(
+        server.call_tool("knowledge_search", {"query": "private topic one", "top_k": 5})
+    )
+    assert shared_hits.success is True
+    assert all("nested" not in str(hit) for hit in shared_hits.result)
+
+    gateway = mcp_gateway.create_server(retriever=shared_memory.get_retriever(use_env=False))
+    gw_result = asyncio.run(gateway.call_tool("knowledge_search", {"query": "private topic one", "top_k": 5}))
+    gw_text = str(gw_result)
+    assert "private topic one" not in gw_text and "a.md" not in gw_text
+
+
+def test_search_obsidian_vault_preserves_negative_reranker_scores(tmp_path: Path) -> None:
+    from rag.reranker import FakeReranker
+    from rag.retriever import HybridRetriever
+    from tool_runtime.copilot_tools import search_obsidian_vault
+
+    source = tmp_path / "source_vault"
+    source.mkdir()
+    (source / "first.md").write_text("# First\n\nsemantic query token\n", encoding="utf-8")
+    (source / "second.md").write_text("# Second\n\nunrelated lexical body\n", encoding="utf-8")
+
+    index_path = tmp_path / "obsidian_index"
+    backend = HashEmbeddingBackend(dimension=32)
+    ingest_obsidian_vault(
+        tmp_path / "managed",
+        source_vault_dir=source,
+        index_path=index_path,
+        embedding_backend=backend,
+        reset=True,
+    )
+    memory = LongTermMemory(index_path=str(index_path), embedding_backend=backend)
+    neg_reranker = FakeReranker(
+        score_fn=lambda _q, hit: -0.5 if "first.md" in str(hit.metadata.get("vault_path")) else -3.5
+    )
+    retriever = HybridRetriever(None, embedding_backend=backend, reranker=neg_reranker, legacy_memory=memory)
+    vault = ObsidianVault(tmp_path / "managed", source_root=source)
+
+    rag_hits = search_obsidian_vault(vault, "semantic", mode="rag", obsidian_retriever=retriever, limit=5)
+    assert [hit["path"] for hit in rag_hits] == ["source/first.md", "source/second.md"]
+    assert rag_hits[0]["rag_score"] == -0.5
+    assert rag_hits[1]["rag_score"] == -3.5
+
+    hybrid_hits = search_obsidian_vault(
+        vault, "semantic", mode="hybrid", obsidian_retriever=retriever, limit=5
+    )
+    assert hybrid_hits[0]["path"] == "source/first.md"
+    assert hybrid_hits[0]["match_type"] == "hybrid"
+    assert hybrid_hits[0]["rag_score"] == -0.5

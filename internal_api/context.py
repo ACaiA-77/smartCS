@@ -22,6 +22,7 @@ from auth.context import UserContext, current_user
 from internal_api.auth import resolve_service_session
 from internal_api.service_jwt import ServiceAuthUnavailable, decode_service_token
 from internal_api.tools import _bearer_token, _error
+from internal_api.write_authorization import WriteAuthorizationService
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -131,6 +132,21 @@ def _render_pending_actions(pending: list[dict[str, Any]], limit: int) -> str:
     return "\n".join(lines)
 
 
+def parse_pending_payload(row: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Decode `(tool, arguments)` from a `pending_action` row safely."""
+    raw_payload = row.get("payload")
+    if isinstance(raw_payload, str):
+        try:
+            payload = json.loads(raw_payload)
+        except ValueError:
+            payload = {}
+    else:
+        payload = dict(raw_payload or {})
+    tool = str(payload.get("tool") or row.get("type") or "tool")
+    arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+    return tool, arguments
+
+
 def summarize_pending_target(tool: str, arguments: dict[str, Any]) -> str:
     """Summarize the business target of a pending Copilot external action."""
     fields = {
@@ -143,48 +159,26 @@ def summarize_pending_target(tool: str, arguments: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
-_summarize_pending_target = summarize_pending_target
-
-
 async def _load_pending_actions(request: Request, session_id: str, business_user_id: str) -> list[dict[str, Any]]:
     database = getattr(request.app.state, "platform_database", None)
     if database is None:
         return []
 
-    def read(_connection, cursor):
-        cursor.execute(
-            """SELECT id, type, payload, expires_at
-               FROM pending_action
-               WHERE session_id=%s AND user_id=%s AND status='pending'
-                 AND expires_at > CURRENT_TIMESTAMP(3)
-               ORDER BY created_at DESC
-               LIMIT 3""",
-            (session_id, business_user_id),
-        )
-        return cursor.fetchall() or []
-
     try:
-        rows = await database._call(read)
+        rows = await WriteAuthorizationService(database).list_active_pending_actions(
+            user_id=business_user_id, session_id=session_id, limit=3
+        )
     except Exception:
         return []
 
     items: list[dict[str, Any]] = []
     for row in rows:
-        raw_payload = row.get("payload")
-        if isinstance(raw_payload, str):
-            try:
-                payload = json.loads(raw_payload)
-            except ValueError:
-                payload = {}
-        else:
-            payload = dict(raw_payload or {})
-        tool = str(payload.get("tool") or row.get("type") or "tool")
-        arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+        tool, arguments = parse_pending_payload(row)
         items.append(
             {
                 "pending_action_id": str(row["id"]),
                 "tool": tool,
-                "target_summary": _summarize_pending_target(tool, arguments),
+                "target_summary": summarize_pending_target(tool, arguments),
             }
         )
     return items

@@ -231,7 +231,7 @@
               <span class="count-badge" id="pending-panel-badge">0 项</span>
             </div>
             <p class="panel-copy">
-              点击“确认执行”或“取消”会经由对话流发送真实用户短语，由后端运行时核验后放行，绝不绕过服务端授权。
+              点击“确认执行”会经由对话流发送真实用户短语，由后端运行时核验后放行；点击“取消”会直接撤销待确认操作并从队列移除，绝不绕过服务端授权。
             </p>
             <div class="pending-list" id="copilot-pending-list">
               <p class="loading-row">当前没有待确认的外部操作。</p>
@@ -241,7 +241,7 @@
       </aside>
     </main>
 
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="/ui/app.js?v=copilot-2"></script>
+    <script src="/ui/app.js?v=copilot-3"></script>
+    <script async src="https://unpkg.com/lucide@latest" id="lucide-script"></script>
   </body>
 </html>

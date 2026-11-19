@@ -30,5 +30,7 @@ knowledge_sources/review_samples.md
 *.log
 /test-results/
 
-# Generated local SQLite demo data
+# Generated local SQLite demo data and managed Copilot workspace
 data/*.db
+data/*.sqlite
+data/obsidian_vault/

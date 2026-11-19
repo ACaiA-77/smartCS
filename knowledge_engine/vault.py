@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import unicodedata
 from collections.abc import Iterable, Mapping
@@ -21,6 +22,8 @@ _SLUG_DROP_RE = re.compile(r"[^\w-]+", re.UNICODE)
 _HYPHEN_RUN_RE = re.compile(r"-{2,}")
 
 ALLOWED_ZONES = ("wiki", "raw", "notes", "daily")
+SOURCE_ZONE = "source"
+READ_ZONES = ALLOWED_ZONES + (SOURCE_ZONE,)
 _NOTE_ZONES = ("wiki", "notes", "daily")
 _LINK_ZONES = ("wiki", "notes", "raw")
 
@@ -184,56 +187,156 @@ def _utc_now() -> str:
 
 
 class ObsidianVault:
-    """Zone-aware, path-validated access to one Obsidian vault directory.
+    """Zone-aware, path-validated access to an Obsidian vault workspace.
 
     ``notes/`` is read-only for the agent, ``raw/`` only accepts immutable
-    snapshots and ``wiki/`` is the agent-compiled workspace. Every path is
-    resolved and checked against the vault root before use.
+    snapshots and ``wiki/`` is the agent-compiled workspace. An optional
+    ``source_root`` mounts an external non-four-zone Obsidian vault strictly
+    read-only under the virtual ``source/`` prefix without initializing or
+    writing into it.
     """
 
-    def __init__(self, vault_root: str | Path) -> None:
+    def __init__(
+        self,
+        vault_root: str | Path,
+        *,
+        source_root: str | Path | None = None,
+        read_only: bool = False,
+    ) -> None:
+        self.read_only = bool(read_only)
         raw_root = Path(vault_root).expanduser()
+        if self.read_only:
+            if not raw_root.is_dir():
+                raise FileNotFoundError(f"read-only vault directory does not exist: {vault_root}")
+            self.root = raw_root.resolve()
+            self.source_root: Path | None = None
+            return
+
         raw_root.mkdir(parents=True, exist_ok=True)
         self.root = raw_root.resolve()
         self.initialize()
 
+        if source_root is not None:
+            raw_source = Path(source_root).expanduser()
+            if not raw_source.is_dir():
+                raise FileNotFoundError(
+                    f"read-only source vault directory does not exist: {source_root}"
+                )
+            resolved_source = raw_source.resolve()
+            if (
+                resolved_source == self.root
+                or resolved_source.is_relative_to(self.root)
+                or self.root.is_relative_to(resolved_source)
+            ):
+                raise VaultSecurityError(
+                    "managed vault root and read-only source root must not overlap"
+                )
+            self.source_root = resolved_source
+        else:
+            self.source_root = None
+
     def initialize(self) -> None:
         """Create the four zone directories (and the proposal folder) if missing."""
-
+        if self.read_only:
+            raise VaultSecurityError("read-only vault cannot be initialized")
         for zone in ALLOWED_ZONES:
             (self.root / zone).mkdir(parents=True, exist_ok=True)
         (self.root / "wiki" / "proposals").mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ paths
-    def _resolve(self, rel_path: str | Path, *, for_write: bool = False) -> Path:
+    @staticmethod
+    def _parse_relative_candidate(rel_path: str | Path) -> tuple[str, Path]:
         raw = str(rel_path).strip()
         if not raw or "\x00" in raw:
             raise VaultSecurityError("vault path must be a non-empty relative path")
-        candidate = Path(raw)
-        drive_path = bool(re.match(r"^[A-Za-z]:", raw))
-        if (
-            drive_path
-            or candidate.is_absolute()
-            or candidate.anchor
-            or raw[:1] in {"/", "\\"}
-        ):
+        if raw[:1] in {"/", "\\"} or bool(re.match(r"^[A-Za-z]:", raw)):
             raise VaultSecurityError(f"absolute vault paths are not allowed: {raw}")
-        if any(part == ".." for part in candidate.parts):
+        normalized_raw = raw.replace("\\", "/")
+        candidate = Path(normalized_raw)
+        if candidate.is_absolute() or candidate.anchor:
+            raise VaultSecurityError(f"absolute vault paths are not allowed: {raw}")
+        raw_parts = [part for part in normalized_raw.split("/") if part]
+        if any(part == ".." for part in raw_parts) or any(part == ".." for part in candidate.parts):
             raise VaultSecurityError(f"path traversal is not allowed: {raw}")
-        unresolved = self.root / candidate
-        if not unresolved.is_relative_to(self.root):
+        if any(part.startswith(".") for part in raw_parts) or any(part.startswith(".") for part in candidate.parts):
+            raise VaultSecurityError(f"hidden paths are not allowed: {raw}")
+        return normalized_raw, candidate
+
+    @staticmethod
+    def _validate_resolved_under(
+        base_root: Path, unresolved: Path, *, raw: str, for_write: bool = False
+    ) -> Path:
+        if not unresolved.is_relative_to(base_root):
             raise VaultSecurityError(f"path escapes the vault: {raw}")
         resolved = unresolved.resolve()
-        if not resolved.is_relative_to(self.root):
+        if not resolved.is_relative_to(base_root):
             raise VaultSecurityError(f"symlink escapes the vault: {raw}")
+        rel_parts = resolved.relative_to(base_root).parts
+        if any(part.startswith(".") for part in rel_parts):
+            raise VaultSecurityError(f"hidden paths are not allowed: {raw}")
         if for_write:
             resolved.parent.mkdir(parents=True, exist_ok=True)
         return resolved
 
-    def _relative(self, path: Path) -> str:
+    def _resolve_parts(
+        self, rel_path: str | Path, *, for_write: bool = False
+    ) -> tuple[Path, Path, str]:
+        raw, candidate = self._parse_relative_candidate(rel_path)
+        if for_write and self.read_only:
+            raise VaultSecurityError("read-only vault cannot be modified")
+        if candidate.parts and candidate.parts[0] == SOURCE_ZONE:
+            if self.read_only:
+                if len(candidate.parts) < 2:
+                    raise VaultSecurityError("source path must name a note")
+                inner = Path(*candidate.parts[1:])
+                resolved = self._validate_resolved_under(
+                    self.root, self.root / inner, raw=raw, for_write=False
+                )
+                return self.root, resolved, raw
+            if self.source_root is not None:
+                if for_write:
+                    raise VaultSecurityError("read-only source vault cannot be modified")
+                if len(candidate.parts) < 2:
+                    raise VaultSecurityError("source path must name a note")
+                inner = Path(*candidate.parts[1:])
+                resolved = self._validate_resolved_under(
+                    self.source_root, self.source_root / inner, raw=raw, for_write=False
+                )
+                return self.source_root, resolved, raw
+        resolved = self._validate_resolved_under(
+            self.root, self.root / candidate, raw=raw, for_write=for_write
+        )
+        return self.root, resolved, raw
+
+    def _resolve(self, rel_path: str | Path, *, for_write: bool = False) -> Path:
+        _, resolved, _ = self._resolve_parts(rel_path, for_write=for_write)
+        return resolved
+
+    def _is_source_path(self, path: Path) -> bool:
+        if self.read_only:
+            return True
+        if self.source_root is None:
+            return False
+        try:
+            return path.is_relative_to(self.source_root) or path.resolve().is_relative_to(self.source_root)
+        except OSError:
+            return False
+
+    def relative_path(self, path: Path) -> str:
+        """Return the canonical vault-relative POSIX path (prefixed ``source/`` for read-only source)."""
+
+        if self.read_only:
+            return f"{SOURCE_ZONE}/{path.relative_to(self.root).as_posix()}"
+        if self.source_root is not None and path.is_relative_to(self.source_root):
+            return f"{SOURCE_ZONE}/{path.relative_to(self.source_root).as_posix()}"
         return path.relative_to(self.root).as_posix()
 
+    def _relative(self, path: Path) -> str:
+        return self.relative_path(path)
+
     def _zone_of(self, path: Path) -> str:
+        if self._is_source_path(path):
+            return SOURCE_ZONE
         parts = path.relative_to(self.root).parts
         return parts[0] if len(parts) > 1 else ""
 
@@ -251,46 +354,104 @@ class ObsidianVault:
     def _write_text(path: Path, text: str) -> None:
         path.write_text(text, encoding="utf-8", newline="\n")
 
-    def _iter_markdown(self, zones: Iterable[str]) -> Iterable[Path]:
-        for zone in zones:
-            base = self.root / zone
-            if not base.is_dir():
-                continue
-            for path in sorted(base.rglob("*.md")):
-                if not path.is_file():
+    @staticmethod
+    def _iter_dir_markdown(
+        base_root: Path, scan_dir: Path, *, skip_proposals: bool = False
+    ) -> Iterable[Path]:
+        if not scan_dir.is_dir() or scan_dir.is_symlink():
+            return
+        for cur, dirnames, filenames in os.walk(scan_dir, followlinks=False):
+            cur_path = Path(cur)
+            filtered_dirs = []
+            for dirname in sorted(dirnames, key=str.casefold):
+                if dirname.startswith("."):
                     continue
-                rel = path.relative_to(self.root)
-                if rel.parts[:2] == ("wiki", "proposals"):
+                sub = cur_path / dirname
+                if sub.is_symlink():
                     continue
                 try:
-                    resolved_path = path.resolve()
+                    if not sub.resolve().is_relative_to(base_root):
+                        continue
                 except OSError:
                     continue
-                if not resolved_path.is_relative_to(self.root):
+                if skip_proposals and sub.relative_to(base_root).parts[:2] == ("wiki", "proposals"):
+                    continue
+                filtered_dirs.append(dirname)
+            dirnames[:] = filtered_dirs
+
+            for filename in sorted(filenames, key=str.casefold):
+                if filename.startswith(".") or not filename.casefold().endswith(".md"):
+                    continue
+                path = cur_path / filename
+                if path.is_symlink() or not path.is_file():
+                    continue
+                try:
+                    resolved = path.resolve()
+                except OSError:
+                    continue
+                if not resolved.is_relative_to(base_root):
+                    continue
+                if any(part.startswith(".") for part in resolved.relative_to(base_root).parts):
                     continue
                 yield path
 
-    def list_notes(self, zone: str | None = None) -> list[Path]:
-        """Return markdown files in a zone (all zones when ``zone`` is None)."""
+    def _iter_markdown(self, zones: Iterable[str]) -> Iterable[Path]:
+        for zone in zones:
+            if zone == SOURCE_ZONE:
+                if self.read_only:
+                    yield from self._iter_dir_markdown(self.root, self.root)
+                elif self.source_root is not None:
+                    yield from self._iter_dir_markdown(self.source_root, self.source_root)
+                continue
+            if self.read_only:
+                continue
+            base = self.root / zone
+            yield from self._iter_dir_markdown(
+                self.root, base, skip_proposals=(zone == "wiki")
+            )
 
-        if zone is not None and zone not in ALLOWED_ZONES:
+    def _default_read_zones(self) -> tuple[str, ...]:
+        if self.read_only:
+            return (SOURCE_ZONE,)
+        if self.source_root is not None:
+            return ALLOWED_ZONES + (SOURCE_ZONE,)
+        return ALLOWED_ZONES
+
+    def list_notes(self, zone: str | None = None) -> list[Path]:
+        """Return markdown files in a zone (all configured zones when ``zone`` is None)."""
+
+        if zone is not None and zone not in READ_ZONES:
             raise ValueError(f"unknown vault zone: {zone}")
-        zones = (zone,) if zone else ALLOWED_ZONES
+        zones = (zone,) if zone else self._default_read_zones()
         paths = list(self._iter_markdown(zones))
         return sorted(paths, key=lambda item: self._relative(item).casefold())
 
     # ------------------------------------------------------------------ reads
+    def _resolve_with_md_fallback(self, base_root: Path, candidate: Path, *, raw: str) -> Path:
+        resolved = self._validate_resolved_under(base_root, base_root / candidate, raw=raw)
+        if not resolved.exists() and not resolved.suffix:
+            candidate_md = resolved.with_name(resolved.name + ".md")
+            if candidate_md.exists():
+                resolved = self._validate_resolved_under(base_root, candidate_md, raw=raw)
+        return resolved
+
     def read_note(self, rel_path: str) -> dict[str, Any]:
         """Read one note and return its path, title, content, links and tags."""
 
-        path = self._resolve(rel_path)
+        base_root, path, raw = self._resolve_parts(rel_path)
         if not path.exists() and not path.suffix:
-            candidate = path.with_name(path.name + ".md")
-            if candidate.exists():
-                path = candidate
+            candidate_md = path.with_name(path.name + ".md")
+            if candidate_md.exists():
+                path = self._validate_resolved_under(base_root, candidate_md, raw=raw)
+        if not path.is_file() and self.source_root is not None and not self.read_only:
+            _, candidate = self._parse_relative_candidate(rel_path)
+            if candidate.parts and candidate.parts[0] not in (*ALLOWED_ZONES, SOURCE_ZONE):
+                src_path = self._resolve_with_md_fallback(self.source_root, candidate, raw=raw)
+                if src_path.is_file():
+                    path = src_path
         if not path.is_file():
             raise FileNotFoundError(f"note not found: {rel_path}")
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
         meta, body = _parse_frontmatter(text)
         return {
             "path": self._relative(path),
@@ -306,17 +467,17 @@ class ObsidianVault:
     ) -> list[dict[str, Any]]:
         """Case-insensitive title/tag/content search with deterministic ranking."""
 
-        if zone is not None and zone not in ALLOWED_ZONES:
+        if zone is not None and zone not in READ_ZONES:
             raise ValueError(f"unknown vault zone: {zone}")
         needle = str(query or "").strip().casefold()
         if not needle or limit <= 0:
             return []
-        zones = (zone,) if zone else ALLOWED_ZONES
+        zones = (zone,) if zone else self._default_read_zones()
         results: list[dict[str, Any]] = []
         for path in self._iter_markdown(zones):
             try:
-                text = path.read_text(encoding="utf-8")
-            except OSError:
+                text = path.read_text(encoding="utf-8-sig")
+            except (OSError, UnicodeDecodeError):
                 continue
             meta, body = _parse_frontmatter(text)
             title = _title_for(meta, body, path.stem)
@@ -344,26 +505,55 @@ class ObsidianVault:
         return results[:limit]
 
     @staticmethod
-    def _targets_match(left: str, right: str) -> bool:
+    def _is_unsafe_link_target(value: str) -> bool:
+        text = str(value or "").strip().replace("\\", "/")
+        if not text or "\x00" in text:
+            return True
+        if text.startswith("/") or re.match(r"^[A-Za-z]:", text):
+            return True
+        parts = [part for part in text.split("/") if part]
+        return any(part == ".." or part.startswith(".") for part in parts)
+
+    @classmethod
+    def _targets_match(cls, left: str, right: str) -> bool:
         first = _normalize_target(left).casefold()
         second = _normalize_target(right).casefold()
         if not first or not second:
             return False
-        if first == second:
-            return True
-        if "/" not in first and "/" in second:
-            return second.rsplit("/", 1)[-1] == first
-        return False
+        if cls._is_unsafe_link_target(first) or cls._is_unsafe_link_target(second):
+            return False
+        left_candidates = [first]
+        if first.startswith(f"{SOURCE_ZONE}/"):
+            left_candidates.append(first[len(SOURCE_ZONE) + 1 :])
+        right_candidates = [second]
+        if second.startswith(f"{SOURCE_ZONE}/"):
+            right_candidates.append(second[len(SOURCE_ZONE) + 1 :])
+        return any(
+            l_cand == r_cand or r_cand.endswith(f"/{l_cand}")
+            for l_cand in left_candidates
+            for r_cand in right_candidates
+        )
 
     def backlinks(self, target: str) -> list[dict[str, Any]]:
-        """Return notes (wiki/notes/daily) that link to ``target``."""
+        """Return notes that link to ``target`` (never follows escaping/hidden targets)."""
 
         needle = _normalize_target(target)
         if not needle:
             raise ValueError("backlink target must not be empty")
+        if self._is_unsafe_link_target(needle):
+            raise VaultSecurityError(f"unsafe backlink target: {target!r}")
+        if self.read_only:
+            zones: tuple[str, ...] = (SOURCE_ZONE,)
+        elif self.source_root is not None:
+            zones = _NOTE_ZONES + (SOURCE_ZONE,)
+        else:
+            zones = _NOTE_ZONES
         results: list[dict[str, Any]] = []
-        for path in self._iter_markdown(_NOTE_ZONES):
-            text = path.read_text(encoding="utf-8")
+        for path in self._iter_markdown(zones):
+            try:
+                text = path.read_text(encoding="utf-8-sig")
+            except (OSError, UnicodeDecodeError):
+                continue
             meta, body = _parse_frontmatter(text)
             if not any(
                 self._targets_match(link["target"] or "", needle)
@@ -384,13 +574,19 @@ class ObsidianVault:
         """Return whether a wikilink target resolves to any note in ``zones``."""
 
         normalized = _normalize_target(target)
-        if not normalized:
+        if not normalized or self._is_unsafe_link_target(normalized):
             return False
         needle = normalized.casefold()
-        for path in self._iter_markdown(zones):
+        effective_zones = tuple(zones)
+        if effective_zones == _LINK_ZONES and self.source_root is not None:
+            effective_zones = _LINK_ZONES + (SOURCE_ZONE,)
+        for path in self._iter_markdown(effective_zones):
             rel = self._relative(path)
             rel_without_ext = rel[:-3] if rel.casefold().endswith(".md") else rel
-            if needle in {rel_without_ext.casefold(), path.stem.casefold()}:
+            candidates = {rel_without_ext.casefold(), path.stem.casefold()}
+            if rel_without_ext.casefold().startswith(f"{SOURCE_ZONE}/"):
+                candidates.add(rel_without_ext[len(SOURCE_ZONE) + 1 :].casefold())
+            if needle in candidates:
                 return True
         return False
 
@@ -488,6 +684,8 @@ class ObsidianVault:
     ) -> Path:
         """Save a structured edit proposal without ever writing to ``notes/``."""
 
+        if self.read_only:
+            raise VaultSecurityError("read-only vault cannot be modified")
         target = self._resolve(target_rel_path)
         target_rel = self._relative(target)
         if not target_rel.startswith("notes/"):

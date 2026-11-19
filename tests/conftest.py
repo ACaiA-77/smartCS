@@ -9,8 +9,14 @@ import pytest
 from memory.long_term import LongTermMemory
 
 # Keep unit and integration tests deterministic; the service loads production
-# embedding settings from .env only when it is started outside pytest.
+# embedding/write/vault settings from .env only when it is started outside pytest.
 os.environ.setdefault("EMBEDDING_BACKEND", "hash")
+os.environ.setdefault("RAG_RERANKER_BACKEND", "fake")
+os.environ.setdefault("SMARTCS_WRITE_MODE", "off")
+os.environ.setdefault("OBSIDIAN_VAULT_PATH", "")
+os.environ.setdefault("OBSIDIAN_SOURCE_VAULT_PATH", "")
+os.environ.setdefault("OBSIDIAN_INDEX_PATH", "")
+os.environ.setdefault("COPILOT_ONTOLOGY_DB_PATH", "")
 
 
 @pytest.fixture
