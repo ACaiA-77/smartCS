@@ -3,49 +3,61 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#142c3d" />
-    <title>SmartCS 智能客服</title>
-    <link rel="stylesheet" href="/ui/styles.css?v=agent-desk-2" />
+    <meta name="theme-color" content="#131f2e" />
+    <title>Personal Copilot · 个人受控工作台</title>
+    <link rel="stylesheet" href="/ui/styles.css?v=copilot-2" />
   </head>
-  <body data-auth-state="checking">
+  <body data-auth-state="checking" data-profile="copilot">
     <a class="skip-link" href="#message-input">跳到对话输入</a>
     <section class="login-page" id="login-page" aria-labelledby="login-title">
       <div class="login-brand">
-        <div class="brand"><span class="brand-mark">S</span><span>SmartCS<small>AI SUPPORT DESK</small></span></div>
-        <div class="login-brand-copy">
-          <p class="brand-kicker">智能客服服务台</p>
-          <h2>问题有入口，<br />处理有进度。</h2>
-          <p>知识咨询、订单查询与售后服务，集中在同一段会话里。</p>
+        <div class="brand">
+          <span class="brand-mark" id="login-brand-mark">C</span>
+          <span>
+            <span id="login-brand-name">Copilot</span>
+            <small id="login-brand-subtitle">CONTROLLED WORKSPACE</small>
+          </span>
         </div>
-        <ol class="login-capabilities">
-          <li><span>01</span> 知识咨询</li>
-          <li><span>02</span> 订单查询</li>
-          <li><span>03</span> 售后处理</li>
+        <div class="login-brand-copy">
+          <p class="brand-kicker" id="login-hero-kicker">个人受控工作台</p>
+          <h2 id="login-hero-title">知识有脉络，<br />执行有边界。</h2>
+          <p id="login-hero-desc">
+            整合 Obsidian LLM Wiki、轻量 Ontology、邮箱、GitHub 与飞书；所有外部写操作经运行时授权与两段式冻结确认。
+          </p>
+        </div>
+        <ol class="login-capabilities" id="login-capabilities">
+          <li><span>01</span> Obsidian &amp; 本体</li>
+          <li><span>02</span> 邮件 / GitHub / 飞书</li>
+          <li><span>03</span> 两段式写确认</li>
         </ol>
       </div>
       <form class="login-form" id="login-form">
-        <p class="topbar-kicker">欢迎回到 SmartCS</p>
-        <h1 id="login-title">继续你的咨询</h1>
-        <p class="panel-copy">查询自己的订单、处理售后，也可以接着上次的对话聊。</p>
+        <p class="topbar-kicker" id="login-form-kicker">欢迎回到 Personal Copilot</p>
+        <h1 id="login-title">进入个人工作台</h1>
+        <p class="panel-copy" id="login-form-copy">检索笔记与实体关系，处理邮件、GitHub 通知与飞书事务。</p>
         <label for="username">用户名</label>
         <input id="username" name="username" autocomplete="username" required maxlength="128" />
         <label for="password">密码</label>
         <input id="password" name="password" type="password" autocomplete="current-password" required />
         <p class="auth-message" id="auth-message" role="status">正在检查登录状态…</p>
-        <button class="send-button" id="login-button" type="submit" disabled>登录服务台</button>
-        <p class="panel-copy">请使用已开通的账户，本页面暂不提供注册。</p>
+        <button class="send-button" id="login-button" type="submit" disabled>进入工作台</button>
+        <p class="panel-copy">请使用已开通的账户，本页面暂不提供自助注册。</p>
       </form>
     </section>
+
     <main class="app-shell" id="app-shell" hidden style="display: none;" aria-hidden="true">
-      <aside class="sidebar" aria-label="客服导航">
+      <aside class="sidebar" aria-label="工作台导航">
         <div class="brand">
-          <span class="brand-mark">S</span>
-          <span>SmartCS<small>AI SUPPORT DESK</small></span>
+          <span class="brand-mark" id="sidebar-brand-mark">C</span>
+          <span>
+            <span id="sidebar-brand-name">Copilot</span>
+            <small id="sidebar-brand-subtitle">CONTROLLED WORKSPACE</small>
+          </span>
         </div>
 
-        <button class="new-session" id="new-session" type="button" aria-label="新建会话" title="新建会话">
+        <button class="new-session" id="new-session" type="button" aria-label="新建工作流" title="新建工作流">
           <i data-lucide="square-pen"></i>
-          <span>新建会话</span>
+          <span id="new-session-label">新建工作流</span>
         </button>
 
         <nav class="primary-nav" aria-label="主导航">
@@ -66,16 +78,22 @@
         </div>
       </aside>
 
-      <section class="conversation-area" aria-label="客服对话">
+      <section class="conversation-area" aria-label="主对话区">
         <header class="topbar">
-          <div>
-            <p class="topbar-kicker">智能客服 / 当前会话</p>
-            <h1 id="session-name">新客服咨询</h1>
+          <div class="topbar-title-group">
+            <p class="topbar-kicker" id="topbar-kicker">个人受控 Copilot / 当前会话</p>
+            <h1 id="session-name">新工作流对话</h1>
+            <div class="topbar-status-row" id="workspace-badges" aria-label="工作台挂载状态">
+              <span class="mono-badge" id="badge-session">session: --</span>
+              <span class="mono-badge" id="badge-connectors">数据源加载中</span>
+              <span class="mono-badge" id="badge-tools">工具加载中</span>
+              <span class="mono-badge is-warn" id="badge-pending" hidden>待确认 0</span>
+            </div>
           </div>
           <div class="topbar-actions">
             <span class="account-name" id="account-name"></span>
             <button class="text-button" id="logout-button" type="button">退出登录</button>
-            <button class="icon-button" id="refresh-orders" type="button" title="刷新我的订单" aria-label="刷新我的订单">
+            <button class="icon-button" id="refresh-context" type="button" title="刷新工作台上下文" aria-label="刷新工作台上下文">
               <i data-lucide="refresh-cw"></i>
             </button>
           </div>
@@ -83,66 +101,147 @@
 
         <div class="conversation-scroll" id="conversation-scroll">
           <section class="welcome-panel" id="welcome-panel">
-            <div class="welcome-symbol"><i data-lucide="sparkles"></i></div>
+            <div class="welcome-symbol"><i data-lucide="terminal"></i></div>
             <div>
-              <h2>今天想处理什么问题？</h2>
-              <p>可以咨询 Apple 支持知识、查询自己的订单，或创建售后工单。</p>
+              <h2 id="welcome-title">今天想推进哪项工作？</h2>
+              <p id="welcome-desc">
+                可检索 Obsidian 笔记与本体图谱、巡检 Wiki 断链，或串联邮箱、GitHub 与飞书待办。
+              </p>
             </div>
           </section>
 
-          <div class="quick-prompts" aria-label="快捷问题">
-            <button type="button" data-prompt="Apple 账户忘记密码怎么恢复？">恢复 Apple 账户</button>
-            <button type="button" data-prompt="从 Apple 购买的 App 或内容怎么申请退款？">申请 Apple 购买项目退款</button>
-            <button type="button" data-prompt="我要投诉服务问题，请帮我创建工单">创建投诉工单</button>
+          <div class="quick-prompts" id="quick-prompts" aria-label="快捷工作流">
+            <button type="button" data-prompt="请用 wiki_lint 检查当前 Obsidian Wiki 的断链、孤儿页面和索引缺失。">Wiki 断链巡检</button>
+            <button type="button" data-prompt="请用 vault_search 和 onto_query 概览当前知识库笔记与实体关系。">知识与本体概览</button>
+            <button type="button" data-prompt="请根据当前 Obsidian 笔记、本体待办与可用连接器，整理今日工作简报。">整理今日简报</button>
+            <button type="button" data-prompt="请汇总当前邮箱、GitHub 通知和飞书会话中的待办事项（仅只读查询）。">邮件 / GitHub / 飞书待办</button>
           </div>
 
           <div class="message-list" id="message-list" aria-live="polite"></div>
         </div>
 
         <form class="composer" id="chat-form">
-          <label class="sr-only" for="message-input">输入咨询内容</label>
-          <textarea id="message-input" rows="1" placeholder="输入问题，例如：查询订单 ORD-20260801-0001"></textarea>
+          <label class="sr-only" for="message-input">输入工作台指令</label>
+          <textarea
+            id="message-input"
+            rows="1"
+            placeholder="输入指令（Enter 发送 / Shift+Enter 换行 / Ctrl+K 聚焦）"
+          ></textarea>
           <button class="send-button" id="send-button" type="submit">
             <span>发送</span>
             <i data-lucide="arrow-up"></i>
           </button>
         </form>
-        <p class="composer-hint">会话会自动保存到当前账户。演示订单不代表真实平台数据。</p>
+        <p class="composer-hint" id="composer-hint">
+          会话自动持久化至当前账户；发邮件、建 Issue、发评论与发飞书消息须经两段式冻结确认后执行。
+        </p>
       </section>
 
-      <aside class="context-panel" aria-label="我的订单">
-        <section class="context-section">
-          <div class="section-heading">
-            <div>
-              <p class="section-label">服务上下文</p>
-              <h2>我的订单</h2>
+      <aside class="context-panel" aria-label="工作台检视器">
+        <div class="inspector-tabs" role="tablist" aria-label="工作台检视器标签">
+          <button class="inspector-tab is-active" type="button" role="tab" aria-selected="true" data-inspector-tab="knowledge">
+            <span>知识与图谱</span>
+          </button>
+          <button class="inspector-tab" type="button" role="tab" aria-selected="false" data-inspector-tab="connectors">
+            <span>连接器与工具</span>
+          </button>
+          <button class="inspector-tab" type="button" role="tab" aria-selected="false" data-inspector-tab="pending">
+            <span>待确认队列</span>
+            <span class="tab-pill" id="pending-tab-count">0</span>
+          </button>
+        </div>
+
+        <section class="inspector-pane" id="pane-knowledge" role="tabpanel">
+          <div class="context-section">
+            <div class="section-heading">
+              <div>
+                <p class="section-label">Obsidian &amp; Ontology</p>
+                <h2>知识索引</h2>
+              </div>
+              <span class="count-badge" id="copilot-item-count">0</span>
             </div>
-            <span class="count-badge" id="order-count"></span>
+            <div class="tab-switch" role="tablist" aria-label="知识视图切换">
+              <button class="tab-button is-active" type="button" role="tab" aria-selected="true" data-knowledge-tab="notes">笔记</button>
+              <button class="tab-button" type="button" role="tab" aria-selected="false" data-knowledge-tab="entities">本体实体</button>
+            </div>
+            <label class="sr-only" for="copilot-filter-input">过滤笔记或实体</label>
+            <input
+              class="filter-input"
+              id="copilot-filter-input"
+              type="search"
+              placeholder="筛选笔记标题、路径、标签或实体…"
+              autocomplete="off"
+            />
+            <div class="copilot-item-list" id="copilot-item-list">
+              <p class="loading-row">正在载入知识条目…</p>
+            </div>
           </div>
-          <p class="panel-copy">选择订单，查看物流、支付与售后进度。</p>
-          <div class="order-list" id="order-list">
-            <p class="loading-row">正在载入订单...</p>
+
+          <div class="context-section detail-section" id="copilot-detail-section">
+            <div class="section-heading">
+              <div>
+                <p class="section-label">上下文预览</p>
+                <h2>内容与图谱</h2>
+              </div>
+              <i data-lucide="book-open" class="heading-icon"></i>
+            </div>
+            <div class="empty-detail" id="copilot-detail">
+              <i data-lucide="mouse-pointer-click"></i>
+              <p>选择上方的笔记或本体实体，可在此以 Markdown / 关系邻接图预览并一键发往对话。</p>
+            </div>
           </div>
         </section>
 
-        <section class="context-section detail-section" id="order-detail-section">
-          <div class="section-heading">
-            <div>
-              <p class="section-label">最近结果</p>
-              <h2>订单详情</h2>
+        <section class="inspector-pane" id="pane-connectors" role="tabpanel" hidden>
+          <div class="context-section">
+            <div class="section-heading">
+              <div>
+                <p class="section-label">工作台状态</p>
+                <h2>数据源连接器</h2>
+              </div>
+              <span class="count-badge" id="copilot-connector-badge">载入中</span>
             </div>
-            <i data-lucide="package-search" class="heading-icon"></i>
+            <p class="panel-copy">仅挂载环境配置完整的数据源，半配置连接器自动降级为未挂载。</p>
+            <div class="connector-list" id="copilot-connectors">
+              <p class="loading-row">正在读取连接器状态…</p>
+            </div>
           </div>
-          <div class="empty-detail" id="order-detail">
-            <i data-lucide="mouse-pointer-click"></i>
-            <p>选择你的订单后，详细信息会显示在这里。</p>
+
+          <div class="context-section detail-section">
+            <div class="section-heading">
+              <div>
+                <p class="section-label">受控边界</p>
+                <h2>已挂载工具分级</h2>
+              </div>
+              <span class="count-badge" id="copilot-tool-badge">载入中</span>
+            </div>
+            <div class="tool-tier-list" id="copilot-tools">
+              <p class="loading-row">正在读取工具清单…</p>
+            </div>
           </div>
         </section>
 
+        <section class="inspector-pane" id="pane-pending" role="tabpanel" hidden>
+          <div class="context-section detail-section">
+            <div class="section-heading">
+              <div>
+                <p class="section-label">Two-Phase Gate</p>
+                <h2>待确认外部操作</h2>
+              </div>
+              <span class="count-badge" id="pending-panel-badge">0 项</span>
+            </div>
+            <p class="panel-copy">
+              点击“确认执行”或“取消”会经由对话流发送真实用户短语，由后端运行时核验后放行，绝不绕过服务端授权。
+            </p>
+            <div class="pending-list" id="copilot-pending-list">
+              <p class="loading-row">当前没有待确认的外部操作。</p>
+            </div>
+          </div>
+        </section>
       </aside>
     </main>
 
     <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="/ui/app.js?v=auth-state-2"></script>
+    <script src="/ui/app.js?v=copilot-2"></script>
   </body>
 </html>

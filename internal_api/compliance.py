@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/internal", tags=["internal"])
 
 #: Deterministic fallback used when the text cannot be safely rewritten.
-SAFE_FALLBACK_TEXT = "抱歉，该回复未能通过合规检查，请稍后再试或转人工客服。"
+SAFE_FALLBACK_TEXT = "抱歉，该回复未能通过安全合规检查，请稍后再试或换个问法。"
 
 # `mask_pii` and `rule_review` are re-exported from `policies.compliance_rules`
 # so this module's public surface (see `__all__`) is unchanged.

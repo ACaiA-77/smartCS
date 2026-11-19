@@ -38,7 +38,7 @@ export function renderSnapshot(snapshot: TurnSnapshot): string {
   const sections = [...snapshot.blocks]
     .sort((a, b) => a.priority - b.priority)
     .map((block) => `### ${block.title}\n${block.content}`);
-  return ["[SmartCS 业务上下文快照 · 权威数据，请以此为准]", ...sections].join("\n\n");
+  return ["[Copilot 工作台上下文快照 · 权威数据，请以此为准]", ...sections].join("\n\n");
 }
 
 export function createContextInjectionExtension(holder: SnapshotHolder): ExtensionFactory {

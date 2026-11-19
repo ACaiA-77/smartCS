@@ -51,15 +51,15 @@ describe("A6 agent_settled frequency", () => {
 
   it("fires exactly once across a multi-call tool loop (where message_end fires many times)", async () => {
     const { agent, cleanup } = await createTestAgent([
-      fauxAssistantMessage([fauxText("我先查一下订单。"), fauxToolCall("order_query", { orderId: "1001" })], {
+      fauxAssistantMessage([fauxText("我先检索一下相关笔记。"), fauxToolCall("vault_search", { query: "roadmap" })], {
         stopReason: "toolUse",
       }),
-      fauxAssistantMessage("你的订单 1001 已发货。"),
+      fauxAssistantMessage("已找到 Personal Copilot Roadmap 笔记。"),
     ]);
     const seen: string[] = [];
     try {
       agent.session.subscribe(instrument(seen));
-      await agent.session.prompt("帮我查订单 1001");
+      await agent.session.prompt("帮我查一下 roadmap 笔记");
 
       const counts = tally(seen);
       expect(counts.agentSettled).toBe(1);

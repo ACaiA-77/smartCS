@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { createShadowWriteTools } from "../src/agent/tools/shadow-write-tools.js";
+import { createCopilotWriteTools } from "../src/agent/tools/copilot-tools.js";
 import { TurnContext } from "../src/business/turn-context.js";
 import type { PythonInternalError } from "../src/business/python-client.js";
 
@@ -47,13 +47,14 @@ function buildTool(options: StubOptions) {
     },
   } as never;
 
-  const [tool] = createShadowWriteTools({
+  const tools = createCopilotWriteTools({
     mode: "live",
     store: { async record() { return 1; } } as never,
     turnContext,
     client,
     receipts,
   });
+  const tool = tools.find((item) => item.name === "copilot_action_confirm");
   return { tool: tool!, calls };
 }
 
@@ -108,7 +109,7 @@ describe("Phase 5d live wiring", () => {
       executeTool: async () => {
         throw new Error("socket hang up") as unknown as PythonInternalError;
       },
-      operations: [{ operation_id: "op-9", tool: "refund_confirm", state: "PREPARED", target_hash: "h" }],
+      operations: [{ operation_id: "op-9", tool: "copilot_action_confirm", state: "PREPARED", target_hash: "h" }],
       verdict: { status: "COMPLETED", detail: "ledger recorded a completed execution", result: { refund_id: 7 } },
     });
 
@@ -134,7 +135,7 @@ describe("Phase 5d live wiring", () => {
       executeTool: async () => {
         throw new Error("request aborted") as unknown as PythonInternalError;
       },
-      operations: [{ operation_id: "op-ab", tool: "refund_confirm", state: "PREPARED", target_hash: "h" }],
+      operations: [{ operation_id: "op-ab", tool: "copilot_action_confirm", state: "PREPARED", target_hash: "h" }],
       verdict: { status: "COMPLETED", detail: "completed", result: { refund_id: 8 } },
     });
 
@@ -151,7 +152,7 @@ describe("Phase 5d live wiring", () => {
       executeTool: async () => {
         throw new Error("timeout") as unknown as PythonInternalError;
       },
-      operations: [{ operation_id: "op-u", tool: "refund_confirm", state: "PREPARED", target_hash: "h" }],
+      operations: [{ operation_id: "op-u", tool: "copilot_action_confirm", state: "PREPARED", target_hash: "h" }],
       verdict: { status: "UNKNOWN", detail: "ledger claim is in_progress", result: null },
     });
 
@@ -167,7 +168,7 @@ describe("Phase 5d live wiring", () => {
       executeTool: async () => {
         throw new Error("boom") as unknown as PythonInternalError;
       },
-      operations: [{ operation_id: "op-f", tool: "refund_confirm", state: "PREPARED", target_hash: "h" }],
+      operations: [{ operation_id: "op-f", tool: "copilot_action_confirm", state: "PREPARED", target_hash: "h" }],
       verdict: { status: "FAILED", detail: "ledger recorded a failed execution", result: null },
     });
     await expect((tool.execute as any)("call-7", args, undefined, undefined, {})).rejects.toThrow(

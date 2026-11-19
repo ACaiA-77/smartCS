@@ -117,11 +117,12 @@ const storedResponse = (
  */
 export function classifyIntent(message: string): string {
   const text = message.toLowerCase();
-  if (/(退款|退钱|退货|refund)/.test(text)) return "refund";
-  if (/(工单|投诉|举报|ticket|升级)/.test(text)) return "ticket";
-  if (/(订单|物流|快递|发货|order|shipping)/.test(text)) return "order";
-  if (/(风险|风控|risk|异常交易)/.test(text)) return "risk";
-  if (/(政策|规则|怎么|如何|什么是|流程|policy|how)/.test(text)) return "knowledge";
+  if (/(邮件|邮箱|gmail|163|mail|draft|发信)/.test(text)) return "mail";
+  if (/(github|issue|(?<![a-z])pr(?![a-z])|pull request|仓库|代码)/.test(text)) return "github";
+  if (/(飞书|feishu|群消息|文档)/.test(text)) return "feishu";
+  if (/(wiki|obsidian|笔记|日记|lint|断链)/.test(text)) return "vault";
+  if (/(本体|实体|图谱|ontology|关系)/.test(text)) return "ontology";
+  if (/(知识库|检索|怎么|如何|什么是|流程|(?<![a-z])how(?![a-z]))/.test(text)) return "knowledge";
   return "general";
 }
 

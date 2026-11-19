@@ -6,13 +6,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/home/app/.cache/huggingface \
     SENTENCE_TRANSFORMERS_HOME=/home/app/.cache/sentence-transformers \
     FAISS_INDEX_PATH=/app/vector_store/faiss_index \
+    COPILOT_DB_PATH=/app/data/copilot.db \
     HOST=0.0.0.0 \
     PORT=8000
 
 WORKDIR /app
 
 RUN adduser --disabled-password --gecos "" app \
-    && mkdir -p /app/data /app/vector_store /app/knowledge_base /app/knowledge_sources "$HF_HOME" "$SENTENCE_TRANSFORMERS_HOME" \
+    && mkdir -p /app/data /app/vector_store /app/knowledge_sources "$HF_HOME" "$SENTENCE_TRANSFORMERS_HOME" \
     && chown -R app:app /app /home/app
 
 COPY requirements.txt .

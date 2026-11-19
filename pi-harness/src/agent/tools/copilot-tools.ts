@@ -32,9 +32,8 @@ import { PythonInternalError, type PythonInternalClient } from "../../business/p
 import type { TurnContext } from "../../business/turn-context.js";
 import type { ShadowPlanStore } from "../../db/shadow-plans.js";
 import type { ReceiptStore } from "../../db/receipts.js";
-import type { WriteMode } from "../write-mode.js";
+import { WriteToolNotPermittedError, type WriteMode } from "../write-mode.js";
 import { executeLiveWrite } from "./live-write-executor.js";
-import { WriteToolNotPermittedError } from "./shadow-write-tools.js";
 
 export const COPILOT_READ_TOOL_NAMES = [
   "knowledge_search",

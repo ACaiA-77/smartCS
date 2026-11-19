@@ -9,7 +9,7 @@
  * `python-impl/tests/test_internal_api_audit.py`, where the row counts live.
  */
 
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
@@ -34,7 +34,6 @@ import {
 import { ATTR } from "../src/tracing/spans.js";
 import { formatSpanTree } from "../src/tracing/format.js";
 import { makeTmpDir } from "./helpers/harness.js";
-import { ticketCount } from "./helpers/f-matrix.js";
 import { startToolProxy, type ToolProxy } from "./helpers/tool-proxy.js";
 import {
   resetTestDatabase,
@@ -52,7 +51,7 @@ process.env.INTERNAL_SERVICE_JWT_SECRET =
 const PY_PORT = 8_910;
 const PROXY_PORT = 8_920;
 const SESSION_ID = "phase6-observability-session";
-const ORDER_ID = "ORD-20260801-0002"; // belongs to user_002
+const NOTE_QUERY = "Project Alpha";
 
 let python: PythonService;
 let db: Database;
@@ -62,10 +61,16 @@ let root: string;
 let paths: SmartCsPaths;
 let faux: FauxProviderRegistration;
 let account: SeededAccount;
-let orderDbPath: string;
+let copilotDbPath: string;
 let harnessPort = 8_911;
 let harness: HarnessServer | undefined;
 let activeProxy: ToolProxy | undefined;
+
+function dailyEntryCount(marker: string): number {
+  const path = join(root, "vault", "daily", "2026-11-18.md");
+  if (!existsSync(path)) return 0;
+  return readFileSync(path, "utf-8").split(marker).length - 1;
+}
 
 function userToken(accountId: number, ttl = 1800): string {
   const now = Math.floor(Date.now() / 1000);
@@ -199,7 +204,7 @@ beforeAll(async () => {
   await seedSession(db, { sessionId: SESSION_ID, accountId: account.accountId, harnessVersion: "pi" });
 
   root = makeTmpDir("phase6-obs-");
-  orderDbPath = join(root, "orders.db");
+  copilotDbPath = join(root, "copilot.db");
   mkdirSync(root, { recursive: true });
   paths = resolveSmartCsPaths({
     runtimeCwd: join(root, "cwd"),
@@ -212,7 +217,7 @@ beforeAll(async () => {
   // Live write mode on the runtime side: P6-1 needs a real operation id.
   python = await startPythonService({
     port: PY_PORT,
-    orderDbPath,
+    copilotDbPath,
     writeMode: "live",
     traceRecords: true,
   });
@@ -236,13 +241,13 @@ describe("Phase 6 observability", () => {
   it("P6-1: the TS turn span and the Python internal spans share one trace id", async () => {
     harness = await rebuildHarness(python.url);
     faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("order_query", { order_id: ORDER_ID } as never)], {
+      fauxAssistantMessage([fauxToolCall("vault_search", { query: NOTE_QUERY } as never)], {
         stopReason: "toolUse",
       }),
-      fauxAssistantMessage("订单已查询。"),
+      fauxAssistantMessage("笔记已查询。"),
     ]);
 
-    const result = await chat("req-p61-read", `帮我查一下订单 ${ORDER_ID}`);
+    const result = await chat("req-p61-read", `帮我搜索笔记 ${NOTE_QUERY}`);
     expect(result.status).toBe(200);
 
     // --- TS side: the turn span and its children -------------------------
@@ -252,7 +257,7 @@ describe("Phase 6 observability", () => {
     expect(traceId).toMatch(/^[0-9a-f]{32}$/);
     expect(turn!.attributes[ATTR.sessionId]).toBe(SESSION_ID);
     expect(turn!.attributes[ATTR.agentRunId]).toBeDefined();
-    expect(turn!.attributes[ATTR.intentLabel]).toBe("order");
+    expect(turn!.attributes[ATTR.intentLabel]).toBe("vault");
 
     const spans = getFinishedSpans();
     const modelSpans = spans.filter((s) => s.spanContext().traceId === traceId && s.name === "smartcs.model.call");
@@ -270,7 +275,7 @@ describe("Phase 6 observability", () => {
     // id with unrelated roots.
     expect(modelSpans[0]!.parentSpanContext?.spanId).toBe(turn!.spanContext().spanId);
     expect(toolSpans[0]!.parentSpanContext?.spanId).toBe(turn!.spanContext().spanId);
-    expect(toolSpans[0]!.attributes[ATTR.tool]).toBe("order_query");
+    expect(toolSpans[0]!.attributes[ATTR.tool]).toBe("vault_search");
     const toolCallId = toolSpans[0]!.attributes[ATTR.toolCallId];
     expect(typeof toolCallId).toBe("string");
 
@@ -320,28 +325,26 @@ describe("Phase 6 observability", () => {
   it("P6-1: a live write completes the six-id family (operation_id included)", async () => {
     const queue = new AuditQueue(100);
     await rebuildHarness(python.url, { auditQueue: queue });
-    // The runtime authorizes a ticket write only when the durable user message
+    // The runtime authorizes a local write only when the durable user message
     // itself asks for one; the model's tool call is a request, not authority.
-    // Phase 10 §③: the model sends business parameters only — `user_id`,
-    // `client_request_id` and `request_payload_hash` are supplied server-side
-    // at the live-write boundary and are no longer expressible here.
+    const marker = "OBS-P6-1-LIVE";
     faux.setResponses([
       fauxAssistantMessage(
         [
-          fauxToolCall("ticket_create", {
-            title: "包裹未收到",
-            description: "客户反馈包裹长时间未收到，请协助处理。",
+          fauxToolCall("vault_append_daily", {
+            entry: marker,
+            date_str: "2026-11-18",
           } as never),
         ],
         { stopReason: "toolUse" },
       ),
-      fauxAssistantMessage("工单已提交。"),
+      fauxAssistantMessage("已记入今日日记。"),
     ]);
 
-    const ticketsBefore = ticketCount(orderDbPath);
-    const result = await chat("req-p61-write", "请帮我创建工单：包裹一直没收到，麻烦尽快处理。");
+    const entriesBefore = dailyEntryCount(marker);
+    const result = await chat("req-p61-write", `请帮我把这段进展记到日记里：${marker}`);
     expect(result.status).toBe(200);
-    expect(ticketCount(orderDbPath)).toBe(ticketsBefore + 1);
+    expect(dailyEntryCount(marker)).toBe(entriesBefore + 1);
 
     const turn = turnSpanFor("req-p61-write")!;
     const traceId = turn.spanContext().traceId;
@@ -395,13 +398,13 @@ describe("Phase 6 observability", () => {
     });
     await rebuildHarness(activeProxy.url, { auditQueue: queue });
     faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("order_query", { order_id: ORDER_ID } as never)], {
+      fauxAssistantMessage([fauxToolCall("vault_search", { query: NOTE_QUERY } as never)], {
         stopReason: "toolUse",
       }),
       fauxAssistantMessage("查到了。"),
     ]);
 
-    const first = await chat("req-p63-warm", `查一下 ${ORDER_ID}`);
+    const first = await chat("req-p63-warm", `搜一下 ${NOTE_QUERY}`);
     expect(first.status).toBe(200);
     expect(queue.size).toBeGreaterThan(0);
 
@@ -418,13 +421,13 @@ describe("Phase 6 observability", () => {
       });
 
     faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("order_query", { order_id: ORDER_ID } as never)], {
+      fauxAssistantMessage([fauxToolCall("vault_search", { query: NOTE_QUERY } as never)], {
         stopReason: "toolUse",
       }),
       fauxAssistantMessage("又查到了。"),
     ]);
     const started = Date.now();
-    const second = await chat("req-p63-fast", `再查一下 ${ORDER_ID}`);
+    const second = await chat("req-p63-fast", `再搜一下 ${NOTE_QUERY}`);
     const elapsed = Date.now() - started;
     expect(second.status).toBe(200);
     // The decisive evidence is not the number: it is that the audit POST had
@@ -460,7 +463,7 @@ describe("Phase 6 observability", () => {
         {
           eventId: `evt-${index}`,
           kind: "tool_call",
-          toolName: "order_query",
+          toolName: "vault_search",
           occurredAt: new Date().toISOString(),
         },
         route,
@@ -472,7 +475,7 @@ describe("Phase 6 observability", () => {
     expect(tiny.drain(10).map((event) => event.eventId)).toEqual(["evt-0", "evt-1", "evt-2"]);
     // An event without a request identity cannot be delivered; it is counted,
     // not silently shipped with someone else's credentials.
-    expect(tiny.push({ eventId: "evt-x", kind: "tool_call", toolName: "order_query", occurredAt: "" }, undefined)).toBe(
+    expect(tiny.push({ eventId: "evt-x", kind: "tool_call", toolName: "vault_search", occurredAt: "" }, undefined)).toBe(
       false,
     );
     expect(tiny.dropped).toBe(8);
@@ -482,12 +485,12 @@ describe("Phase 6 observability", () => {
     const queue = new AuditQueue(1);
     await rebuildHarness(python.url, { auditQueue: queue });
     faux.setResponses([
-      fauxAssistantMessage([fauxToolCall("order_query", { order_id: ORDER_ID } as never)], {
+      fauxAssistantMessage([fauxToolCall("vault_search", { query: NOTE_QUERY } as never)], {
         stopReason: "toolUse",
       }),
       fauxAssistantMessage("查完了。"),
     ]);
-    const result = await chat("req-p64-live", `查 ${ORDER_ID}`);
+    const result = await chat("req-p64-live", `搜 ${NOTE_QUERY}`);
     expect(result.status).toBe(200);
     expect((result.body.message as { content: string }).content).toBe("查完了。");
     expect(queue.dropped).toBeGreaterThan(0);

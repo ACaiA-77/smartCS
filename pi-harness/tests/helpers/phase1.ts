@@ -30,6 +30,8 @@ export const MIGRATION_FILES = [
   join(PYTHON_IMPL, "migrations", "003_phase5_write_enable.sql"),
   // Phase 6: the audit sink. Additive and idempotent for the same reason.
   join(PYTHON_IMPL, "migrations", "004_phase6_audit.sql"),
+  // Phase 7 / Copilot: allow pending_action type='tool' for Copilot external actions.
+  join(PYTHON_IMPL, "migrations", "005_phase7_copilot_actions.sql"),
 ];
 
 export const TEST_DATABASE = process.env.SMARTCS_TEST_DATABASE ?? "smartcs_phase1_test";
@@ -186,8 +188,8 @@ export interface PythonService {
 export async function startPythonService(options: {
   port: number;
   database?: string;
-  /** When set, the real ToolExecutor is wired over this SQLite demo database. */
-  orderDbPath?: string;
+  /** When set, the real Copilot ToolExecutor + Vault + Ontology + SQLite ledger are wired here. */
+  copilotDbPath?: string;
   /**
    * Phase 5: `live` turns on the real write channel. It must match the harness
    * side (`SMARTCS_WRITE_MODE`); the runtime refuses write tools unless it is
@@ -221,27 +223,95 @@ async def _startup():
     # Phase 5: the authorization service reads the durable user message and
     # writes pending_action / open_write_operations through the raw transaction.
     app.state.platform_database = db
-    order_db = os.environ.get("SMARTCS_TEST_ORDER_DB")
-    if order_db:
+    copilot_db = os.environ.get("SMARTCS_TEST_COPILOT_DB")
+    if copilot_db:
+        import json as _json, sqlite3 as _sqlite3
+        from datetime import datetime as _dt, timezone as _tz
+        from pathlib import Path as _Path
+        from knowledge_engine import ObsidianVault, OntologyStore, WikiCompiler
+        from memory.long_term import HashEmbeddingBackend, LongTermMemory
+        from tool_runtime.approval_store import ApprovalService
         from tool_runtime.execution_ledger import ExecutionLedger
         from tool_runtime.mcp_server import MCPToolServer, create_default_tools
-        from tool_runtime.order_repository import OrderRepository
         from tool_runtime.tool_execution import ToolExecutor
-        from refunds.service import RefundService
-        from tickets.service import TicketService
-        repository = OrderRepository(order_db)
-        # The ledger IS the recovery authority for confirmed writes: without it
-        # every confirmed write is refused with execution_ledger_required, and
-        # /internal/operation_status has nothing to answer from.
-        ledger = ExecutionLedger(repository.db_path)
-        app.state.order_repository = repository
+
+        base_dir = _Path(copilot_db).parent
+        vault = ObsidianVault(base_dir / "vault")
+        vault.write_wiki_page(
+            "project-alpha",
+            "Project Alpha",
+            "Project Alpha roadmap and architecture notes.",
+            tags=["project", "roadmap"],
+        )
+        ontology = OntologyStore(base_dir / "ontology.sqlite")
+        alice = ontology.upsert_entity("Person", "Alice", attrs={"role": "owner"})
+        proj = ontology.upsert_entity("Project", "Project Alpha")
+        ontology.add_relation(alice["id"], "owns", proj["id"])
+        wiki_compiler = WikiCompiler(vault, ontology)
+
+        with _sqlite3.connect(copilot_db) as _conn:
+            _conn.execute(
+                """CREATE TABLE IF NOT EXISTS test_sent_mails (
+                    message_id TEXT PRIMARY KEY,
+                    account TEXT NOT NULL,
+                    to_json TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    idempotency_key TEXT,
+                    sent_at TEXT NOT NULL
+                )"""
+            )
+
+        class _SqliteMailProvider:
+            def __init__(self, db_path: str, account: str) -> None:
+                self._db_path = db_path
+                self._account = account
+
+            def search_messages(self, query: str, folder: str = "INBOX", limit: int = 10):
+                return []
+
+            def read_thread(self, thread_id: str):
+                return {"thread_id": thread_id, "messages": []}
+
+            def save_draft(self, **kwargs):
+                return {"draft_id": "draft-1", "saved": True}
+
+            def send_message(self, *, to, subject, body, cc=None, reply_to_message_id=None, idempotency_key=None):
+                now = _dt.now(_tz.utc).isoformat()
+                msg_id = f"msg-{idempotency_key or len(subject)}"
+                with _sqlite3.connect(self._db_path) as conn:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO test_sent_mails
+                           (message_id, account, to_json, subject, body, idempotency_key, sent_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (msg_id, self._account, _json.dumps(to), subject, body, idempotency_key, now),
+                    )
+                return {"sent": True, "message_id": msg_id, "subject": subject}
+
+        class _SqliteMailRouter:
+            accounts = ["163"]
+            def __init__(self, db_path: str) -> None:
+                self._db_path = db_path
+            def get_provider(self, account: str):
+                if account != "163":
+                    raise ValueError(f"unknown mail account: {account}")
+                return _SqliteMailProvider(self._db_path, account)
+
+        ledger = ExecutionLedger(copilot_db)
+        approvals = ApprovalService(copilot_db)
         app.state.execution_ledger = ledger
-        app.state.tool_executor = ToolExecutor(create_default_tools(
-            MCPToolServer(),
-            order_repository=repository,
-            refund_service=RefundService(repository),
-            ticket_service=TicketService(repository),
-        ), ledger=ledger)
+        app.state.tool_executor = ToolExecutor(
+            create_default_tools(
+                MCPToolServer(),
+                long_term_memory=LongTermMemory(embedding_dim=64, embedding_backend=HashEmbeddingBackend(64)),
+                vault=vault,
+                ontology=ontology,
+                wiki_compiler=wiki_compiler,
+                mail_router=_SqliteMailRouter(copilot_db),
+            ),
+            ledger=ledger,
+            approval_service=approvals,
+        )
     from memory.user_memory import UserMemoryService
     memory = UserMemoryService(database=db)
     await memory.initialize()
@@ -278,7 +348,7 @@ uvicorn.run(app, host="127.0.0.1", port=int(os.environ["PHASE1_TEST_PORT"]), log
       ...childMysqlEnv(options.database ?? TEST_DATABASE),
       PHASE1_TEST_PORT: String(options.port),
       INTERNAL_SERVICE_JWT_SECRET: process.env.INTERNAL_SERVICE_JWT_SECRET ?? env.INTERNAL_SERVICE_JWT_SECRET ?? "",
-      ...(options.orderDbPath ? { SMARTCS_TEST_ORDER_DB: options.orderDbPath } : {}),
+      ...(options.copilotDbPath ? { SMARTCS_TEST_COPILOT_DB: options.copilotDbPath } : {}),
       // Pinned, never inherited: a developer's shell must not be able to turn
       // a test run into a live-write run by accident.
       SMARTCS_WRITE_MODE: options.writeMode ?? "off",

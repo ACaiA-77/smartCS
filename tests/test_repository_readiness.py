@@ -34,7 +34,8 @@ def test_checker_detects_forbidden_tracked_artifact_without_index_mutation():
 def test_docker_example_has_container_paths_and_placeholder_secret():
     text = (ROOT / ".env.docker.example").read_text(encoding="utf-8")
     assert "REDIS_URL" not in text
-    assert "ORDER_DB_PATH=/app/data/orders.db" in text
+    assert "SMARTCS_PROFILE" not in text
+    assert "COPILOT_DB_PATH=/app/data/copilot.db" in text
     assert "FAISS_INDEX_PATH=/app/vector_store/faiss_index" in text
     assert "OTEL_SDK_DISABLED=true" in text
     credential_assignments = []

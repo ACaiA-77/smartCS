@@ -79,7 +79,7 @@ async def test_tool_metrics_cover_outcomes_without_payload_logging(tmp_path, cap
         return {"success": True}
 
     async def confirmed_write():
-        return {"success": True, "order_id": "SECRET_ORDER_456"}
+        return {"success": True, "note_id": "SECRET_NOTE_456"}
 
     async def rejected_read():
         return {"success": False, "reason": "SECRET_DESCRIPTION_789"}
@@ -332,7 +332,6 @@ def test_recovery_wrapper_records_aggregates_only(monkeypatch):
     )
     metrics = RuntimeMetrics()
     reconciler = InstrumentedExecutionReconciler(
-        None,
         None,
         runtime_metrics=metrics,
     )

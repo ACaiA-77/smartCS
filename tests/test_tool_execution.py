@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
-from tool_runtime.mcp_server import MCPToolServer, ToolCallResult, ToolDefinition, create_default_tools
+from knowledge_engine import ObsidianVault
 from tool_runtime.execution_ledger import ExecutionLedger
-from tool_runtime.order_repository import OrderRepository
+from tool_runtime.mcp_server import MCPToolServer, ToolCallResult, ToolDefinition, create_default_tools
 from tool_runtime.tool_execution import (
     ToolExecutionContext,
     ToolExecutionPolicy,
@@ -42,49 +42,39 @@ def _registered_server(
 
 
 @pytest.mark.asyncio
-async def test_confirmation_blocks_refund_create_without_db_write(tmp_path) -> None:
-    repository = OrderRepository(str(tmp_path / "orders.db"))
-    server = create_default_tools(MCPToolServer(), order_repository=repository)
-    arguments = {
-        "order_id": "ORD-20260801-0002",
-        "user_id": "user_002",
-        "reason": "需要退款",
-    }
-    before = repository.get_order(arguments["order_id"])["refunds"]
+async def test_confirmation_blocks_vault_append_daily_without_write(tmp_path) -> None:
+    vault = ObsidianVault(tmp_path / "vault")
+    server = create_default_tools(MCPToolServer(), vault=vault)
+    arguments = {"entry": "需要确认后写入", "date_str": "2026-11-18"}
 
-    result = await ToolExecutor(server).execute("refund_create", arguments)
+    result = await ToolExecutor(server).execute("vault_append_daily", arguments)
 
     assert result.success is False
     assert result.status == "confirmation_required"
     assert result.error_code == "confirmation_required"
     assert result.attempts == 0
     assert result.operation_type == "write"
-    assert result.risk_level == "medium"
     assert result.requires_confirmation is True
-    assert repository.get_order(arguments["order_id"])["refunds"] == before
+    assert not (vault.root / "daily" / "2026-11-18.md").exists()
 
 
 @pytest.mark.asyncio
-async def test_confirmed_refund_create_executes_once(tmp_path) -> None:
-    repository = OrderRepository(str(tmp_path / "orders.db"))
-    server = create_default_tools(MCPToolServer(), order_repository=repository)
-    ledger = ExecutionLedger(repository.db_path)
+async def test_confirmed_vault_append_daily_executes_once(tmp_path) -> None:
+    vault = ObsidianVault(tmp_path / "vault")
+    server = create_default_tools(MCPToolServer(), vault=vault)
+    ledger = ExecutionLedger(str(tmp_path / "copilot.db"))
 
     result = await ToolExecutor(server, ledger=ledger).execute(
-        "refund_create",
-        {
-            "order_id": "ORD-20260801-0002",
-            "user_id": "user_002",
-            "reason": "确认退款",
-        },
-        ToolExecutionContext(confirmed=True, idempotency_key="refund-1"),
+        "vault_append_daily",
+        {"entry": "完成架构收尾", "date_str": "2026-11-18"},
+        ToolExecutionContext(confirmed=True, idempotency_key="daily-1"),
     )
 
     assert result.success is True
     assert result.status == "completed"
-    assert result.result["success"] is True
+    assert result.result["path"].endswith("daily/2026-11-18.md")
     assert result.attempts == 1
-    assert len(repository.get_order("ORD-20260801-0002")["refunds"]) == 1
+    assert "完成架构收尾" in vault.read_note("daily/2026-11-18.md")["content"]
 
 
 @pytest.mark.asyncio
@@ -124,9 +114,7 @@ async def test_retryable_read_retries_transient_exception() -> None:
             raise RuntimeError("temporary")
         return {"ok": True}
 
-    result = await ToolExecutor(
-        _registered_server(handler=handler)
-    ).execute("test_tool", {})
+    result = await ToolExecutor(_registered_server(handler=handler)).execute("test_tool", {})
 
     assert result.success is True
     assert result.status == "completed"

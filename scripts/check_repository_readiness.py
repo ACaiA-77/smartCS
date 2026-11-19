@@ -15,7 +15,18 @@ REQUIRED_FILES = (
     "tracing/observability.py",
     "tests/test_runtime_observability.py",
 )
-PRODUCTION_DIRS = ("api", "db", "internal_api", "tool_runtime", "policies", "memory", "refunds", "tickets", "sandbox", "tracing")
+PRODUCTION_DIRS = (
+    "api",
+    "connectors",
+    "db",
+    "internal_api",
+    "knowledge_engine",
+    "memory",
+    "policies",
+    "rag",
+    "tool_runtime",
+    "tracing",
+)
 SOURCE_RULES = (
     (
         PRODUCTION_DIRS,

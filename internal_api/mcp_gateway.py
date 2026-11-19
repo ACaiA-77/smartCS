@@ -3,8 +3,8 @@
 Why this is the only tool that moves to MCP
 -------------------------------------------
 An MCP connection is long-lived and authenticated per *server*, not per turn:
-it carries no per-user identity. The four READ tools that are bound to a user
-(order / ticket / refund_evaluate / risk_check) depend on the per-turn identity
+it carries no per-user identity. Identity-bound Copilot tools (vault / wiki /
+onto / mail / github / feishu / copilot_action_*) depend on the per-turn identity
 envelope, so moving them behind MCP would mean smuggling identity through the
 channel — a security-model change, not a transport change. `knowledge_search`
 searches a shared corpus with no per-user partitioning, so it can move without
@@ -66,10 +66,13 @@ def _ensure_repo_importable() -> None:
 
 
 def _load_fastmcp():
-    """Import FastMCP from the official MCP SDK (no local package shadows it)."""
-    from mcp.server.fastmcp import FastMCP
-
-    return FastMCP
+    """Import FastMCP (mcp 1.x) or MCPServer (mcp 2.x) from the official MCP SDK."""
+    try:
+        from mcp.server.fastmcp import FastMCP
+        return FastMCP
+    except ModuleNotFoundError:
+        from mcp.server.mcpserver import MCPServer
+        return MCPServer
 
 
 def _load_rag_timing() -> Any:

@@ -29,7 +29,7 @@ LAUNCHER = PYTHON_IMPL / "tests" / "mcp_gateway_testserver.py"
 PROBE = PYTHON_IMPL / "tests" / "mcp_client_probe.py"
 TOKEN = "phase8-mcp-test-token-0123456789"
 WRONG_TOKEN = "phase8-mcp-wrong-token-000000000"
-QUERY = "退款政策"
+QUERY = "上下文工程"
 
 
 def _free_port() -> int:

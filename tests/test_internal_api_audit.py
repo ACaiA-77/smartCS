@@ -68,11 +68,11 @@ def _event(**overrides):
     event = {
         "event_id": str(uuid.uuid4()),
         "kind": "tool_call",
-        "tool_name": "order_query",
+        "tool_name": "vault_search",
         "tool_call_id": "call-1",
         "operation_id": None,
         "trace_id": TRACE_ID,
-        "payload": {"occurred_at": "2026-10-04T00:00:00.000Z", "input": {"order_id": "ORD-1"}},
+        "payload": {"occurred_at": "2026-10-04T00:00:00.000Z", "input": {"query": "alpha"}},
     }
     event.update(overrides)
     return event
@@ -138,7 +138,7 @@ def _audit_count(live) -> int:
 @pytest.mark.asyncio
 async def test_p6_2_resending_the_same_batch_inserts_nothing(live):
     """P6-2: event_id is the idempotency key; a replay must not add rows."""
-    events = [_event(tool_name="order_query"), _event(kind="tool_result", tool_name="order_query")]
+    events = [_event(tool_name="vault_search"), _event(kind="tool_result", tool_name="vault_search")]
 
     first = await _post_batch(live, events, request_id="req-p62")
     assert first.status_code == 200, first.text
@@ -152,7 +152,7 @@ async def test_p6_2_resending_the_same_batch_inserts_nothing(live):
     assert _audit_count(live) == 2, "a repeated batch must not grow the table"
 
     # A NEW event in the same request still lands — idempotency is per event.
-    third = await _post_batch(live, [_event(tool_name="refund_evaluate")], request_id="req-p62")
+    third = await _post_batch(live, [_event(tool_name="onto_query")], request_id="req-p62")
     assert third.json() == {"inserted": 1, "duplicates": 0}
     assert _audit_count(live) == 3
 
@@ -173,7 +173,7 @@ async def test_audit_stores_the_authoritative_identity_not_the_body(live):
     assert row[1] == "req-bind"
     assert row[2] == TRACE_ID
     assert row[3] == "tool_call"
-    assert row[4] == "order_query"
+    assert row[4] == "vault_search"
 
 
 # --- the endpoint's own contract --------------------------------------------

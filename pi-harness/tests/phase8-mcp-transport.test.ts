@@ -90,7 +90,7 @@ function withMcpEnv<T>(token: string, body: () => Promise<T>): Promise<T> {
 describe("Phase 8 knowledge transport (§8.1)", () => {
   it("mcp: the MCP tool is declared and reaches the real gateway", async () => {
     const outcome = await withMcpEnv(MCP_TEST_TOKEN, () =>
-      callTool(KNOWLEDGE_MCP_TOOL, { query: "退款政策", top_k: 2 }),
+      callTool(KNOWLEDGE_MCP_TOOL, { query: "上下文工程", top_k: 2 }),
     );
     expect(outcome.isError, outcome.text).toBe(false);
     expect(outcome.text).toContain(MCP_TEST_CORPUS_ANSWER);
@@ -98,7 +98,7 @@ describe("Phase 8 knowledge transport (§8.1)", () => {
 
   it("mcp: the HTTP knowledge shell is not declared at the same time", async () => {
     const outcome = await withMcpEnv(MCP_TEST_TOKEN, () =>
-      callTool(KNOWLEDGE_HTTP_TOOL, { query: "退款政策" }),
+      callTool(KNOWLEDGE_HTTP_TOOL, { query: "上下文工程" }),
     );
     // Unknown tool: exactly one knowledge tool is on the face, whichever
     // transport is selected.
@@ -107,7 +107,7 @@ describe("Phase 8 knowledge transport (§8.1)", () => {
 
   it("mcp: a wrong server token is refused end to end", async () => {
     const outcome = await withMcpEnv("phase8-wrong-token-000000000", () =>
-      callTool(KNOWLEDGE_MCP_TOOL, { query: "退款政策" }),
+      callTool(KNOWLEDGE_MCP_TOOL, { query: "上下文工程" }),
     );
     expect(outcome.isError).toBe(true);
     expect(outcome.text).not.toContain(MCP_TEST_CORPUS_ANSWER);
@@ -117,7 +117,7 @@ describe("Phase 8 knowledge transport (§8.1)", () => {
     const saved = process.env.SMARTCS_KNOWLEDGE_TRANSPORT;
     delete process.env.SMARTCS_KNOWLEDGE_TRANSPORT;
     try {
-      const outcome = await callTool(KNOWLEDGE_MCP_TOOL, { query: "退款政策" });
+      const outcome = await callTool(KNOWLEDGE_MCP_TOOL, { query: "上下文工程" });
       expect(outcome.isError).toBe(true);
     } finally {
       if (saved !== undefined) process.env.SMARTCS_KNOWLEDGE_TRANSPORT = saved;

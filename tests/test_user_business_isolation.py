@@ -1,210 +1,97 @@
-"""Authenticated tool boundaries use real SQLite business effects and ledger rows."""
+"""Authenticated tool, ContextVar, and Copilot sandbox isolation tests."""
 
 from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
-from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 
+import api.main as api_main
 from auth.context import UserContext, current_user
+from knowledge_engine import ObsidianVault, OntologyStore, VaultSecurityError
 from tool_runtime.execution_ledger import ExecutionLedger
 from tool_runtime.mcp_server import MCPToolServer, create_default_tools
-from tool_runtime.order_repository import OrderRepository
 from tool_runtime.tool_execution import ToolExecutionContext, ToolExecutor
-from tickets.service import canonical_ticket_payload_hash
-
-
-ORDER_A = "ORD-20260801-0021"  # Paid/processing order owned by user_001.
-ORDER_B = "ORD-20260801-0002"
-CUSTOMER_TOOLS = ("order_query", "refund_evaluate", "refund_create", "ticket_create", "ticket_query")
 
 
 @pytest.fixture
-def business(tmp_path):
-    repository = OrderRepository(str(tmp_path / "business.db"))
-    server = create_default_tools(MCPToolServer(), order_repository=repository)
-    executor = ToolExecutor(server, ledger=ExecutionLedger(repository.db_path))
-    return repository, server, executor
+def copilot_runtime(tmp_path):
+    vault = ObsidianVault(tmp_path / "vault")
+    vault.write_wiki_page("alpha", "Alpha Note", "Confidential project note.")
+    ontology = OntologyStore(tmp_path / "ontology.sqlite")
+    server = create_default_tools(MCPToolServer(), vault=vault, ontology=ontology)
+    executor = ToolExecutor(server, ledger=ExecutionLedger(str(tmp_path / "copilot.db")))
+    yield vault, ontology, server, executor
+    ontology.close()
 
 
 @contextmanager
-def _as_user(user_id):
-    token = current_user.set(UserContext(
-        account_id=int(user_id.rsplit("_", 1)[-1]),
-        username=f"customer-{user_id}",
-        business_user_id=user_id,
-    ))
+def _as_user(user_id: str):
+    token = current_user.set(
+        UserContext(
+            account_id=int(user_id.rsplit("_", 1)[-1]),
+            username=f"user-{user_id}",
+            business_user_id=user_id,
+        )
+    )
     try:
         yield
     finally:
         current_user.reset(token)
 
 
-def _ticket_arguments(user_id="user_001"):
-    arguments = {
-        "client_request_id": "private-ticket-request",
-        "user_id": user_id,
-        "title": "private-ticket-title",
-        "description": "private-ticket-description",
-    }
-    arguments["request_payload_hash"] = canonical_ticket_payload_hash(arguments)
-    return arguments
+@pytest.mark.parametrize(
+    "tool_name",
+    ["vault_append_daily", "vault_propose_edit", "wiki_compile_doc", "onto_upsert", "copilot_action_confirm"],
+)
+def test_public_tool_arguments_reject_write_tools(tool_name: str):
+    with pytest.raises(HTTPException) as exc:
+        api_main._public_tool_arguments(tool_name, {})
+    assert exc.value.status_code == 403
 
 
-async def _call(business, entry, name, arguments, key="isolation-write"):
-    _, server, executor = business
-    if entry == "mcp":
-        return await server.call_tool(name, arguments)
-    return await executor.execute(
-        name, arguments, ToolExecutionContext(confirmed=True, idempotency_key=key)
+@pytest.mark.parametrize("field", ["user_id", "business_user_id"])
+def test_public_tool_arguments_reject_identity_override(field: str):
+    with pytest.raises(HTTPException) as exc:
+        api_main._public_tool_arguments("vault_search", {"query": "Alpha", field: "user_001"})
+    assert exc.value.status_code == 403
+
+
+def test_vault_sandbox_blocks_traversal_and_absolute_paths(copilot_runtime, tmp_path):
+    vault, _, _, _ = copilot_runtime
+    outside = tmp_path / "secret.md"
+    outside.write_text("top-secret", encoding="utf-8")
+
+    for bad_path in ("../secret.md", "/etc/passwd", str(outside), "wiki/../../secret.md"):
+        with pytest.raises(VaultSecurityError):
+            vault.read_note(bad_path)
+
+
+@pytest.mark.asyncio
+async def test_write_tool_without_confirmation_never_mutates_vault(copilot_runtime):
+    vault, _, _, executor = copilot_runtime
+    result = await executor.execute(
+        "vault_append_daily",
+        {"entry": "unauthorized", "date_str": "2026-11-18"},
+        ToolExecutionContext(confirmed=False, idempotency_key="unconfirmed-1"),
     )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("entry", ["mcp", "executor"])
-@pytest.mark.parametrize("name", CUSTOMER_TOOLS)
-async def test_model_cannot_override_authenticated_identity(business, entry, name):
-    repository, server, executor = business
-    handler = AsyncMock(return_value={"unexpected": True})
-    server.get_tool(name).handler = handler
-    arguments = {"user_id": "user_001"}
-
-    with _as_user("user_002"):
-        result = await _call(business, entry, name, arguments)
-
     assert result.success is False
-    assert result.result is None
-    assert result.error == "tool user_id does not match authenticated user"
-    handler.assert_not_awaited()
-    assert executor.ledger.get("isolation-write") is None
-    assert repository.get_order(ORDER_A)["refunds"] == []
-    assert arguments == {"user_id": "user_001"}
+    assert result.error_code == "confirmation_required"
+    assert not (vault.root / "daily" / "2026-11-18.md").exists()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("entry", ["mcp", "executor"])
-@pytest.mark.parametrize("name", CUSTOMER_TOOLS)
-async def test_missing_identity_is_injected_without_mutating_model_arguments(business, entry, name):
-    _, server, _ = business
-    handler = AsyncMock(return_value={"ok": True})
-    server.get_tool(name).handler = handler
-    arguments = {}
-    with _as_user("user_002"):
-        result = await _call(business, entry, name, arguments)
-
-    assert result.success is True
-    handler.assert_awaited_once_with(user_id="user_002")
-    assert arguments == {}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("entry", ["mcp", "executor"])
-async def test_authenticated_order_query_returns_no_other_user_details(business, entry):
-    with _as_user("user_002"):
-        denied = await _call(business, entry, "order_query", {"order_id": ORDER_A})
-        missing = await _call(business, entry, "order_query", {"order_id": "missing-order"})
-        own = await _call(business, entry, "order_query", {"order_id": ORDER_B})
-
-    assert denied.success is True
-    assert denied.result == {**missing.result, "order_id": ORDER_A}
-    assert denied.result["found"] is False
-    assert own.result["found"] is True
-    assert own.result["order_id"] == ORDER_B
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("entry", ["mcp", "executor"])
-async def test_cross_user_refund_has_no_effect_or_payment_metadata(business, entry):
-    repository, _, _ = business
-    before = repository.get_order(ORDER_A)
-    with repository.transaction() as connection:
-        count_before = connection.execute("SELECT COUNT(*) FROM refunds").fetchone()[0]
-
-    with _as_user("user_002"):
-        evaluated = await _call(business, entry, "refund_evaluate", {"order_id": ORDER_A})
-        created = await _call(
-            business, entry, "refund_create", {"order_id": ORDER_A, "reason": "not my order"}
-        )
-
-    assert evaluated.result["eligible"] is False
-    assert created.result["success"] is False
-    for result in (evaluated, created):
-        assert result.result["reason_code"] == "order_not_owned"
-        assert result.result["amount"] is None
-        assert result.result["payment_id"] is None
-        assert result.result.get("refund_id") is None
-    assert repository.get_order(ORDER_A) == before
-    with repository.transaction() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM refunds").fetchone()[0] == count_before
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("entry", ["mcp", "executor"])
-async def test_ticket_query_and_request_conflict_never_leak_another_users_metadata(business, entry):
-    repository, _, _ = business
-    with _as_user("user_001"):
-        created = await _call(business, entry, "ticket_create", _ticket_arguments(), "ticket-A")
-        ticket_id = created.result["ticket_id"]
-        own = await _call(business, entry, "ticket_query", {"ticket_id": ticket_id})
-        assert own.result["title"] == "private-ticket-title"
-
-    with _as_user("user_002"):
-        denied = await _call(business, entry, "ticket_query", {"ticket_id": ticket_id})
-        conflict = await _call(
-            business, entry, "ticket_create", _ticket_arguments("user_002"), "ticket-B"
-        )
-
-    assert denied.result == {"success": False, "reason_code": "ticket_not_found", "ticket_id": ticket_id}
-    assert conflict.result == {
-        "success": False,
-        "reason_code": "client_request_conflict",
-        "client_request_id": "private-ticket-request",
-    }
-    with repository.transaction() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM support_tickets").fetchone()[0] == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("name", ["refund_create", "ticket_create"])
-async def test_identity_guard_precedes_ledger_replay(business, name):
-    repository, _, executor = business
-    arguments = _ticket_arguments() if name == "ticket_create" else {
-        "order_id": ORDER_A, "user_id": "user_001", "reason": "own refund",
-    }
-    with _as_user("user_001"):
-        created = await _call(business, "executor", name, arguments)
-        replay = await _call(business, "executor", name, arguments)
-    assert created.result["success"] is True
-    assert replay.replayed is True and replay.result == created.result
-    ledger_before = executor.ledger.get("isolation-write")
-    with _as_user("user_002"):
-        denied = await _call(business, "executor", name, arguments)
-
-    assert denied.error_code == "user_identity_mismatch"
-    assert denied.result is None and denied.replayed is False and denied.attempts == 0
-    with _as_user("user_002"):
-        missing_identity = {key: value for key, value in arguments.items() if key != "user_id"}
-        conflict = await _call(business, "executor", name, missing_identity)
-    assert conflict.error_code == "idempotency_conflict"
-    assert conflict.result is None and conflict.replayed is False
-    assert executor.ledger.get("isolation-write") == ledger_before
-    if name == "refund_create":
-        assert len(repository.get_order(ORDER_A)["refunds"]) == 1
-    else:
-        with repository.transaction() as connection:
-            assert connection.execute("SELECT COUNT(*) FROM support_tickets").fetchone()[0] == 1
-
-
-@pytest.mark.asyncio
-async def test_concurrent_customer_contexts_do_not_cross_contaminate(business):
-    async def query(user_id, order_id):
+async def test_concurrent_user_contexts_do_not_cross_contaminate():
+    async def read_context(user_id: str) -> str:
         with _as_user(user_id):
             await asyncio.sleep(0)
-            return await _call(business, "executor", "order_query", {"order_id": order_id})
+            ctx = current_user.get()
+            assert ctx is not None
+            return ctx.business_user_id
 
-    first, second = await asyncio.gather(query("user_001", ORDER_A), query("user_002", ORDER_B))
-    assert first.result["found"] is True and first.result["order_id"] == ORDER_A
-    assert second.result["found"] is True and second.result["order_id"] == ORDER_B
+    first, second = await asyncio.gather(read_context("user_001"), read_context("user_002"))
+    assert first == "user_001"
+    assert second == "user_002"
     assert current_user.get() is None

@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
+from knowledge_engine import ObsidianVault
 from tool_runtime.execution_ledger import ExecutionLedger
 from tool_runtime.mcp_server import MCPToolServer, ToolDefinition, create_default_tools
-from tool_runtime.order_repository import OrderRepository
 from tool_runtime.tool_execution import ToolExecutionContext, ToolExecutor
 
 
@@ -32,26 +32,21 @@ def _context(key: str | None) -> ToolExecutionContext:
 
 
 @pytest.mark.asyncio
-async def test_refund_duplicate_replays_and_writes_one_refund(tmp_path) -> None:
-    repository = OrderRepository(str(tmp_path / "orders.db"))
-    ledger = ExecutionLedger(repository.db_path)
-    executor = ToolExecutor(
-        create_default_tools(MCPToolServer(), order_repository=repository), ledger=ledger
-    )
-    arguments = {
-        "order_id": "ORD-20260801-0002",
-        "user_id": "user_002",
-        "reason": "重复请求",
-    }
+async def test_vault_append_daily_duplicate_replays_and_writes_once(tmp_path) -> None:
+    vault = ObsidianVault(tmp_path / "vault")
+    ledger = ExecutionLedger(str(tmp_path / "copilot.db"))
+    executor = ToolExecutor(create_default_tools(MCPToolServer(), vault=vault), ledger=ledger)
+    arguments = {"entry": "重复请求只写一次", "date_str": "2026-11-18"}
 
-    first = await executor.execute("refund_create", arguments, _context("refund-1"))
-    second = await executor.execute("refund_create", arguments, _context("refund-1"))
+    first = await executor.execute("vault_append_daily", arguments, _context("daily-dup-1"))
+    second = await executor.execute("vault_append_daily", arguments, _context("daily-dup-1"))
 
     assert first.success is True and first.replayed is False
     assert second.success is True and second.replayed is True
     assert second.attempts == 0
     assert second.result == first.result
-    assert len(repository.get_order(arguments["order_id"])["refunds"]) == 1
+    content = vault.read_note("daily/2026-11-18.md")["content"]
+    assert content.count("重复请求只写一次") == 1
 
 
 @pytest.mark.asyncio

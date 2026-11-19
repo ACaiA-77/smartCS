@@ -1,4 +1,4 @@
-"""FastAPI Business Runtime entrypoint (REST + SSE streaming forwarded to pi-harness)."""
+"""FastAPI Runtime entrypoint for Personal Copilot (REST + SSE forwarded to pi-harness)."""
 
 from __future__ import annotations
 
@@ -10,19 +10,20 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
+from api.copilot_bootstrap import build_copilot_dependencies
+from api.copilot_web import configure_copilot_web, router as copilot_web_router
+from api.feishu_bot import configure_feishu_client, router as feishu_router
 from auth.context import UserContext
 from auth.dependency import check_request_origin, cors_allowed_origins, get_current_user
 from auth.jwt import COOKIE_NAME, TOKEN_TTL_SECONDS, cookie_options, issue_token
 from auth.password import verify_password
-from api.copilot_bootstrap import build_copilot_dependencies, is_copilot_profile
-from api.feishu_bot import configure_feishu_client, router as feishu_router
 from internal_api import internal_router
 from internal_api.harness_client import (
     HarnessUnavailable,
@@ -38,12 +39,9 @@ from memory.user_memory_worker import UserMemoryWorker
 from platform_db.database import PlatformConflict, PlatformDatabase, PlatformUnavailable
 from platform_db.sessions import Sessions
 from platform_db.users import Users
-from refunds.service import RefundService
-from tickets.service import TicketService
 from tool_runtime.approval_store import ApprovalNotFoundError, ApprovalService, ApprovalStateError
 from tool_runtime.execution_ledger import ExecutionLedger
 from tool_runtime.mcp_server import MCPToolServer, create_default_tools
-from tool_runtime.order_repository import OrderRepository
 from tool_runtime.tool_execution import ToolExecutionContext
 from tracing.observability import (
     InstrumentedExecutionReconciler,
@@ -57,33 +55,34 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+_PUBLIC_READ_TOOLS = frozenset(
+    {
+        "knowledge_search",
+        "vault_search",
+        "vault_read_note",
+        "vault_backlinks",
+        "wiki_lint",
+        "onto_query",
+    }
+)
+
 long_term_memory = KnowledgeMemory(index_path=os.getenv("FAISS_INDEX_PATH", "./vector_store/faiss_index"))
 shared_retriever = long_term_memory.get_retriever()
-order_repository = OrderRepository(os.getenv("ORDER_DB_PATH", "./data/orders.db"))
-refund_service = RefundService(order_repository)
-ticket_service = TicketService(order_repository)
-# Copilot profile only: build connectors whose environment is complete. The
-# default e-commerce deployment passes no extra dependencies, so its tool
-# surface is byte-for-byte unchanged.
-copilot_dependencies = build_copilot_dependencies() if is_copilot_profile() else {}
+copilot_dependencies = build_copilot_dependencies()
 mcp_server = create_default_tools(
     MCPToolServer(),
     long_term_memory=long_term_memory,
     retriever=shared_retriever,
-    order_repository=order_repository,
-    refund_service=refund_service,
-    ticket_service=ticket_service,
     **copilot_dependencies,
 )
-if is_copilot_profile():
-    configure_feishu_client(copilot_dependencies.get("feishu_client"))
-execution_ledger = ExecutionLedger(order_repository.db_path)
-approval_service = ApprovalService(order_repository.db_path)
+configure_feishu_client(copilot_dependencies.get("feishu_client"))
+
+copilot_db_path = os.getenv("COPILOT_DB_PATH", "./data/copilot.db")
+execution_ledger = ExecutionLedger(copilot_db_path)
+approval_service = ApprovalService(copilot_db_path)
 runtime_metrics = RuntimeMetrics()
 execution_reconciler = InstrumentedExecutionReconciler(
     execution_ledger,
-    refund_service,
-    ticket_service=ticket_service,
     runtime_metrics=runtime_metrics,
 )
 tool_executor = InstrumentedToolExecutor(
@@ -120,7 +119,7 @@ async def lifespan(app: FastAPI):
     global user_memory_service, user_memory_worker
 
     init_tracer(
-        service_name=os.getenv("OTEL_SERVICE_NAME", "smart-cs-multi-agent"),
+        service_name=os.getenv("OTEL_SERVICE_NAME", "personal-copilot"),
         otlp_endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
     )
     set_agent_metrics(metrics)
@@ -136,7 +135,6 @@ async def lifespan(app: FastAPI):
     app.state.platform_database = platform
     app.state.execution_ledger = execution_ledger
     app.state.tool_executor = tool_executor
-    app.state.order_repository = order_repository
     app.state.user_memory_service = user_memory_service
 
     issue_token(1)
@@ -166,7 +164,6 @@ async def lifespan(app: FastAPI):
         app.state.tool_executor = None
         app.state.platform_database = None
         app.state.execution_ledger = None
-        app.state.order_repository = None
         app.state.user_memory_service = None
 
 
@@ -178,8 +175,8 @@ except ImportError:
     _HAS_FASTAPI_OTEL = False
 
 app = FastAPI(
-    title="智能客服系统",
-    description="基于 Pi Harness 与 Safe Tool Execution 的双层智能客服系统",
+    title="Personal Copilot · 个人受控工作台",
+    description="基于 Pi Harness 与受控工具运行时的 Personal Copilot 工作台",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -190,7 +187,6 @@ for _handle in (
     "platform_database",
     "execution_ledger",
     "tool_executor",
-    "order_repository",
     "user_memory_service",
 ):
     setattr(app.state, _handle, None)
@@ -215,8 +211,13 @@ async def private_api_responses(request: Request, call_next):
     return response
 
 
+configure_copilot_web(
+    dependencies_getter=lambda: copilot_dependencies,
+    mcp_server_getter=lambda: mcp_server,
+)
 app.include_router(internal_router)
 app.include_router(feishu_router)
+app.include_router(copilot_web_router)
 
 if _HAS_FASTAPI_OTEL:
     FastAPIInstrumentor.instrument_app(app)
@@ -244,9 +245,10 @@ install_request_observability(app, runtime_metrics)
 
 
 @app.get("/", include_in_schema=False)
-async def web_workbench() -> FileResponse:
-    """Serve the interactive customer-service workbench."""
-    return FileResponse(WEB_DIR / "index.html")
+async def web_workbench() -> HTMLResponse:
+    """Serve the Personal Copilot web workbench."""
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 app.mount("/ui", StaticFiles(directory=WEB_DIR), name="web-ui")
@@ -377,23 +379,16 @@ class ApprovalDecisionRequest(BaseModel):
     reason: str = ""
 
 
-def _customer_arguments(name, arguments, user):
-    if name not in {"order_query", "refund_evaluate", "ticket_query", "knowledge_search"}:
-        raise HTTPException(403, "use customer chat for this operation")
-    if "user_id" in arguments and arguments["user_id"] != user.business_user_id:
-        raise HTTPException(403, "tool identity mismatch")
-    if "business_user_id" in arguments:
+def _public_tool_arguments(name: str, arguments: dict) -> dict:
+    if name not in _PUBLIC_READ_TOOLS:
+        raise HTTPException(403, "use copilot chat for this operation")
+    if "user_id" in arguments or "business_user_id" in arguments:
         raise HTTPException(403, "tool identity must come from authentication")
-    result = dict(arguments)
-    if name != "knowledge_search":
-        result["user_id"] = user.business_user_id
-    else:
-        result.pop("user_id", None)
-    return result
+    return dict(arguments)
 
 
 async def _internal_only(user: UserContext = Depends(get_current_user)):
-    raise HTTPException(403, "internal operation is not exposed to customers")
+    raise HTTPException(403, "internal operation is not exposed publicly")
 
 
 async def _forward_user_token(request: Request) -> str:
@@ -548,14 +543,6 @@ async def clear_history(session_id: str, user: UserContext = Depends(get_current
     return {"session_id": session_id, "cleared": True}
 
 
-@app.get("/api/demo/orders")
-async def list_demo_orders(limit: int = Query(default=6, ge=1, le=20), user: UserContext = Depends(get_current_user)):
-    return {
-        "data_source": order_repository.DEMO_DATA_SOURCE,
-        "orders": order_repository.list_orders_for_user(user.business_user_id, limit),
-    }
-
-
 @app.get("/api/tools")
 async def list_tools(user: UserContext = Depends(get_current_user)):
     return {"tools": mcp_server.list_tools()}
@@ -564,7 +551,7 @@ async def list_tools(user: UserContext = Depends(get_current_user)):
 @app.post("/api/tools/call")
 async def call_tool(request: ToolExecuteRequest, user: UserContext = Depends(get_current_user)):
     name = request.name
-    arguments = _customer_arguments(name, request.arguments, user)
+    arguments = _public_tool_arguments(name, request.arguments)
     if request.session_id:
         await _owned_session(request.session_id, user)
     tool = mcp_server.get_tool(name)
@@ -581,7 +568,7 @@ async def call_tool(request: ToolExecuteRequest, user: UserContext = Depends(get
 
 @app.post("/api/tools/execute")
 async def execute_tool(request: ToolExecuteRequest, user: UserContext = Depends(get_current_user)):
-    arguments = _customer_arguments(request.name, request.arguments, user)
+    arguments = _public_tool_arguments(request.name, request.arguments)
     if request.session_id:
         await _owned_session(request.session_id, user)
     try:

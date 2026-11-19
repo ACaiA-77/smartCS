@@ -29,10 +29,10 @@ async function main(): Promise<void> {
   if (faux) {
     faux.setResponses([
       fauxAssistantMessage(
-        [fauxText("好的，我帮你查一下。"), fauxToolCall("order_query", { orderId: "1001" })],
+        [fauxText("好的，我帮你检索一下。"), fauxToolCall("knowledge_search", { query: "项目周报" })],
         { stopReason: "toolUse" },
       ),
-      fauxAssistantMessage("你的订单已发货。"),
+      fauxAssistantMessage("已整理好你的知识库检索结果。"),
     ]);
   }
 
@@ -57,7 +57,7 @@ async function main(): Promise<void> {
     }
 
     if (url.pathname === "/chat/stream" && req.method === "GET") {
-      const text = url.searchParams.get("q") ?? "帮我查一下订单 1001";
+      const text = url.searchParams.get("q") ?? "帮我检索项目周报";
       sse(res);
       const stream = new ChatStream(agent.session, {
         onFrame: (frame) => res.write(formatSseFrame(frame)),

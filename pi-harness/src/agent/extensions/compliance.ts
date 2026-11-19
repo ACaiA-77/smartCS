@@ -98,7 +98,7 @@ export function createComplianceExtension(options: ComplianceOptions = {}): {
   const sanitizedText = options.sanitizedText ?? "（该内容已被安全策略拦截，请重新描述你的问题。）";
   const hook: ComplianceHook = { records: [], replacementCount: 0 };
 
-  const fallbackText = options.fallbackText ?? "抱歉，该回复未能通过合规检查，请稍后再试或转人工客服。";
+  const fallbackText = options.fallbackText ?? "抱歉，该回复未能通过安全合规检查，请稍后再试或换个问法。";
 
   const extension: ExtensionFactory = (pi: ExtensionAPI) => {
     pi.on("message_end", async (event) => {

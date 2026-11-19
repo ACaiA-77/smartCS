@@ -5,7 +5,7 @@ Contract (phase2-design.md §2):
     headers  Authorization: Bearer <Internal Service JWT>
              aud=smartcs-business-runtime · account_id · business_user_id (REQUIRED, D5)
              · session_id · client_request_id · iat · exp
-    body     { "tool": "order_query", "arguments": {...},
+    body     { "tool": "vault_search", "arguments": {...},
                "session_id": "...", "client_request_id": "..." }   ← no identity fields
     200      { "ok": true, "content": "<minimal text>", "details": {...},
                "executor": { "toolCallId", "durationMs", "retries" } }
@@ -81,9 +81,7 @@ COPILOT_READ_TOOLS = frozenset(
         "copilot_action_prepare",
     }
 )
-READ_TOOLS = frozenset(
-    {"knowledge_search", "order_query", "ticket_query", "refund_evaluate", "risk_check"}
-) | COPILOT_READ_TOOLS
+READ_TOOLS = frozenset({"knowledge_search"}) | COPILOT_READ_TOOLS
 
 #: Fields that look like authority. Stripped before the executor ever sees them,
 #: so neither the model nor a compromised harness can assert an identity or
@@ -348,39 +346,8 @@ async def execute_tool(request: Request, body: ToolExecuteBody) -> dict[str, Any
     finally:
         current_user.reset(context_token)
 
-    # Phase 5b: in live mode a successful evaluation opens the two-phase flow by
-    # producing a REAL pending_action in MySQL (the authority for the second
-    # phase). shadow/off keep the Phase 4 behaviour of a deterministic
-    # placeholder id derived in TS — this branch is the only difference.
-    pending_action_id: str | None = None
-    if body.tool == "refund_evaluate" and _live_writes_enabled() and result.success:
-        platform = getattr(request.app.state, "platform_database", None)
-        evaluation = result.result if isinstance(result.result, dict) else {}
-        payload = {
-            "order_id": arguments.get("order_id"),
-            "user_id": service.business_user_id,
-            "amount": evaluation.get("refund_amount") or evaluation.get("amount"),
-            "refund_mode": evaluation.get("refund_mode"),
-            "reason": "用户确认后退款",
-        }
-        if payload["order_id"] and platform is not None:
-            try:
-                created = await WriteAuthorizationService(platform).create_pending_action(
-                    session_id=body.session_id,
-                    user_id=service.business_user_id,
-                    action_type="refund_create",
-                    payload=payload,
-                )
-                pending_action_id = created["pending_action_id"]
-            except Exception:
-                # A missing pending action degrades the flow to a refusal on the
-                # confirm turn; it must never turn the READ into an error.
-                logger.warning("could not create pending_action for %s", body.session_id, exc_info=True)
-
     duration_ms = (time.perf_counter() - started) * 1000
     content, content_truncated = render_content(result.result, _max_content_chars())
-    if pending_action_id:
-        content = f"{content}\npending_action_id={pending_action_id}"
     if not result.success and not content.strip():
         content = result.error or result.error_code or "tool call failed"
 
@@ -400,8 +367,6 @@ async def execute_tool(request: Request, body: ToolExecuteBody) -> dict[str, Any
         "contentTruncated": content_truncated,
         "audit": {"strippedFields": sorted(stripped), "forcedFields": sorted(forced)},
     }
-    if pending_action_id:
-        details["pending_action_id"] = pending_action_id
 
     return {
         "ok": True,
@@ -570,69 +535,19 @@ async def _execute_live_write(request: Request, service, body: ToolExecuteBody) 
         )
 
     tool = executor.server.get_tool(body.tool)
-    # refund_confirm has no registration of its own: it resolves to the
-    # low-level refund_create that stays inside Python. copilot_action_confirm
-    # likewise resolves to the action named by the frozen pending snapshot —
-    # only after authorization.
-    if tool is None and body.tool == "refund_confirm":
-        tool = executor.server.get_tool("refund_create")
+    # copilot_action_confirm resolves to the action named by the frozen pending
+    # snapshot — only after authorization.
     if tool is None and body.tool != "copilot_action_confirm":
         raise _error(404, "unknown_tool", f"tool '{body.tool}' is not registered")
 
-    # --- server-authoritative fields, injected BEFORE authorization --------
-    # Stripping was right: a model-supplied idempotency key or payload hash is
-    # trust-sensitive (it could be used to collide with, or evade, another
-    # request's idempotency record). But ticket_create's contract *requires*
-    # them, so the service supplies its own — the same pattern as force-binding
-    # `user_id`. Everything downstream therefore sees a payload whose identity
-    # and idempotency fields are ours, and the authorized target_hash covers
-    # exactly what will be sent.
     execute_as = body.tool
     forced_fields: list[str] = []
     if tool is not None and _tool_declares_user_id(tool):
         arguments["user_id"] = service.business_user_id
         forced_fields.append("user_id")
-    if body.tool == "ticket_create":
-        from tickets.service import canonical_ticket_payload_hash  # read-only import
-
-        arguments["client_request_id"] = body.client_request_id
-        arguments["request_payload_hash"] = canonical_ticket_payload_hash(
-            title=arguments.get("title"),
-            description=arguments.get("description"),
-            priority=arguments.get("priority"),
-            category=arguments.get("category"),
-            user_id=arguments.get("user_id"),
-        )
 
     try:
-        if body.tool == "ticket_create":
-            decision = await authorization.authorize_ticket_create(
-                session_id=body.session_id,
-                client_request_id=body.client_request_id,
-                arguments=arguments,
-            )
-        elif body.tool == "refund_confirm":
-            decision = await authorization.authorize_refund_confirm(
-                session_id=body.session_id,
-                client_request_id=body.client_request_id,
-                account_user_id=service.business_user_id,
-                arguments=arguments,
-            )
-            # The model supplies only the pending id; the business parameters
-            # come from the frozen pending snapshot, never from the model.
-            #
-            # The snapshot is an audit record and may carry evaluation-only
-            # fields (amount, refund_mode) that the low-level tool does not
-            # accept, so narrow it to the tool's declared schema — the schema is
-            # the contract, the snapshot is the source of the values.
-            snapshot = dict(decision.arguments or {})
-            declared = (getattr(tool, "input_schema", None) or {}).get("properties") or {}
-            arguments = {key: value for key, value in snapshot.items() if key in declared}
-            arguments["user_id"] = service.business_user_id
-            # The low-level tool is refund_create — it is never exposed to the
-            # model (plan v2 §6.4); this is the only path that reaches it.
-            execute_as = "refund_create"
-        elif body.tool == "copilot_action_confirm":
+        if body.tool == "copilot_action_confirm":
             decision = await authorization.authorize_copilot_action_confirm(
                 session_id=body.session_id,
                 client_request_id=body.client_request_id,
@@ -759,9 +674,8 @@ async def _execute_live_write(request: Request, service, body: ToolExecuteBody) 
         "COMPLETED" if business_ok else "FAILED",
     )
 
-    # Only a successful refund retires the pending action. A failed one leaves
-    # it pending so the user can retry with the same confirmation phrase (the
-    # legacy handler behaves the same way).
+    # Only a successful execution retires the pending action. A failed one leaves
+    # it pending so the user can retry with the same confirmation phrase.
     if business_ok and decision.pending_action_id:
         await authorization.consume_pending_action(decision.pending_action_id, decision.operation_id)
 

@@ -196,7 +196,7 @@ def platform_database(database: str | None = None):
 async def build_app(
     *,
     tool_executor: Any = None,
-    order_repository: Any = None,
+    execution_ledger: Any = None,
     user_memory_service: Any = None,
 ) -> FastAPI:
     """A FastAPI app mounting the real internal router with real DB state."""
@@ -208,19 +208,20 @@ async def build_app(
     await database.initialize()
     app = FastAPI()
     app.include_router(internal_router)
+    app.state.platform_database = database
     app.state.platform_users = Users(database)
     app.state.platform_sessions = Sessions(database)
     app.state.tool_executor = tool_executor
-    app.state.order_repository = order_repository
+    app.state.execution_ledger = execution_ledger
     app.state.user_memory_service = user_memory_service
     return app
 
 
-def build_order_repository(tmp_path: Path):
-    """The real SQLite order repository, seeded with the demo dataset."""
-    from tool_runtime.order_repository import OrderRepository
+def build_copilot_ledger(tmp_path: Path):
+    """Real SQLite ExecutionLedger for Copilot internal API tests."""
+    from tool_runtime.execution_ledger import ExecutionLedger
 
-    return OrderRepository(str(tmp_path / "orders.db"))
+    return ExecutionLedger(str(tmp_path / "copilot.db"))
 
 
 async def build_user_memory_service():
@@ -251,23 +252,25 @@ def seed_memory_source_event(session_id: str, business_user_id: str, client_requ
 
 
 def build_tool_executor(tmp_path: Path):
-    """The real MCP server + ToolExecutor stack over a seeded temp SQLite DB."""
-    from tool_runtime.mcp_server import MCPToolServer, create_default_tools
-    from tool_runtime.order_repository import OrderRepository
-    from tool_runtime.tool_execution import ToolExecutor
+    """The real MCP server + ToolExecutor stack over isolated Copilot stores."""
+    from knowledge_engine import ObsidianVault, OntologyStore, WikiCompiler
     from memory.long_term import LongTermMemory
-    from refunds.service import RefundService
-    from tickets.service import TicketService
+    from tool_runtime.execution_ledger import ExecutionLedger
+    from tool_runtime.mcp_server import MCPToolServer, create_default_tools
+    from tool_runtime.tool_execution import ToolExecutor
 
-    repository = OrderRepository(str(tmp_path / "orders.db"))
+    vault = ObsidianVault(tmp_path / "vault")
+    ontology = OntologyStore(tmp_path / "ontology.sqlite")
+    wiki_compiler = WikiCompiler(vault, ontology)
+    ledger = ExecutionLedger(str(tmp_path / "copilot.db"))
     server = create_default_tools(
         MCPToolServer(),
         long_term_memory=LongTermMemory(embedding_dim=64),
-        order_repository=repository,
-        refund_service=RefundService(repository),
-        ticket_service=TicketService(repository),
+        vault=vault,
+        ontology=ontology,
+        wiki_compiler=wiki_compiler,
     )
-    return ToolExecutor(server), repository
+    return ToolExecutor(server, ledger=ledger), ledger
 
 
 def random_username(prefix: str) -> str:

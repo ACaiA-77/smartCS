@@ -24,6 +24,13 @@ export class LiveWriteWiringError extends Error {
   }
 }
 
+export class WriteToolNotPermittedError extends Error {
+  constructor(tool: string) {
+    super(`write tool "${tool}" is not available in this write mode`);
+    this.name = "WriteToolNotPermittedError";
+  }
+}
+
 export function resolveWriteMode(raw = process.env[WRITE_MODE_ENV]): WriteMode {
   const value = (raw ?? "off").trim().toLowerCase();
   if (value === "" || value === "off") return "off";

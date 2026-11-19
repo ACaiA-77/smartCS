@@ -15,14 +15,18 @@
 
 import { describe, expect, it } from "vitest";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { createBusinessReadTools } from "../src/agent/tools/business-tools.js";
-import { createShadowWriteTools } from "../src/agent/tools/shadow-write-tools.js";
-import { smartCsSystemPrompt, systemPromptFor } from "../src/agent/prompt/customer-service.js";
+import {
+  COPILOT_READ_TOOL_NAMES,
+  COPILOT_WRITE_TOOL_NAMES,
+  createCopilotReadTools,
+  createCopilotWriteTools,
+} from "../src/agent/tools/copilot-tools.js";
+import { copilotPromptFor, copilotSystemPrompt } from "../src/agent/prompt/copilot.js";
 import { TurnContext } from "../src/business/turn-context.js";
 import type { PythonInternalClient } from "../src/business/python-client.js";
 
-const READ_TOOLS = ["order_query", "knowledge_search", "ticket_query", "refund_evaluate", "risk_check"];
-const WRITE_TOOLS = ["refund_confirm", "ticket_create"];
+const READ_TOOLS = [...COPILOT_READ_TOOL_NAMES];
+const WRITE_TOOLS = [...COPILOT_WRITE_TOOL_NAMES];
 
 /** Fields that belong to the runtime; a model-supplied value is inert. */
 const RUNTIME_ONLY_FIELDS = [
@@ -47,74 +51,66 @@ function allTools(): ToolDefinition[] {
   // The client is never called: this suite inspects declared schemas only.
   const client = {} as unknown as PythonInternalClient;
   return [
-    ...createBusinessReadTools({ client, turnContext }),
-    ...createShadowWriteTools({ mode: "shadow", turnContext }),
+    ...createCopilotReadTools({ client, turnContext }),
+    ...createCopilotWriteTools({ mode: "shadow", turnContext }),
   ];
 }
 
 describe("Phase 10 §② system prompt", () => {
   it("names every READ and WRITE tool when the write tools are mounted", () => {
-    const prompt = smartCsSystemPrompt({ writeTools: true });
+    const prompt = copilotSystemPrompt({ writeTools: true });
     for (const name of [...READ_TOOLS, ...WRITE_TOOLS]) {
       expect(prompt, `prompt must name ${name}`).toContain(name);
     }
   });
 
-  it("states the business principle and the two-phase refund flow", () => {
-    const prompt = smartCsSystemPrompt({ writeTools: true });
+  it("states the business principle and the two-phase external action flow", () => {
+    const prompt = copilotSystemPrompt({ writeTools: true });
     // The load-bearing sentence, in the terms the system actually enforces.
     expect(prompt).toContain("无权自行授权");
-    expect(prompt).toContain("写操作是否真正执行");
-    // Two-phase refund: evaluate → explicit user confirmation → confirm.
+    expect(prompt).toContain("是否真正执行由运行时决定");
+    // Two-phase external actions: prepare → explicit user confirmation → confirm.
     expect(prompt).toContain("pending_action_id");
-    expect(prompt).toContain("refund_evaluate");
-    expect(prompt).toContain("refund_confirm");
+    expect(prompt).toContain("copilot_action_prepare");
+    expect(prompt).toContain("copilot_action_confirm");
     expect(prompt).toContain("等待用户明确回复确认");
-    // Same-turn ticket semantics.
-    expect(prompt).toContain("ticket_create");
+    // Same-turn local write semantics.
+    expect(prompt).toContain("vault_append_daily");
   });
 
   it("does not tell the model it is read-only, or that it cannot report completion", () => {
-    // These two phrasings were the defect: with write tools mounted and
-    // SMARTCS_WRITE_MODE=live they instructed the model to deny, or refuse,
-    // capabilities it actually had.
-    const prompt = smartCsSystemPrompt({ writeTools: true });
+    const prompt = copilotSystemPrompt({ writeTools: true });
     for (const banned of ["只能做只读", "你只能做只读查询", "你不能声称已经完成", "没有写操作能力"]) {
       expect(prompt, `prompt must not contain "${banned}"`).not.toContain(banned);
     }
   });
 
   it("never advertises a write tool that is not mounted", () => {
-    const prompt = smartCsSystemPrompt({ writeTools: false });
+    const prompt = copilotSystemPrompt({ writeTools: false });
     for (const name of WRITE_TOOLS) {
       expect(prompt, `prompt must not advertise ${name} when writes are off`).not.toContain(name);
     }
-    // …and says so plainly rather than staying silent about refunds/tickets.
     expect(prompt).toContain("未启用");
     for (const name of READ_TOOLS) expect(prompt).toContain(name);
   });
 
   it("renames the knowledge tool for the MCP transport, in every occurrence", () => {
-    const bare = smartCsSystemPrompt({ writeTools: true });
-    const renamed = systemPromptFor("mcp__knowledge__knowledge_search", { writeTools: true });
+    const bare = copilotSystemPrompt({ writeTools: true });
+    const renamed = copilotPromptFor("mcp__knowledge__knowledge_search", { writeTools: true });
     const occurrences = (text: string, needle: string) => text.split(needle).length - 1;
 
     expect(renamed).toContain("mcp__knowledge__knowledge_search");
-    // `replaceAll`, not `replace`: the renamed name must appear exactly as
-    // often as the bare name did. (A substring check is impossible here —
-    // "mcp__knowledge__knowledge_search" contains "knowledge_search" — so the
-    // count is the honest assertion.)
     expect(occurrences(renamed, "mcp__knowledge__knowledge_search")).toBe(
       occurrences(bare, "knowledge_search"),
     );
     expect(occurrences(renamed, "mcp__knowledge__knowledge_search")).toBeGreaterThan(0);
     // The default transport is byte-for-byte unchanged by the rename.
-    expect(systemPromptFor("knowledge_search", { writeTools: true })).toBe(bare);
+    expect(copilotPromptFor("knowledge_search", { writeTools: true })).toBe(bare);
   });
 });
 
 describe("Phase 10 §③ model-visible tool schemas", () => {
-  it("exposes exactly the seven tools, and no others", () => {
+  it("exposes exactly the 21 Copilot tools, and no others", () => {
     expect(allTools().map((tool) => tool.name).sort()).toEqual([...READ_TOOLS, ...WRITE_TOOLS].sort());
   });
 
@@ -127,15 +123,29 @@ describe("Phase 10 §③ model-visible tool schemas", () => {
     }
   });
 
-  it("pins the exact parameter set for each tool (the review's adjudicated surface)", () => {
+  it("pins the exact parameter set for each tool (the adjudicated surface)", () => {
     const expected: Record<string, string[]> = {
-      order_query: ["order_id"],
-      refund_evaluate: ["order_id"],
       knowledge_search: ["query", "top_k", "domain", "domains"],
-      ticket_query: ["ticket_id"],
-      risk_check: ["action", "amount"],
-      refund_confirm: ["pending_action_id"],
-      ticket_create: ["title", "description", "priority", "category"],
+      vault_search: ["query", "zone", "limit"],
+      vault_read_note: ["path"],
+      vault_backlinks: ["target"],
+      wiki_lint: [],
+      onto_query: ["entity_type", "text", "limit"],
+      mail_search: ["account", "query", "folder", "limit"],
+      mail_read_thread: ["account", "thread_id"],
+      gh_list_notifications: ["all_notifications", "participating", "limit"],
+      gh_get_issue_or_pr: ["owner", "repo", "number"],
+      gh_search_code: ["query", "repo", "limit"],
+      feishu_list_chats: ["page_size"],
+      feishu_read_messages: ["container_id", "container_id_type", "page_size"],
+      feishu_read_doc: ["document_id"],
+      vault_append_daily: ["entry", "date_str"],
+      vault_propose_edit: ["target_rel_path", "rationale", "proposed_content"],
+      wiki_compile_doc: ["source_uri", "title", "raw_content", "summary_markdown", "slug", "related_entities"],
+      onto_upsert: ["entity_type", "name", "canonical_key", "attrs"],
+      mail_save_draft: ["account", "to", "subject", "body", "cc", "reply_to_message_id"],
+      copilot_action_prepare: ["tool", "arguments"],
+      copilot_action_confirm: ["pending_action_id"],
     };
     for (const tool of allTools()) {
       expect(Object.keys(schemaProperties(tool)).sort(), tool.name).toEqual(expected[tool.name]!.sort());

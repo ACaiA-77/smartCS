@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { PYTHON_IMPL, pythonExecutable } from "./phase1.js";
 
 export const MCP_TEST_TOKEN = "phase8-mcp-test-token-0123456789";
-export const MCP_TEST_CORPUS_ANSWER = "退款政策：用户在购买后 7 天内可申请无理由退款";
+export const MCP_TEST_CORPUS_ANSWER = "上下文工程原则：每轮注入确定性权威状态快照";
 
 export interface McpGateway {
   url: string;

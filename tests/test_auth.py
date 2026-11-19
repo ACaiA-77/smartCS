@@ -21,7 +21,6 @@ from auth.dependency import check_request_origin, cors_allowed_origins, get_curr
 from auth.jwt import COOKIE_NAME, ISSUER, TOKEN_TTL_SECONDS, cookie_options, decode_token, get_settings, issue_token
 from auth.password import hash_password, verify_password
 from platform_db import PlatformConflict, PlatformDatabase, Sessions, Users
-from scripts.init_demo_auth_user import verify_business_user
 from tests.app_state import patch_app_state
 
 
@@ -246,10 +245,10 @@ async def test_unauthenticated_customer_api_surface_is_closed(auth_env, monkeypa
         ("GET", f"/api/history/{sid}", None), ("DELETE", f"/api/history/{sid}", None),
         ("GET", "/api/sessions", None), ("POST", "/api/sessions", None),
         ("GET", f"/api/sessions/{sid}", None), ("DELETE", f"/api/sessions/{sid}", None),
-        ("GET", "/api/demo/orders", None), ("GET", "/api/tools", None),
-        ("POST", "/api/tools/call", {"name": "order_query"}),
-        ("POST", "/api/tools/execute", {"name": "order_query"}),
-        ("POST", "/api/approvals", {"tool_name": "refund_create"}),
+        ("GET", "/api/copilot/context", None), ("GET", "/api/tools", None),
+        ("POST", "/api/tools/call", {"name": "vault_search"}),
+        ("POST", "/api/tools/execute", {"name": "vault_search"}),
+        ("POST", "/api/approvals", {"tool_name": "copilot_action_confirm"}),
         ("GET", f"/api/approvals/{sid}", None),
         ("POST", f"/api/approvals/{sid}/approve", {"decided_by": "untrusted"}),
         ("POST", f"/api/approvals/{sid}/reject", {"decided_by": "untrusted"}),
@@ -296,7 +295,7 @@ async def test_api_login_and_authenticated_cookie_writes_reject_cross_origin(aut
         users.by_username.assert_not_awaited()
         client.cookies.set(COOKIE_NAME, issue_token(47))
         for path, body in [("/api/sessions", None), ("/api/chat", {"message": "hello"}),
-                           ("/api/tools/call", {"name": "order_query"}),
+                           ("/api/tools/call", {"name": "vault_search"}),
                            ("/api/auth/logout", None)]:
             response = await client.post(path, json=body)
             assert response.status_code == 403, path
@@ -327,19 +326,26 @@ async def test_auth_mysql_failure_returns_sanitized_503(auth_env, monkeypatch, c
     assert "SELECT password_hash" not in caplog.text
 
 
-def test_bootstrap_requires_existing_business_user_without_mutating_sqlite(tmp_path):
-    path = tmp_path / "business.db"
-    with pytest.raises(ValueError, match="does not exist"):
-        verify_business_user(str(path), "user_001")
-    assert not path.exists()
-    with sqlite3.connect(path) as connection:
-        connection.execute("CREATE TABLE users (user_id TEXT PRIMARY KEY)")
-        connection.execute("INSERT INTO users VALUES (?)", ("user_001",))
-    verify_business_user(str(path), "user_001")
-    with pytest.raises(ValueError, match="does not exist"):
-        verify_business_user(str(path), "missing-user")
-    with sqlite3.connect(path) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
+async def test_bootstrap_provision_creates_copilot_account_without_sqlite(monkeypatch):
+    from scripts import init_demo_auth_user
+
+    created = {}
+
+    class FakeUsers:
+        def __init__(self, _db):
+            pass
+
+        async def create(self, username, password_hash, business_user_id):
+            created.update(username=username, password_hash=password_hash, business_user_id=business_user_id)
+            return {"id": 99, "username": username}
+
+    monkeypatch.setattr(init_demo_auth_user.PlatformDatabase, "from_env", Mock(return_value=Mock(initialize=AsyncMock())))
+    monkeypatch.setattr(init_demo_auth_user, "Users", FakeUsers)
+
+    account = await init_demo_auth_user.provision("copilot", "user_001", "StrongPass!123")
+    assert account == {"id": 99, "username": "copilot"}
+    assert created["business_user_id"] == "user_001"
+    assert created["password_hash"].startswith("$argon2id$")
 
 
 async def test_real_mysql_account_session_restart_login_and_ownership(auth_env, monkeypatch):

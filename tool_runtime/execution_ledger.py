@@ -340,6 +340,11 @@ class ExecutionLedger:
             raise KeyError(f"unknown idempotency key: {idempotency_key}")
         return result
 
+    def ping(self) -> None:
+        """Cheap SQLite liveness check for readiness probes."""
+        with self._connect() as connection:
+            connection.execute("SELECT 1").fetchone()
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path, timeout=30)
         connection.row_factory = sqlite3.Row

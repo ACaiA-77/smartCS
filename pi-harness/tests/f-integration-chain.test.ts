@@ -34,10 +34,10 @@ import {
 } from "./helpers/phase1.js";
 import { startToolProxy, type ToolProxy } from "./helpers/tool-proxy.js";
 import {
-  createPendingRefund,
+  createPendingMailAction,
   ledgerRow,
   operationStatus,
-  refundCount,
+  sentMailCount,
   sleep,
   startMatrixHarness,
   waitFor,
@@ -68,7 +68,7 @@ let proxy: ToolProxy;
 let db: Database;
 let root: string;
 let paths: SmartCsPaths;
-let orderDbPath: string;
+let copilotDbPath: string;
 let harness: MatrixHarness | undefined;
 
 // Proxy switches, flipped by the chain as it moves between scenarios.
@@ -88,7 +88,7 @@ function confirmScript(pendingId: string, elseText = "已了解。"): ScriptStep
     {
       kind: "confirm_router",
       pending_action_id: pendingId,
-      confirm_token: "确认退款",
+      confirm_token: "确认发送",
       text: "好的，已处理。",
       else_text: elseText,
       repeat: 8,
@@ -235,10 +235,10 @@ describe("F matrix — integrated chain (F4 + F5 + F9 on one pipeline)", () => {
     });
     mkdirSync(paths.runtimeCwd, { recursive: true });
     mkdirSync(paths.sessionDir, { recursive: true });
-    orderDbPath = join(root, "orders.db");
+    copilotDbPath = join(root, "copilot.db");
 
     // Real Python runtime, live writes enabled.
-    python = await startPythonService({ port: PY_PORT, orderDbPath, writeMode: "live" });
+    python = await startPythonService({ port: PY_PORT, copilotDbPath, writeMode: "live" });
 
     // Real transport in between, so a fault can be a genuine socket event.
     proxy = await startToolProxy({
@@ -247,12 +247,12 @@ describe("F matrix — integrated chain (F4 + F5 + F9 on one pipeline)", () => {
       rules: [
         {
           matches: ({ url, body }) =>
-            delayWriteForward && url.includes("/internal/tools/execute") && body.includes('"refund_confirm"'),
+            delayWriteForward && url.includes("/internal/tools/execute") && body.includes('"copilot_action_confirm"'),
           delayBeforeForwardMs: 1_200,
         },
         {
           matches: ({ url, body }) =>
-            dropWriteResponse && url.includes("/internal/tools/execute") && body.includes('"refund_confirm"'),
+            dropWriteResponse && url.includes("/internal/tools/execute") && body.includes('"copilot_action_confirm"'),
           dropResponseAfterForward: true,
         },
       ],
@@ -275,50 +275,50 @@ describe("F matrix — integrated chain (F4 + F5 + F9 on one pipeline)", () => {
     // --- chain link 1: F4 ---------------------------------------------------
     const f4Session = "chain-f4";
     const f4Account = await seedOwner("chain-f4", "user_006", f4Session);
-    const f4Order = "ORD-20260801-0006";
-    const beforeF4 = refundCount(orderDbPath);
-    const f4Pending = await createPendingRefund(
-      { pythonUrl: python.url, accountId: f4Account.accountId, businessUserId: "user_006", sessionId: f4Session, clientRequestId: "chain-f4-eval" },
-      f4Order,
+    const f4Subject = "Chain F4 Sync";
+    const beforeF4 = sentMailCount(copilotDbPath);
+    const f4Pending = await createPendingMailAction(
+      { pythonUrl: python.url, accountId: f4Account.accountId, businessUserId: "user_006", sessionId: f4Session, clientRequestId: "chain-f4-prep" },
+      { subject: f4Subject },
     );
     await bootChain("f4", confirmScript(f4Pending));
     dropWriteResponse = true;
 
-    const f4 = await chat(f4Session, "chain-f4-req", `确认退款 ${f4Order}`, f4Account);
+    const f4 = await chat(f4Session, "chain-f4-req", `确认发送 ${f4Subject}`, f4Account);
     expect(f4.status).toBe(200);
     dropWriteResponse = false;
 
     expect(transcriptToolResults(f4Session)).toContain("业务已完成");
-    expect(refundCount(orderDbPath)).toBe(beforeF4 + 1);
+    expect(sentMailCount(copilotDbPath)).toBe(beforeF4 + 1);
     const f4Operation = await operationIdOf(f4Session, "chain-f4-req");
-    expect(ledgerRow(orderDbPath, f4Operation)?.status).toBe("completed");
+    expect(ledgerRow(copilotDbPath, f4Operation)?.status).toBe("completed");
 
     // --- chain link 2: F5 ---------------------------------------------------
     const f5Session = "chain-f5";
     const f5Account = await seedOwner("chain-f5", "user_011", f5Session);
-    const f5Order = "ORD-20260801-0011";
-    const beforeF5 = refundCount(orderDbPath);
-    const f5Pending = await createPendingRefund(
-      { pythonUrl: python.url, accountId: f5Account.accountId, businessUserId: "user_011", sessionId: f5Session, clientRequestId: "chain-f5-eval" },
-      f5Order,
+    const f5Subject = "Chain F5 Sync";
+    const beforeF5 = sentMailCount(copilotDbPath);
+    const f5Pending = await createPendingMailAction(
+      { pythonUrl: python.url, accountId: f5Account.accountId, businessUserId: "user_011", sessionId: f5Session, clientRequestId: "chain-f5-prep" },
+      { subject: f5Subject },
     );
 
     const marker = await bootChain("f5", confirmScript(f5Pending), "after_write_success");
-    await expect(chat(f5Session, "chain-f5-req", `确认退款 ${f5Order}`, f5Account)).rejects.toThrow();
+    await expect(chat(f5Session, "chain-f5-req", `确认发送 ${f5Subject}`, f5Account)).rejects.toThrow();
     await waitFor(() => existsSync(marker), { label: "chain F5 crash marker" });
 
     // The side effect is durable; the transcript never saw the result.
-    expect(refundCount(orderDbPath)).toBe(beforeF5 + 1);
+    expect(sentMailCount(copilotDbPath)).toBe(beforeF5 + 1);
     expect(transcriptToolResults(f5Session)).not.toContain("业务已完成");
     const f5Operation = await operationIdOf(f5Session, "chain-f5-req");
-    expect(ledgerRow(orderDbPath, f5Operation)?.status).toBe("completed");
+    expect(ledgerRow(copilotDbPath, f5Operation)?.status).toBe("completed");
 
     await bootChain("f5b", confirmScript(f5Pending));
     const entriesBeforeRecovery = transcriptEntryCount(f5Session);
-    const f5Recovered = await chat(f5Session, "chain-f5-req", `确认退款 ${f5Order}`, f5Account);
+    const f5Recovered = await chat(f5Session, "chain-f5-req", `确认发送 ${f5Subject}`, f5Account);
     expect(f5Recovered.status).toBe(200);
     expect(String((f5Recovered.body.message as { content: string }).content)).toContain("业务已完成");
-    expect(refundCount(orderDbPath)).toBe(beforeF5 + 1);
+    expect(sentMailCount(copilotDbPath)).toBe(beforeF5 + 1);
     // Recovery consulted the ledger, not the model: the transcript did not grow.
     expect(transcriptEntryCount(f5Session)).toBe(entriesBeforeRecovery);
     expect(await receiptStatus(f5Session, "chain-f5-req")).toBe("completed");
@@ -326,23 +326,23 @@ describe("F matrix — integrated chain (F4 + F5 + F9 on one pipeline)", () => {
     // --- chain link 3: F9 ---------------------------------------------------
     const f9Session = "chain-f9";
     const f9Account = await seedOwner("chain-f9", "user_013", f9Session);
-    const f9Order = "ORD-20260801-0013";
-    const beforeF9 = refundCount(orderDbPath);
-    const f9Pending = await createPendingRefund(
-      { pythonUrl: python.url, accountId: f9Account.accountId, businessUserId: "user_013", sessionId: f9Session, clientRequestId: "chain-f9-eval" },
-      f9Order,
+    const f9Subject = "Chain F9 Sync";
+    const beforeF9 = sentMailCount(copilotDbPath);
+    const f9Pending = await createPendingMailAction(
+      { pythonUrl: python.url, accountId: f9Account.accountId, businessUserId: "user_013", sessionId: f9Session, clientRequestId: "chain-f9-prep" },
+      { subject: f9Subject },
     );
     await bootChain("f9", confirmScript(f9Pending));
     delayWriteForward = true;
 
-    await streamThenDisconnect(f9Session, "chain-f9-req", `确认退款 ${f9Order}`, f9Account, 600);
+    await streamThenDisconnect(f9Session, "chain-f9-req", `确认发送 ${f9Subject}`, f9Account, 600);
     delayWriteForward = false;
 
     await waitFor(async () => (await receiptStatus(f9Session, "chain-f9-req")) === "completed", {
       label: "chain F9 receipt completion",
       timeoutMs: 30_000,
     });
-    expect(refundCount(orderDbPath)).toBe(beforeF9 + 1);
+    expect(sentMailCount(copilotDbPath)).toBe(beforeF9 + 1);
 
     const f9Operation = await operationIdOf(f9Session, "chain-f9-req");
     const verdict = await operationStatus(
@@ -351,12 +351,12 @@ describe("F matrix — integrated chain (F4 + F5 + F9 on one pipeline)", () => {
     );
     expect(verdict.status).toBe("COMPLETED");
 
-    const f9Replay = await chat(f9Session, "chain-f9-req", `确认退款 ${f9Order}`, f9Account);
+    const f9Replay = await chat(f9Session, "chain-f9-req", `确认发送 ${f9Subject}`, f9Account);
     expect(f9Replay.body.replayed).toBe(true);
-    expect(refundCount(orderDbPath)).toBe(beforeF9 + 1);
+    expect(sentMailCount(copilotDbPath)).toBe(beforeF9 + 1);
 
     // The chain's cross-cutting claim: three REAL faults on one pipeline, three
     // writes, and never a fourth.
-    expect(refundCount(orderDbPath)).toBe(beforeF4 + 3);
+    expect(sentMailCount(copilotDbPath)).toBe(beforeF4 + 3);
   }, 300_000);
 });

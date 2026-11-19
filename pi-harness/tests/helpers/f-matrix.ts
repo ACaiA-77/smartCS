@@ -20,27 +20,21 @@ import { hardKill, treeSpawnOptions } from "./harness.js";
 
 export const MATRIX_HARNESS_FIXTURE = join(PI_HARNESS_ROOT, "tests", "fixtures", "matrix-harness.ts");
 
-// --- business-side authority reads (the SQLite demo database) ---------------
+// --- business-side authority reads (the Copilot SQLite database) ----------
 
-function withOrderDb<T>(orderDbPath: string, read: (db: DatabaseSync) => T): T {
-  const db = new DatabaseSync(orderDbPath);
+function withCopilotDb<T>(copilotDbPath: string, read: (db: DatabaseSync) => T): T {
+  const db = new DatabaseSync(copilotDbPath);
   try {
+    db.exec("PRAGMA busy_timeout = 5000;");
     return read(db);
   } finally {
     db.close();
   }
 }
 
-export function refundCount(orderDbPath: string): number {
-  return withOrderDb(orderDbPath, (db) => {
-    const row = db.prepare("SELECT COUNT(*) AS n FROM refunds").get() as { n: number };
-    return Number(row.n);
-  });
-}
-
-export function ticketCount(orderDbPath: string): number {
-  return withOrderDb(orderDbPath, (db) => {
-    const row = db.prepare("SELECT COUNT(*) AS n FROM support_tickets").get() as { n: number };
+export function sentMailCount(copilotDbPath: string): number {
+  return withCopilotDb(copilotDbPath, (db) => {
+    const row = db.prepare("SELECT COUNT(*) AS n FROM test_sent_mails").get() as { n: number };
     return Number(row.n);
   });
 }
@@ -52,8 +46,8 @@ export interface LedgerRow {
   result_json: string | null;
 }
 
-export function ledgerRow(orderDbPath: string, operationId: string): LedgerRow | undefined {
-  return withOrderDb(orderDbPath, (db) => {
+export function ledgerRow(copilotDbPath: string, operationId: string): LedgerRow | undefined {
+  return withCopilotDb(copilotDbPath, (db) => {
     const row = db
       .prepare("SELECT idempotency_key, tool_name, status, result_json FROM tool_executions WHERE idempotency_key = ?")
       .get(operationId) as LedgerRow | undefined;
@@ -61,23 +55,24 @@ export function ledgerRow(orderDbPath: string, operationId: string): LedgerRow |
   });
 }
 
-export interface RefundRow {
-  refund_id: string;
-  status: string;
-  requested_at: string;
+export interface SentMailRow {
+  message_id: string;
+  account: string;
+  subject: string;
+  sent_at: string;
 }
 
-export function refundRowFor(orderDbPath: string, orderId: string): RefundRow | undefined {
-  return withOrderDb(orderDbPath, (db) => {
+export function sentMailRowFor(copilotDbPath: string, subject: string): SentMailRow | undefined {
+  return withCopilotDb(copilotDbPath, (db) => {
     const row = db
-      .prepare("SELECT refund_id, status, requested_at FROM refunds WHERE order_id = ? ORDER BY requested_at DESC LIMIT 1")
-      .get(orderId) as RefundRow | undefined;
-    return row ? { ...row, status: String(row.status) } : undefined;
+      .prepare("SELECT message_id, account, subject, sent_at FROM test_sent_mails WHERE subject = ? ORDER BY sent_at DESC LIMIT 1")
+      .get(subject) as SentMailRow | undefined;
+    return row ? { ...row, subject: String(row.subject) } : undefined;
   });
 }
 
-export function ledgerCount(orderDbPath: string): number {
-  return withOrderDb(orderDbPath, (db) => {
+export function ledgerCount(copilotDbPath: string): number {
+  return withCopilotDb(copilotDbPath, (db) => {
     const row = db.prepare("SELECT COUNT(*) AS n FROM tool_executions").get() as { n: number };
     return Number(row.n);
   });
@@ -88,8 +83,8 @@ export function ledgerCount(orderDbPath: string): number {
  * finished. This is the ONLY way to produce the `UNKNOWN` verdict honestly —
  * it is what a crash between claim and completion really leaves behind.
  */
-export function leaveDanglingClaim(orderDbPath: string, operationId: string, tool = "refund_confirm"): void {
-  withOrderDb(orderDbPath, (db) => {
+export function leaveDanglingClaim(copilotDbPath: string, operationId: string, tool = "mail_send"): void {
+  withCopilotDb(copilotDbPath, (db) => {
     const now = new Date().toISOString();
     db.prepare(
       `INSERT INTO tool_executions
@@ -150,17 +145,25 @@ export async function callToolThroughRuntime(
 }
 
 /**
- * Open the two-phase flow for real: drive `refund_evaluate` through the live
- * channel so MySQL holds a genuine `pending_action` for the confirm turn.
+ * Open the two-phase flow for real: drive `copilot_action_prepare` through the
+ * live channel so MySQL holds a genuine `pending_action` for the confirm turn.
  */
-export async function createPendingRefund(
+export async function createPendingMailAction(
   context: InternalCallContext,
-  orderId: string,
+  options: { account?: string; to?: string; subject: string; body?: string },
 ): Promise<string> {
-  const result = await callToolThroughRuntime(context, "refund_evaluate", { order_id: orderId });
+  const result = await callToolThroughRuntime(context, "copilot_action_prepare", {
+    tool: "mail_send",
+    arguments: {
+      account: options.account ?? "163",
+      to: options.to ?? "alice@example.com",
+      subject: options.subject,
+      body: options.body ?? `Status update for ${options.subject}`,
+    },
+  });
   const pendingId = result.body?.details?.pending_action_id;
   if (typeof pendingId !== "string" || !pendingId) {
-    throw new Error(`refund_evaluate did not open a pending action: ${JSON.stringify(result)}`);
+    throw new Error(`copilot_action_prepare did not open a pending action: ${JSON.stringify(result)}`);
   }
   return pendingId;
 }

@@ -16,7 +16,7 @@ from policies.compliance_rules import (
     rule_review,
     rule_violations,
 )
-from policies.consent import has_explicit_create_consent, is_refund_confirmation
+from policies.consent import has_copilot_local_write_consent, is_copilot_action_confirmation
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -51,39 +51,57 @@ def test_forbidden_table_keeps_the_regulated_phrases():
 @pytest.mark.parametrize(
     "message",
     [
-        "我要投诉流程是什么？",
-        "我要投诉的话怎么操作？",
-        "怎么帮我创建投诉工单？",
-        "我要申请理赔需要什么条件？",
-        "开户需要什么材料？",
+        "",
+        "怎么向日记里写入内容？",
+        "如何编译 Wiki 页面？",
+        "保存草稿的流程是什么？",
+        "能不能帮我整理笔记吗？",
+        "有哪些工具可以写入？",
     ],
 )
-def test_consultation_is_not_create_consent(message):
-    assert has_explicit_create_consent(message) is False
+def test_consultation_is_not_local_write_consent(message):
+    assert has_copilot_local_write_consent(message) is False
 
 
 @pytest.mark.parametrize(
     "message",
     [
-        "我要投诉服务问题",
-        "请帮我创建投诉工单",
-        "帮我提交投诉",
-        "我要申请理赔",
-        "帮我办理开户",
+        "帮我把今天的会议纪要记到日记里",
+        "请保存一封邮件草稿",
+        "把这个方案整理并归档到 Wiki",
+        "新增一个本体实体 Project Alpha",
+        "针对 notes/alpha.md 生成修改提案",
     ],
 )
-def test_explicit_business_request_is_create_consent(message):
-    assert has_explicit_create_consent(message) is True
+def test_explicit_local_write_request_is_consent(message):
+    assert has_copilot_local_write_consent(message) is True
 
 
-@pytest.mark.parametrize("message", ["确认退款", "好的 确认提交退款 ORD-20260801-0001"])
-def test_refund_confirmation_accepts_the_two_confirmed_shapes(message):
-    assert is_refund_confirmation(message) is True
+@pytest.mark.parametrize(
+    "message",
+    [
+        "确认发送",
+        "好的，确认执行",
+        "确认提交这条评论",
+        "确认创建 Issue",
+    ],
+)
+def test_copilot_action_confirmation_accepts_explicit_phrases(message):
+    assert is_copilot_action_confirmation(message) is True
 
 
-@pytest.mark.parametrize("message", ["取消退款", "不退了", "先不退", "算了", "帮我退款"])
-def test_refund_confirmation_rejects_cancel_and_request_phrases(message):
-    assert is_refund_confirmation(message) is False
+@pytest.mark.parametrize(
+    "message",
+    [
+        "取消",
+        "确认发送算了",
+        "先不发了，取消",
+        "帮我给 alice 发一封邮件",
+        "好的收到",
+    ],
+)
+def test_copilot_action_confirmation_rejects_cancel_and_ambiguous_phrases(message):
+    assert is_copilot_action_confirmation(message) is False
 
 
 def test_the_rule_layer_imports_nothing_above_it():

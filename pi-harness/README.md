@@ -19,14 +19,12 @@ than by convention:
 
 Concretely, this package:
 
-- never persists business state (no orders, refunds, tickets or ledger);
+- never persists business state (no vault, ontology, approvals or execution ledger);
 - never mints trusted identity — it forwards the user's own token to Python and
   lets Python resolve `account → business_user` (single authority);
 - never treats the model transcript as a business fact;
 - never invents an outcome for a write. When the response to a write is lost it
   asks the ledger (`/internal/operation_status`) instead of retrying.
-
-Full rules: [`../docs/runtime-boundaries.md`](../docs/runtime-boundaries.md).
 
 ## Quick start
 
@@ -69,13 +67,11 @@ registered but that is not whitelisted does not exist for the model.
 
 | Tool | Kind | Transport |
 |---|---|---|
-| `order_query` | READ | internal HTTP |
 | `knowledge_search` | READ | HTTP (default) or MCP |
-| `ticket_query` | READ | internal HTTP |
-| `refund_evaluate` | READ | internal HTTP |
-| `risk_check` | READ | internal HTTP |
-| `refund_confirm` | WRITE | internal HTTP (live only) |
-| `ticket_create` | WRITE | internal HTTP (live only) |
+| `vault_search` / `vault_read_note` / `vault_backlinks` / `wiki_lint` / `onto_query` | READ | internal HTTP |
+| `mail_search` / `mail_read_thread` / `gh_*` / `feishu_*` | READ | internal HTTP |
+| `vault_append_daily` / `vault_propose_edit` / `wiki_compile_doc` / `onto_upsert` / `mail_save_draft` | WRITE (local, same-turn consent) | internal HTTP (live only) |
+| `copilot_action_prepare` / `copilot_action_confirm` | WRITE (external two-phase frozen snapshot) | internal HTTP (live only) |
 
 Model-visible schemas declare **business parameters only**. `user_id`,
 `account_id`, `session_id`, `client_request_id`, `request_payload_hash` and
@@ -174,7 +170,7 @@ GET /ready    readiness — this instance can serve a user
 and — **only** when `SMARTCS_KNOWLEDGE_TRANSPORT=mcp` — the MCP gateway's
 `/health`. Anything unreachable ⇒ `503`. A memory backlog is not an outage:
 `pending > 0` answers `ready: true, degraded: true, warnings:
-["memory_outbox_backlog"]`, because chat, orders, refunds and RAG keep working
+["memory_outbox_backlog"]`, because chat, Copilot tools and RAG keep working
 while the outbox drains. Neither probe returns a URL, a credential or a driver
 message.
 

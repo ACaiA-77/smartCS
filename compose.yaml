@@ -111,9 +111,10 @@ services:
   #
   # `knowledge_search` is the one tool that can live behind MCP: it searches a
   # shared corpus with no per-user identity, so the channel only needs a
-  # server-level credential. The identity-bound tools (order/ticket/refund/
-  # risk) stay on the internal HTTP envelope, where a per-turn identity is
-  # expressible — that split is the deliberate final boundary, not a gap.
+  # server-level credential. The identity-bound Copilot tools (vault/wiki/onto/
+  # mail/github/feishu/copilot_action_*) stay on the internal HTTP envelope,
+  # where a per-turn identity is expressible — that split is the deliberate
+  # final boundary, not a gap.
   #
   # One-click demo:
   #   SMARTCS_MCP_TOKEN=$(openssl rand -hex 24) \

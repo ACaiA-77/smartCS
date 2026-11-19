@@ -72,7 +72,7 @@ async function main(): Promise<void> {
     // --- phase 2: real tool call round-trip (fake tool, no Python) ---
     const toolStarted = Date.now();
     const toolStream = new ChatStream(agent.session);
-    const toolResult = await toolStream.run("帮我查一下订单 1001 的状态。");
+    const toolResult = await toolStream.run("帮我搜一下 Obsidian 里的项目周报笔记。");
     const toolContext = agent.sessionManager.buildSessionContext();
     const toolResults = toolContext.messages.filter((m) => (m as { role?: string }).role === "toolResult");
     const calledTools = agent.audit.records.filter((r) => r.kind === "tool_call").map((r) => r.toolName);

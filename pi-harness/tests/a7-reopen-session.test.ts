@@ -50,7 +50,7 @@ describe("A7 reopen restores active branch", () => {
       expect(reopened.agent.sessionManager.getSessionId()).toBe("smartcs-a7-reopen");
       expect(reopened.agent.sessionManager.getLeafId()).toBe(leafId!);
       expect(reopened.agent.sessionManager.getEntries().length).toBe(entryCount!);
-      expect(reopened.agent.session.getActiveToolNames().sort()).toEqual(["knowledge_search", "order_query"]);
+      expect(reopened.agent.session.getActiveToolNames().sort()).toEqual(["knowledge_search", "vault_search"]);
 
       const reopenedTexts = reopened.agent.sessionManager.buildSessionContext().messages.map(textOf);
       expect(reopenedTexts).toEqual(contextTexts!);

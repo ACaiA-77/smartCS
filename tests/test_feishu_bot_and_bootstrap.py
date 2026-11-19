@@ -11,7 +11,7 @@ import pytest
 from fastapi import FastAPI
 
 from api import feishu_bot
-from api.copilot_bootstrap import build_copilot_dependencies, is_copilot_profile
+from api.copilot_bootstrap import build_copilot_dependencies
 from api.feishu_bot import CANCEL_PHRASE, CONFIRM_PHRASE, router as feishu_router
 from connectors import FeishuClient, GitHubClient, MailRouter
 from knowledge_engine import ObsidianVault, OntologyStore, WikiCompiler
@@ -20,7 +20,6 @@ EVENTS_URL = "/api/integrations/feishu/events"
 CARD_ACTION_URL = "/api/integrations/feishu/card-action"
 
 _ENV_KEYS = (
-    "SMARTCS_PROFILE",
     "OBSIDIAN_VAULT_PATH",
     "COPILOT_ONTOLOGY_DB_PATH",
     "MAIL_163_USERNAME",
@@ -166,16 +165,6 @@ def test_bootstrap_builds_a_complete_mail_provider_and_skips_a_partial_one() -> 
 def test_bootstrap_skips_partial_163_credentials() -> None:
     dependencies = build_copilot_dependencies({"MAIL_163_USERNAME": "user@163.com"})
     assert dependencies["mail_router"] is None
-
-
-def test_is_copilot_profile_reads_the_profile_switch(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert is_copilot_profile() is False
-    monkeypatch.setenv("SMARTCS_PROFILE", "copilot")
-    assert is_copilot_profile() is True
-    monkeypatch.setenv("SMARTCS_PROFILE", "  COPILOT ")
-    assert is_copilot_profile() is True
-    monkeypatch.setenv("SMARTCS_PROFILE", "ecommerce")
-    assert is_copilot_profile() is False
 
 
 # ------------------------------------------------------------ feishu router

@@ -60,7 +60,7 @@ describe("A8 built-in tool suppression", () => {
       expect(seen).toHaveLength(1);
       const prompt = seen[0]!;
 
-      expect(prompt).toContain("order_query");
+      expect(prompt).toContain("vault_search");
       expect(prompt).toContain("knowledge_search");
       for (const forbidden of FORBIDDEN_BUILTIN_TOOLS) {
         // No "Available tools" entry for any coding tool.
@@ -73,23 +73,23 @@ describe("A8 built-in tool suppression", () => {
 
   it("runs a whitelisted tool end-to-end and records the lifecycle in the audit hook", async () => {
     const { agent, cleanup } = await createTestAgent([
-      fauxAssistantMessage([fauxText("我帮你查一下。"), fauxToolCall("order_query", { orderId: "1001" })], {
+      fauxAssistantMessage([fauxText("我帮你查一下。"), fauxToolCall("vault_search", { query: "roadmap" })], {
         stopReason: "toolUse",
       }),
-      fauxAssistantMessage("你的订单 1001 已发货。"),
+      fauxAssistantMessage("已找到 Personal Copilot Roadmap 笔记。"),
     ]);
     try {
-      await agent.session.prompt("帮我查订单 1001");
+      await agent.session.prompt("帮我搜一下 roadmap 笔记");
 
       const context = agent.sessionManager.buildSessionContext();
       const toolResults = context.messages.filter((m) => (m as { role?: string }).role === "toolResult");
       expect(toolResults.length).toBe(1);
       expect(JSON.stringify(toolResults[0])).toContain("[FAKE]");
-      expect(JSON.stringify(toolResults[0])).toContain("1001");
+      expect(JSON.stringify(toolResults[0])).toContain("roadmap");
 
       // Extension-only audit events fired (session.subscribe cannot see these).
-      expect(agent.audit.records.some((r) => r.kind === "tool_call" && r.toolName === "order_query")).toBe(true);
-      expect(agent.audit.records.some((r) => r.kind === "tool_result" && r.toolName === "order_query")).toBe(true);
+      expect(agent.audit.records.some((r) => r.kind === "tool_call" && r.toolName === "vault_search")).toBe(true);
+      expect(agent.audit.records.some((r) => r.kind === "tool_result" && r.toolName === "vault_search")).toBe(true);
     } finally {
       cleanup();
     }
@@ -134,7 +134,7 @@ describe("A8 built-in tool suppression", () => {
       for (const forbidden of FORBIDDEN_BUILTIN_TOOLS) {
         expect(active).not.toContain(forbidden);
       }
-      expect(active).toContain("order_query");
+      expect(active).toContain("vault_search");
     } finally {
       cleanup();
     }

@@ -21,7 +21,7 @@
  *                      healthy deployment look unhealthy (`enabled: false`).
  *
  * A memory backlog is NOT a readiness failure (§8). Memory is an asynchronous
- * capability: chat, orders, refunds and RAG keep working while the outbox
+ * capability: chat, Copilot tools and RAG keep working while the outbox
  * drains, so a backlog reports `ready: true, degraded: true` with a warning
  * instead of pulling the instance out of rotation.
  *

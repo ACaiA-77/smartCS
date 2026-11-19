@@ -34,10 +34,10 @@ import {
   type SeededAccount,
 } from "./helpers/phase1.js";
 import {
-  createPendingRefund,
+  createPendingMailAction,
   leaveDanglingClaim,
   ledgerCount,
-  refundCount,
+  sentMailCount,
   sleep,
   startMatrixHarness,
   type MatrixHarness,
@@ -71,7 +71,7 @@ let python: PythonService;
 let db: Database;
 let root: string;
 let paths: SmartCsPaths;
-let orderDbPath: string;
+let copilotDbPath: string;
 let harness: MatrixHarness | undefined;
 
 function userToken(accountId: number): string {
@@ -181,19 +181,19 @@ async function pendingStatus(pendingId: string): Promise<string | undefined> {
   return rows.length ? String(rows[0]!.status) : undefined;
 }
 
-async function confirmRefund(
+async function confirmMailSend(
   sessionId: string,
-  orderId: string,
+  subject: string,
   businessUserId: string,
   account: SeededAccount,
-  evalRequestId: string,
+  prepRequestId: string,
 ): Promise<string> {
-  const pendingId = await createPendingRefund(
-    { pythonUrl: python.url, accountId: account.accountId, businessUserId, sessionId, clientRequestId: evalRequestId },
-    orderId,
+  const pendingId = await createPendingMailAction(
+    { pythonUrl: python.url, accountId: account.accountId, businessUserId, sessionId, clientRequestId: prepRequestId },
+    { subject },
   );
   await bootHarness(`confirm-${sessionId}`, [
-    { kind: "tool", calls: [{ name: "refund_confirm", arguments: { pending_action_id: pendingId } }] },
+    { kind: "tool", calls: [{ name: "copilot_action_confirm", arguments: { pending_action_id: pendingId } }] },
   ]);
   return pendingId;
 }
@@ -210,9 +210,9 @@ describe("F matrix — state authority (F7/F8/F10/F13/F14)", () => {
     });
     mkdirSync(paths.runtimeCwd, { recursive: true });
     mkdirSync(paths.sessionDir, { recursive: true });
-    orderDbPath = join(root, "orders.db");
+    copilotDbPath = join(root, "copilot.db");
 
-    python = await startPythonService({ port: PY_PORT, orderDbPath, writeMode: "live" });
+    python = await startPythonService({ port: PY_PORT, copilotDbPath, writeMode: "live" });
   }, 180_000);
 
   afterAll(async () => {
@@ -230,18 +230,18 @@ describe("F matrix — state authority (F7/F8/F10/F13/F14)", () => {
   it("F7 — the same client_request_id is replayed, never run twice", async () => {
     const sessionId = "f7-session";
     const account = await seedOwner("f7-owner", "user_006", sessionId);
-    const orderId = "ORD-20260801-0006";
-    const refundsBefore = refundCount(orderDbPath);
+    const subject = "F7 Weekly Sync";
+    const mailsBefore = sentMailCount(copilotDbPath);
 
-    await confirmRefund(sessionId, orderId, "user_006", account, "f7-eval");
-    const first = await chat(sessionId, "f7-req", `确认退款 ${orderId}`, account);
+    await confirmMailSend(sessionId, subject, "user_006", account, "f7-prep");
+    const first = await chat(sessionId, "f7-req", `确认发送 ${subject}`, account);
     expect(first.status).toBe(200);
-    expect(refundCount(orderDbPath)).toBe(refundsBefore + 1);
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore + 1);
 
     const entriesAfterFirst = transcriptEntries(sessionId).length;
-    const ledgerAfterFirst = ledgerCount(orderDbPath);
+    const ledgerAfterFirst = ledgerCount(copilotDbPath);
 
-    const replay = await chat(sessionId, "f7-req", `确认退款 ${orderId}`, account);
+    const replay = await chat(sessionId, "f7-req", `确认发送 ${subject}`, account);
     expect(replay.status).toBe(200);
     expect(replay.body.replayed).toBe(true);
     expect(String((replay.body.message as { content: string }).content)).toBe(
@@ -250,8 +250,8 @@ describe("F matrix — state authority (F7/F8/F10/F13/F14)", () => {
 
     // No second turn, no second side effect, no second ledger claim.
     expect(transcriptEntries(sessionId).length).toBe(entriesAfterFirst);
-    expect(refundCount(orderDbPath)).toBe(refundsBefore + 1);
-    expect(ledgerCount(orderDbPath)).toBe(ledgerAfterFirst);
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore + 1);
+    expect(ledgerCount(copilotDbPath)).toBe(ledgerAfterFirst);
   }, 180_000);
 
   // -------------------------------------------------------------------------
@@ -300,21 +300,21 @@ describe("F matrix — state authority (F7/F8/F10/F13/F14)", () => {
   }, 180_000);
 
   // -------------------------------------------------------------------------
-  it("F10 — a refund confirmed AFTER compaction still resolves from Python state, not from the transcript", async () => {
+  it("F10 — a pending action confirmed AFTER compaction still resolves from Python state, not from the transcript", async () => {
     const sessionId = "f10-session";
     const account = await seedOwner("f10-owner", "user_003", sessionId);
-    const orderId = "ORD-20260801-0003";
-    const refundsBefore = refundCount(orderDbPath);
+    const subject = "F10 Weekly Sync";
+    const mailsBefore = sentMailCount(copilotDbPath);
 
-    const pendingId = await createPendingRefund(
+    const pendingId = await createPendingMailAction(
       {
         pythonUrl: python.url,
         accountId: account.accountId,
         businessUserId: "user_003",
         sessionId,
-        clientRequestId: "f10-eval",
+        clientRequestId: "f10-prep",
       },
-      orderId,
+      { subject },
     );
 
     // The model script decides by the newest user message rather than by call
@@ -324,9 +324,9 @@ describe("F matrix — state authority (F7/F8/F10/F13/F14)", () => {
       {
         kind: "confirm_router",
         pending_action_id: pendingId,
-        confirm_token: "确认退款",
+        confirm_token: "确认发送",
         text: "好的，已处理。",
-        else_text: "已了解您的订单情况。",
+        else_text: "已了解您的邮件背景。",
         repeat: 8,
       },
       // A stock profile keeps a 16k recent window, which for this short session
@@ -336,9 +336,9 @@ describe("F matrix — state authority (F7/F8/F10/F13/F14)", () => {
 
     // Several substantial turns: a summary needs history to summarise, and one
     // short turn leaves the cut point with nothing on the far side of it.
-    const filler = "订单相关的背景说明。".repeat(200);
+    const filler = "项目周报相关的背景说明。".repeat(200);
     for (let index = 0; index < 4; index += 1) {
-      const turn = await chat(sessionId, `f10-filler-${index}`, `第 ${index} 轮背景：我的订单 ${orderId}。${filler}`, account);
+      const turn = await chat(sessionId, `f10-filler-${index}`, `第 ${index} 轮背景：邮件主题 ${subject}。${filler}`, account);
       expect(turn.status).toBe(200);
     }
 
@@ -351,12 +351,12 @@ describe("F matrix — state authority (F7/F8/F10/F13/F14)", () => {
     );
     expect(afterCompaction.length).toBeGreaterThan(entriesBefore);
 
-    const confirm = await chat(sessionId, "f10-confirm", `确认退款 ${orderId}`, account);
+    const confirm = await chat(sessionId, "f10-confirm", `确认发送 ${subject}`, account);
     expect(confirm.status).toBe(200);
 
     // And the write still happened, from MySQL state the model never saw.
     const toolEvidence = transcriptToolResults(sessionId).join("\n");
-    expect(refundCount(orderDbPath), toolEvidence).toBe(refundsBefore + 1);
+    expect(sentMailCount(copilotDbPath), toolEvidence).toBe(mailsBefore + 1);
     expect(await pendingStatus(pendingId)).toBe("consumed");
     expect((await receiptRow(sessionId, "f10-confirm"))?.status).toBe("completed");
   }, 240_000);
@@ -365,13 +365,13 @@ describe("F matrix — state authority (F7/F8/F10/F13/F14)", () => {
   it("F13 — an orphaned processing receipt with a COMPLETED write is reconciled, not blindly re-run", async () => {
     const sessionId = "f13-session";
     const account = await seedOwner("f13-owner", "user_004", sessionId);
-    const orderId = "ORD-20260801-0004";
-    const refundsBefore = refundCount(orderDbPath);
+    const subject = "F13 Weekly Sync";
+    const mailsBefore = sentMailCount(copilotDbPath);
 
-    await confirmRefund(sessionId, orderId, "user_004", account, "f13-eval");
-    const done = await chat(sessionId, "f13-req", `确认退款 ${orderId}`, account);
+    await confirmMailSend(sessionId, subject, "user_004", account, "f13-prep");
+    const done = await chat(sessionId, "f13-req", `确认发送 ${subject}`, account);
     expect(done.status).toBe(200);
-    expect(refundCount(orderDbPath)).toBe(refundsBefore + 1);
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore + 1);
 
     const entriesAfterDone = transcriptEntries(sessionId).length;
 
@@ -383,16 +383,16 @@ describe("F matrix — state authority (F7/F8/F10/F13/F14)", () => {
     ]);
     expect((await receiptRow(sessionId, "f13-req"))?.status).toBe("processing");
 
-    const recovered = await chat(sessionId, "f13-req", `确认退款 ${orderId}`, account);
+    const recovered = await chat(sessionId, "f13-req", `确认发送 ${subject}`, account);
     expect(recovered.status).toBe(200);
     expect(String((recovered.body.message as { content: string }).content)).toContain("业务已完成");
 
-    // Not re-run: no new model turn, no new refund, one canonical answer.
+    // Not re-run: no new model turn, no new mail, one canonical answer.
     expect(transcriptEntries(sessionId).length).toBe(entriesAfterDone);
-    expect(refundCount(orderDbPath)).toBe(refundsBefore + 1);
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore + 1);
     expect((await receiptRow(sessionId, "f13-req"))?.status).toBe("completed");
 
-    const replay = await chat(sessionId, "f13-req", `确认退款 ${orderId}`, account);
+    const replay = await chat(sessionId, "f13-req", `确认发送 ${subject}`, account);
     expect(replay.body.replayed).toBe(true);
     expect(String((replay.body.message as { content: string }).content)).toBe(
       String((recovered.body.message as { content: string }).content),
@@ -403,30 +403,30 @@ describe("F matrix — state authority (F7/F8/F10/F13/F14)", () => {
   it("F13b — an orphan whose ledger verdict is UNKNOWN is refused, never re-run", async () => {
     const sessionId = "f13b-session";
     const account = await seedOwner("f13b-owner", "user_098", sessionId);
-    const refundsBefore = refundCount(orderDbPath);
+    const mailsBefore = sentMailCount(copilotDbPath);
 
     // A claim that was taken and never finished: the honest residue of a crash
     // between claim and completion. No verdict can be derived from it.
     const danglingOperation = "op-dangling-f13b";
-    leaveDanglingClaim(orderDbPath, danglingOperation);
+    leaveDanglingClaim(copilotDbPath, danglingOperation, "mail_send");
 
     await db.execute(
       `INSERT INTO agent_run_receipt (session_id, client_request_id, request_hash, status, open_write_operations)
        VALUES (?, ?, ?, 'processing', CAST(? AS JSON))`,
-      [sessionId, "f13b-req", hashRequest("继续处理我的退款"), JSON.stringify([{ operation_id: danglingOperation, tool: "refund_confirm", state: "PREPARED", target_hash: "h" }])],
+      [sessionId, "f13b-req", hashRequest("继续处理我的邮件"), JSON.stringify([{ operation_id: danglingOperation, tool: "mail_send", state: "PREPARED", target_hash: "h" }])],
     );
 
     await bootHarness("f13b", [{ kind: "text", text: "这一轮不应被模型执行。" }]);
     const entriesBefore = transcriptEntries(sessionId).length;
 
-    const refused = await chat(sessionId, "f13b-req", "继续处理我的退款", account);
+    const refused = await chat(sessionId, "f13b-req", "继续处理我的邮件", account);
     expect(refused.status).toBe(409);
     expect(String((refused.body.detail as string) ?? "")).toContain("未确定");
 
     // The refusal is the point: nothing ran, nothing was written, and the
     // residual state is left for a human rather than guessed away.
     expect(transcriptEntries(sessionId).length).toBe(entriesBefore);
-    expect(refundCount(orderDbPath)).toBe(refundsBefore);
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore);
     expect((await receiptRow(sessionId, "f13b-req"))?.status).toBe("processing");
   }, 180_000);
 
@@ -434,18 +434,18 @@ describe("F matrix — state authority (F7/F8/F10/F13/F14)", () => {
   it("F14 — a late confirmation of an expired pending action is refused with zero writes", async () => {
     const sessionId = "f14-session";
     const account = await seedOwner("f14-owner", "user_005", sessionId);
-    const orderId = "ORD-20260801-0005";
-    const refundsBefore = refundCount(orderDbPath);
+    const subject = "F14 Weekly Sync";
+    const mailsBefore = sentMailCount(copilotDbPath);
 
-    const pendingId = await createPendingRefund(
+    const pendingId = await createPendingMailAction(
       {
         pythonUrl: python.url,
         accountId: account.accountId,
         businessUserId: "user_005",
         sessionId,
-        clientRequestId: "f14-eval",
+        clientRequestId: "f14-prep",
       },
-      orderId,
+      { subject },
     );
     expect(await pendingStatus(pendingId)).toBe("pending");
 
@@ -453,15 +453,15 @@ describe("F matrix — state authority (F7/F8/F10/F13/F14)", () => {
     await db.execute("UPDATE pending_action SET expires_at = DATE_SUB(NOW(3), INTERVAL 1 HOUR) WHERE id = ?", [pendingId]);
 
     await bootHarness("f14", [
-      { kind: "tool", calls: [{ name: "refund_confirm", arguments: { pending_action_id: pendingId } }] },
+      { kind: "tool", calls: [{ name: "copilot_action_confirm", arguments: { pending_action_id: pendingId } }] },
     ]);
-    const late = await chat(sessionId, "f14-req", `确认退款 ${orderId}`, account);
+    const late = await chat(sessionId, "f14-req", `确认发送 ${subject}`, account);
     expect(late.status).toBe(200);
 
     const results = transcriptToolResults(sessionId).join("\n");
     expect(results).toContain("已过期");
 
-    expect(refundCount(orderDbPath)).toBe(refundsBefore);
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore);
     expect(await pendingStatus(pendingId)).toBe("expired");
   }, 180_000);
 });

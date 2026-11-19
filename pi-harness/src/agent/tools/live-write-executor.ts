@@ -1,8 +1,7 @@
 /**
  * Shared live-write execution boundary.
  *
- * Both the Phase 4/5 e-commerce writes (`ticket_create`, `refund_confirm`) and
- * the Copilot writes (`vault_*`, `wiki_*`, `onto_*`, `mail_save_draft`,
+ * All live Copilot writes (`vault_*`, `wiki_*`, `onto_*`, `mail_save_draft`,
  * `copilot_action_confirm`) cross the same boundary: the runtime authorizes and
  * executes, and the harness makes the OUTCOME authoritative. Duplicating that
  * logic per tool family would mean two chances to skip crash points or to retry
@@ -16,6 +15,13 @@ import type { TurnIdentity } from "../../business/turn-context.js";
 import type { ReceiptStore } from "../../db/receipts.js";
 import { hitCrashPoint } from "../../test-support/crash-point.js";
 
+const EXTERNAL_ACTION_TOOLS = new Set([
+  "mail_send",
+  "gh_create_issue",
+  "gh_post_comment",
+  "feishu_send_message",
+]);
+
 /** The pieces a live write needs: the runtime client and the durable ledger. */
 export interface LiveWriteRuntime {
   client: PythonInternalClient;
@@ -28,9 +34,9 @@ export interface LiveWriteRuntime {
  * The dangerous case is a transport failure: the write may or may not have
  * happened. The harness never guesses there — it finds the operation id from
  * the durable receipt record (written by the runtime BEFORE sending) and asks
- * the ledger. A blind retry would be the one thing that can duplicate a refund
- * or an outbound mail, so an unresolved outcome surfaces as an error, never as
- * "try again".
+ * the ledger. A blind retry would be the one thing that can duplicate an
+ * outbound mail or external action, so an unresolved outcome surfaces as an
+ * error, never as "try again".
  */
 export async function executeLiveWrite(
   runtime: LiveWriteRuntime,
@@ -79,7 +85,13 @@ export async function reconcileAfterTransportFailure(
   error: unknown,
 ): Promise<AgentToolResult<unknown>> {
   const operations = await runtime.receipts.openWriteOperations(identity.sessionId, identity.clientRequestId);
-  const operation = [...operations].reverse().find((item) => item.tool === toolName);
+  const operation = [...operations]
+    .reverse()
+    .find(
+      (item) =>
+        item.tool === toolName ||
+        (toolName === "copilot_action_confirm" && EXTERNAL_ACTION_TOOLS.has(item.tool)),
+    );
 
   if (!operation) {
     // No durable record ⇒ the write was never sent. Failing is correct and

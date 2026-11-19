@@ -39,7 +39,7 @@ type ScriptStep =
     }
   | {
       /**
-       * Context-sensitive decision: call `refund_confirm` when the newest user
+       * Context-sensitive decision: call `copilot_action_confirm` when the newest user
        * message carries the confirmation phrase, otherwise answer with text.
        *
        * F10 needs this because the runtime's compaction step asks the SAME
@@ -73,7 +73,7 @@ function textOfContent(content: unknown): string {
 function lastUserText(context: { messages: Array<{ role?: string; content?: unknown }> }): string {
   const lastUser = [...context.messages]
     .reverse()
-    .find((m) => m.role === "user" && !textOfContent(m.content).startsWith("[SmartCS 业务上下文快照"));
+    .find((m) => m.role === "user" && !textOfContent(m.content).startsWith("[Copilot 工作台上下文快照"));
   return textOfContent(lastUser?.content);
 }
 
@@ -88,7 +88,7 @@ function toFauxSteps(script: ScriptStep[]): FauxResponseStep[] {
       const route = (context: { messages: Array<{ role?: string; content?: unknown }> }) =>
         lastUserText(context).includes(step.confirm_token)
           ? fauxAssistantMessage(
-              [fauxToolCall("refund_confirm", { pending_action_id: step.pending_action_id } as never)],
+              [fauxToolCall("copilot_action_confirm", { pending_action_id: step.pending_action_id } as never)],
               { stopReason: "toolUse" },
             )
           : fauxAssistantMessage(step.else_text);

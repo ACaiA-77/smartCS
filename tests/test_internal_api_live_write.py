@@ -1,8 +1,5 @@
-"""Phase 5a acceptance: ticket_create goes live, with real writes confined to a
-temporary SQLite test database.
-
-Every write in these tests lands in `tmp_path/orders.db`. Nothing touches
-`data/orders.db` or any production file.
+"""Phase 5a acceptance: Copilot local writes go live with real writes confined to
+a temporary Obsidian vault and SQLite ledger.
 """
 
 from __future__ import annotations
@@ -13,6 +10,8 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+from knowledge_engine import ObsidianVault, OntologyStore, WikiCompiler
+from platform_db.database import PlatformDatabase
 from tests.internal_api_helpers import (
     SERVICE_SECRET,
     TEST_DATABASE,
@@ -25,6 +24,9 @@ from tests.internal_api_helpers import (
     seed_session,
     service_header,
 )
+from tool_runtime.execution_ledger import ExecutionLedger
+from tool_runtime.mcp_server import MCPToolServer, create_default_tools
+from tool_runtime.tool_execution import ToolExecutor
 
 
 @pytest.fixture(autouse=True)
@@ -37,27 +39,21 @@ def _environment(monkeypatch):
 
 @pytest_asyncio.fixture
 async def live(tmp_path):
-    """The real MCP server + ToolExecutor + ledger, over a temp SQLite database."""
-    from tool_runtime.execution_ledger import ExecutionLedger
-    from tool_runtime.mcp_server import MCPToolServer, create_default_tools
-    from tool_runtime.order_repository import OrderRepository
-    from tool_runtime.tool_execution import ToolExecutor
-    from platform_db.database import PlatformDatabase
-    from refunds.service import RefundService
-    from tickets.service import TicketService
-
+    """The real MCP server + ToolExecutor + ledger, over temp Vault & SQLite."""
     apply_migration()
-    repository = OrderRepository(str(tmp_path / "orders.db"))
-    ledger = ExecutionLedger(repository.db_path)
+    vault = ObsidianVault(tmp_path / "vault")
+    ontology = OntologyStore(tmp_path / "ontology.sqlite")
+    wiki_compiler = WikiCompiler(vault, ontology)
+    ledger = ExecutionLedger(str(tmp_path / "copilot.db"))
     server = create_default_tools(
         MCPToolServer(),
-        order_repository=repository,
-        refund_service=RefundService(repository),
-        ticket_service=TicketService(repository),
+        vault=vault,
+        ontology=ontology,
+        wiki_compiler=wiki_compiler,
     )
     executor = ToolExecutor(server, ledger=ledger)
 
-    app = await build_app(tool_executor=executor)
+    app = await build_app(tool_executor=executor, execution_ledger=ledger)
     app.state.platform_database = PlatformDatabase.from_env()
 
     account_id = seed_account(random_username("live"), "user_002")
@@ -68,22 +64,17 @@ async def live(tmp_path):
     async with AsyncClient(transport=transport, base_url="http://test") as http:
         yield {
             "http": http,
-            "repository": repository,
+            "vault": vault,
+            "ledger": ledger,
             "app": app,
             "account_id": account_id,
             "session_id": session_id,
             "business_user_id": "user_002",
         }
+    ontology.close()
 
 
 async def _seed_receipt(session_id: str, client_request_id: str) -> None:
-    """Create the receipt the harness would have created.
-
-    Without it the write service fails closed by design (`receipt_missing`),
-    because the operation id would have no durable home.
-    """
-    from platform_db.database import PlatformDatabase
-
     db = PlatformDatabase.from_env()
 
     def write(_c, cur):
@@ -99,17 +90,12 @@ async def _seed_receipt(session_id: str, client_request_id: str) -> None:
     await db._call(write)
 
 
-def _ticket_body(session_id: str, client_request_id: str) -> dict:
+def _daily_body(session_id: str, client_request_id: str, *, entry: str = "完成了代码审阅") -> dict:
     return {
-        "tool": "ticket_create",
+        "tool": "vault_append_daily",
         "arguments": {
-            "client_request_id": client_request_id,
-            "request_payload_hash": "hash-1",
-            "user_id": "user_002",
-            "title": "商品破损投诉",
-            "description": "商品到货即破损",
-            "priority": "high",
-            "category": "complaint",
+            "entry": entry,
+            "date_str": "2026-11-18",
         },
         "session_id": session_id,
         "client_request_id": client_request_id,
@@ -129,74 +115,69 @@ def _post(live, body, **token_kwargs):
     )
 
 
-def _ticket_count(live) -> int:
-    with live["repository"].transaction() as connection:
-        return int(connection.execute("SELECT COUNT(*) FROM support_tickets").fetchone()[0])
+def _daily_line_count(live, marker: str = "完成了代码审阅") -> int:
+    path = live["vault"].root / "daily" / "2026-11-18.md"
+    if not path.exists():
+        return 0
+    return path.read_text(encoding="utf-8").count(marker)
 
 
 @pytest.mark.asyncio
-async def test_p5_9_explicit_consent_writes_exactly_one_ticket(live):
-    """P5-9: same-turn explicit consent → exactly one real ticket."""
-    seed_memory_source_event("sess-live", "user_002", "req-live-1", "我要投诉，帮我建个工单")
+async def test_p5_9_explicit_consent_writes_exactly_once(live):
+    """P5-9: same-turn explicit consent → exactly one local daily entry."""
+    seed_memory_source_event("sess-live", "user_002", "req-live-1", "把今天的进度记到日记里")
     await _seed_receipt("sess-live", "req-live-1")
-    before = _ticket_count(live)
+    before = _daily_line_count(live)
 
-    response = await _post(live, _ticket_body("sess-live", "req-live-1"))
+    response = await _post(live, _daily_body("sess-live", "req-live-1"))
     assert response.status_code == 200, response.text
     body = response.json()
 
     assert body["details"]["authorized"] is True, body
     assert body["details"]["executed"] is True
     assert body["details"]["operationId"]
-    assert _ticket_count(live) == before + 1
+    assert _daily_line_count(live) == before + 1
 
 
 @pytest.mark.asyncio
 async def test_p5_9_negative_no_consent_never_writes(live):
-    """P5-9 negative half: no create intent in the user's words → no write."""
-    # A pure question about the流程 must NOT authorize a write.
-    seed_memory_source_event("sess-live", "user_002", "req-live-2", "创建工单的流程是什么？")
-    before = _ticket_count(live)
+    """P5-9 negative half: consultation question must NOT authorize a write."""
+    seed_memory_source_event("sess-live", "user_002", "req-live-2", "向日记里写入内容的流程是什么？")
+    before = _daily_line_count(live)
 
-    response = await _post(live, _ticket_body("sess-live", "req-live-2"))
+    response = await _post(live, _daily_body("sess-live", "req-live-2"))
     body = response.json()
 
     assert body["details"]["authorized"] is False
     assert body["details"]["executed"] is False
     assert body["details"]["errorCode"] == "explicit_consent_required"
-    assert _ticket_count(live) == before
+    assert _daily_line_count(live) == before
 
 
 @pytest.mark.asyncio
 async def test_consent_comes_from_the_ledger_not_the_caller(live):
     """Constraint 3: raw user message is read back from memory_source_event."""
-    # The ledger row says something that is NOT consent, even though the tool
-    # arguments and the request body could imply otherwise.
-    seed_memory_source_event("sess-live", "user_002", "req-live-3", "我的订单到哪了？")
-    before = _ticket_count(live)
+    seed_memory_source_event("sess-live", "user_002", "req-live-3", "帮我搜一下项目笔记")
+    before = _daily_line_count(live)
 
-    response = await _post(live, _ticket_body("sess-live", "req-live-3"))
+    response = await _post(live, _daily_body("sess-live", "req-live-3"))
     assert response.json()["details"]["authorized"] is False
-    assert _ticket_count(live) == before
+    assert _daily_line_count(live) == before
 
     # And with no ledger row at all, the service fails closed.
-    response = await _post(live, _ticket_body("sess-live", "req-live-3b"))
+    response = await _post(live, _daily_body("sess-live", "req-live-3b"))
     assert response.json()["details"]["errorCode"] == "provenance_unavailable"
-    assert _ticket_count(live) == before
+    assert _daily_line_count(live) == before
 
 
 @pytest.mark.asyncio
 async def test_operation_id_is_durable_before_the_write_is_sent(live):
     """Plan v2 §6.3 iron rule: the operation id exists before the side effect."""
-    from platform_db.database import PlatformDatabase
-
-    seed_memory_source_event("sess-live", "user_002", "req-live-4", "帮我创建工单：包装破损")
+    seed_memory_source_event("sess-live", "user_002", "req-live-4", "追加一条日记记录：架构收敛")
     await _seed_receipt("sess-live", "req-live-4")
-    from platform_db.database import PlatformDatabase
-
     db = PlatformDatabase.from_env()
 
-    response = await _post(live, _ticket_body("sess-live", "req-live-4"))
+    response = await _post(live, _daily_body("sess-live", "req-live-4"))
     body = response.json()
     assert body["details"]["executed"] is True
 
@@ -214,51 +195,51 @@ async def test_operation_id_is_durable_before_the_write_is_sent(live):
     entries = list(stored or [])
     assert len(entries) == 1
     entry = entries[0]
-    assert entry["tool"] == "ticket_create"
+    assert entry["tool"] == "vault_append_daily"
     assert entry["operation_id"] == body["details"]["operationId"]
-    # PREPARED was written first; the terminal state replaces it after execution.
     assert entry["state"] == "COMPLETED"
     assert entry["target_hash"]
 
 
 @pytest.mark.asyncio
 async def test_p5_10_write_is_idempotent_per_operation_id(live):
-    """P5-10: replaying the same request must not create a second ticket."""
-    seed_memory_source_event("sess-live", "user_002", "req-live-5", "提交投诉工单")
+    """P5-10: replaying the same request must not duplicate the daily entry."""
+    seed_memory_source_event("sess-live", "user_002", "req-live-5", "记下今天完成了验收")
     await _seed_receipt("sess-live", "req-live-5")
-    first = await _post(live, _ticket_body("sess-live", "req-live-5"))
+    first = await _post(live, _daily_body("sess-live", "req-live-5"))
     assert first.json()["details"]["executed"] is True
-    after_first = _ticket_count(live)
+    after_first = _daily_line_count(live)
 
-    second = await _post(live, _ticket_body("sess-live", "req-live-5"))
+    second = await _post(live, _daily_body("sess-live", "req-live-5"))
     body = second.json()
-    # The ledger recognises the operation and replays it rather than re-executing.
     assert body["details"]["executed"] is True
-    assert body["details"]["result"].get("replayed") is True or body["details"]["attempts"] >= 1
-    assert _ticket_count(live) == after_first
+    assert body["details"]["operationId"] == first.json()["details"]["operationId"]
+    assert body["details"]["attempts"] == 0
+    assert body["details"]["result"] == first.json()["details"]["result"]
+    assert _daily_line_count(live) == after_first
 
 
 @pytest.mark.asyncio
 async def test_write_tools_are_unreachable_without_live_mode(live, monkeypatch):
-    """P5-11: with writes off, the same call is refused outright."""
+    """P5-11: with writes off/shadow, the same call is refused outright."""
     monkeypatch.setenv("SMARTCS_WRITE_MODE", "shadow")
-    seed_memory_source_event("sess-live", "user_002", "req-live-6", "我要投诉，帮我建个工单")
-    before = _ticket_count(live)
+    seed_memory_source_event("sess-live", "user_002", "req-live-6", "把进展记到日记")
+    before = _daily_line_count(live)
 
-    response = await _post(live, _ticket_body("sess-live", "req-live-6"))
+    response = await _post(live, _daily_body("sess-live", "req-live-6"))
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "tool_not_allowed_on_internal_channel"
-    assert _ticket_count(live) == before
+    assert _daily_line_count(live) == before
 
 
 @pytest.mark.asyncio
-async def test_refund_confirm_without_a_pending_action_is_refused(live):
-    """5b: refund_confirm is reachable, but refuses without a valid pending."""
-    seed_memory_source_event("sess-live", "user_002", "req-live-7", "确认退款")
+async def test_copilot_action_confirm_without_a_pending_action_is_refused(live):
+    """5b: copilot_action_confirm is reachable, but refuses without a valid pending."""
+    seed_memory_source_event("sess-live", "user_002", "req-live-7", "确认执行")
     response = await _post(
         live,
         {
-            "tool": "refund_confirm",
+            "tool": "copilot_action_confirm",
             "arguments": {"pending_action_id": "pending-1"},
             "session_id": "sess-live",
             "client_request_id": "req-live-7",
@@ -269,38 +250,22 @@ async def test_refund_confirm_without_a_pending_action_is_refused(live):
     assert body["details"]["authorized"] is False
     assert body["details"]["executed"] is False
     assert body["details"]["errorCode"] in {"pending_action_not_found", "missing_pending_action"}
-    assert _ticket_count(live) == 0
-    with live["repository"].transaction() as connection:
-        assert int(connection.execute("SELECT COUNT(*) FROM refunds").fetchone()[0]) == 22
 
 
 @pytest.mark.asyncio
-async def test_root_cause_idempotency_fields_are_server_authoritative(live):
-    """Pins the Phase 5 first-round failure.
-
-    Root cause: Phase 2's identity strip removed `client_request_id` (and the
-    model's `request_payload_hash`), but ticket_create's idempotency contract
-    requires both. Stripping is correct — a model must not choose its own
-    idempotency key — so the service now injects its own AFTER the strip, and
-    the hash is computed over the final arguments.
-
-    A forged pair in the model's arguments must therefore be ignored.
-    """
-    seed_memory_source_event("sess-live", "user_002", "req-rc", "我要投诉商品破损，帮我建个工单")
+async def test_smuggled_identity_fields_are_stripped_and_ignored(live):
+    seed_memory_source_event("sess-live", "user_002", "req-rc", "把这件事记到日记里")
     await _seed_receipt("sess-live", "req-rc")
-    before = _ticket_count(live)
+    before = _daily_line_count(live)
 
     body = {
-        "tool": "ticket_create",
+        "tool": "vault_append_daily",
         "arguments": {
-            # Forged, trust-sensitive fields the model must not control.
             "client_request_id": "FORGED-IDEMPOTENCY-KEY",
-            "request_payload_hash": "forged-hash",
             "user_id": "user_999",
-            "title": "商品破损投诉",
-            "description": "商品到货即破损",
-            "priority": "high",
-            "category": "complaint",
+            "confirmed": True,
+            "entry": "完成了代码审阅",
+            "date_str": "2026-11-18",
         },
         "session_id": "sess-live",
         "client_request_id": "req-rc",
@@ -310,31 +275,26 @@ async def test_root_cause_idempotency_fields_are_server_authoritative(live):
 
     assert payload["details"]["authorized"] is True
     assert payload["details"]["executed"] is True, payload["details"]
-    assert _ticket_count(live) == before + 1
-
-    with live["repository"].transaction() as connection:
-        row = connection.execute(
-            "SELECT client_request_id, user_id FROM support_tickets ORDER BY rowid DESC LIMIT 1"
-        ).fetchone()
-    # The authoritative values won; the forged ones never reached the database.
-    assert row[0] == "req-rc"
-    assert row[1] == "user_002"
+    assert sorted(payload["details"]["audit"]["strippedFields"]) == [
+        "client_request_id",
+        "confirmed",
+        "user_id",
+    ]
+    assert _daily_line_count(live) == before + 1
 
 
 @pytest.mark.asyncio
-async def test_executed_reflects_business_failure_not_absence_of_exception(live):
-    """A handler that reports failure by returning a dict must not read as success."""
-    seed_memory_source_event("sess-live", "user_002", "req-bf", "帮我创建工单")
+async def test_executed_reflects_handler_failure_cleanly(live):
+    """An invalid write argument must not report executed=True."""
+    seed_memory_source_event("sess-live", "user_002", "req-bf", "记到日记里")
     await _seed_receipt("sess-live", "req-bf")
-    before = _ticket_count(live)
+    before = _daily_line_count(live)
 
-    # Missing title/description: ticket_create returns {"success": false, ...}
-    # rather than raising, so `executed` must come from the payload.
     response = await _post(
         live,
         {
-            "tool": "ticket_create",
-            "arguments": {"title": "", "description": ""},
+            "tool": "vault_append_daily",
+            "arguments": {"entry": "   ", "date_str": "2026-11-18"},
             "session_id": "sess-live",
             "client_request_id": "req-bf",
         },
@@ -343,4 +303,4 @@ async def test_executed_reflects_business_failure_not_absence_of_exception(live)
     if payload.get("authorized"):
         assert payload["executed"] is False
         assert payload["errorCode"]
-    assert _ticket_count(live) == before
+    assert _daily_line_count(live) == before

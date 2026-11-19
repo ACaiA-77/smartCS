@@ -11,8 +11,8 @@ turn?". The contract these cases pin:
     R6  memory runtime not initialized            -> 503, memory_runtime false
     R7  the answer never leaks an internal detail
 
-Real router, real MySQL test database, real SQLite order store — nothing is
-mocked. No model, RAG or business tool is exercised: readiness must be cheap by
+Real router, real MySQL test database, real SQLite execution ledger — nothing is
+mocked. No model, RAG or Copilot tool is exercised: readiness must be cheap by
 contract, and R8 asserts exactly that.
 """
 
@@ -31,7 +31,7 @@ from tests.internal_api_helpers import (
     USER_SECRET,
     apply_migration,
     build_app,
-    build_order_repository,
+    build_copilot_ledger,
     build_user_memory_service,
     platform_database,
 )
@@ -46,7 +46,12 @@ def _environment(monkeypatch):
     monkeypatch.setenv("MYSQL_DATABASE", TEST_DATABASE)
 
 
-def ops_token(*, issuer: str = "smartcs-pi-harness", audience: str = "smartcs-business-runtime", ttl: int = 30) -> str:
+def ops_token(
+    *,
+    issuer: str = "smartcs-pi-harness",
+    audience: str = "smartcs-business-runtime",
+    ttl: int = 30,
+) -> str:
     """The turn-less service token the harness mints for a readiness call."""
     now = int(time.time())
     return pyjwt.encode(
@@ -63,10 +68,10 @@ def ops_header(**kwargs) -> dict[str, str]:
 @pytest_asyncio.fixture
 async def ready_app(tmp_path):
     apply_migration()
-    repository = build_order_repository(tmp_path)
+    ledger = build_copilot_ledger(tmp_path)
     app = await build_app(
         tool_executor=object(),
-        order_repository=repository,
+        execution_ledger=ledger,
         user_memory_service=await build_user_memory_service(),
     )
     app.state.platform_database = platform_database()
@@ -108,10 +113,9 @@ async def test_r3_the_opposite_service_direction_is_refused(ready_app):
 
 
 @pytest.mark.asyncio
-async def test_r4_platform_database_unreachable(ready_app, monkeypatch):
+async def test_r4_platform_database_unreachable(ready_app):
     from platform_db.database import PlatformDatabase
 
-    # A port nothing listens on: reachability, not configuration, is what fails.
     ready_app.state.platform_database = PlatformDatabase(
         host="127.0.0.1", port=1, database=TEST_DATABASE, user="nobody", password="nobody"
     )
@@ -124,7 +128,7 @@ async def test_r4_platform_database_unreachable(ready_app, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_r5_tool_runtime_not_wired(ready_app):
-    ready_app.state.order_repository = None
+    ready_app.state.execution_ledger = None
     response = await request(ready_app, ops_header())
     assert response.status_code == 503
     body = response.json()
@@ -152,14 +156,12 @@ async def test_r7_the_answer_carries_no_internal_detail(ready_app):
 
 
 @pytest.mark.asyncio
-async def test_r8_readiness_does_no_business_work(ready_app, monkeypatch):
-    """Readiness must not run an LLM, a retrieval or a business tool."""
+async def test_r8_readiness_does_no_business_work(ready_app):
+    """Readiness must not run an LLM, a retrieval or a Copilot tool."""
 
     def explode(*_args, **_kwargs):  # pragma: no cover - failure path
         raise AssertionError("readiness executed business work")
 
-    # The tool executor is a bare object here; if readiness tried to call it,
-    # the probe would fail. Assert the probe still answers.
     ready_app.state.tool_executor = explode
     response = await request(ready_app, ops_header())
     assert response.status_code == 200, response.text

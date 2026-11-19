@@ -1,18 +1,10 @@
 /**
- * Phase 8 §8.2: progressive skill disclosure — knowledge injection, never authority.
+ * Progressive skill disclosure — knowledge injection, never authority.
  *
- * Three skills live under this package's own `skills/` directory and are
- * registered through an explicit `additionalSkillPaths` entry. Discovery stays
- * off everywhere else (`noSkills` is flipped rather than relaxed), so `~/.pi`
- * and a project `.pi/` can never become a behaviour source — the same rule the
- * resource loader already follows for prompts and extensions (plan v2 §8 #4).
- *
- * What a skill may do: change *how* something is explained — policy wording,
- * tone, which tool to reach for. What it may never do: take part in any
- * "can this happen" decision. Authorization, the two-phase write flow, ledger
- * idempotency and compliance are decided by the runtime and the tool result;
- * no skill text is consulted there, and the regression cases assert exactly
- * that (the tool face and the authority paths are identical with skills on).
+ * Skills live under `skills-copilot/` and are registered through an explicit
+ * `additionalSkillPaths` entry. Discovery stays off everywhere else (`noSkills`
+ * is flipped rather than relaxed), so `~/.pi` and `.pi/` never become a
+ * behaviour source.
  */
 
 import { readFileSync } from "node:fs";
@@ -24,12 +16,11 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@earendil-works/pi-ai";
-import type { AgentProfile } from "./profile.js";
 
 export const SKILLS_ENV = "SMARTCS_SKILLS";
 export const SKILLS_DIR_ENV = "SMARTCS_SKILLS_DIR";
 
-/** `on` | `off`, default `off`: the default deployment is Phase 7, byte for byte. */
+/** `on` | `off`, default `off`. */
 export function resolveSkillsEnabled(raw = process.env[SKILLS_ENV]): boolean {
   const value = (raw ?? "off").trim().toLowerCase();
   if (value === "" || value === "off") return false;
@@ -38,37 +29,13 @@ export function resolveSkillsEnabled(raw = process.env[SKILLS_ENV]): boolean {
 }
 
 /**
- * The server-owned skills directory. Never a user home directory: an explicit
- * override (tests, deployments) or this package's own `skills/`.
- *
- * The profile selects the shipped set. Both live beside the package, so the
- * e-commerce directory keeps exactly its three skills and the copilot
- * directory owns exactly its four — no profile ever sees the other's text.
+ * The server-owned Copilot skills directory (`skills-copilot/`).
  */
-export function skillsDir(
-  override = process.env[SKILLS_DIR_ENV],
-  profile: AgentProfile = "ecommerce",
-): string {
+export function skillsDir(override = process.env[SKILLS_DIR_ENV]): string {
   if (override && override.trim() !== "") return override;
-  return fileURLToPath(
-    new URL(profile === "copilot" ? "../../skills-copilot/" : "../../skills/", import.meta.url),
-  );
+  return fileURLToPath(new URL("../../skills-copilot/", import.meta.url));
 }
 
-/**
- * `skill_load` — the on-demand half of progressive disclosure (Phase 8 §8.2).
- *
- * pi 1.0.1 exposes loaded skills as user-facing commands only; an SDK host with
- * nobody at a keyboard has no way for the model to pull a skill's body. This
- * tool is that missing entry point, and it is deliberately narrow:
- *
- *  * `skill` is a fixed enum of the registered skills — the model cannot ask
- *    for a path, and nothing outside the server-owned directory is reachable;
- *  * it is registered only when the skills switch is on, so the default tool
- *    face is unchanged (P8-7);
- *  * it returns TEXT. No authority path reads it, and the text itself states
- *    that decisions belong to the business system.
- */
 export const SKILL_LOAD_TOOL = "skill_load";
 
 /** Strip the YAML frontmatter: the description is already in the prompt. */
@@ -86,7 +53,7 @@ export function createSkillLoadTool(skills: readonly Skill[]): ToolDefinition {
     name: SKILL_LOAD_TOOL,
     label: "加载技能正文",
     description:
-      "读取某个已注册客服技能的完整正文（政策口径、话术规范、工具使用建议）。需要该技能的细节时调用；返回的是说明性知识，不代表业务系统的任何判定结论。",
+      "读取某个已注册工作台技能的完整正文（操作规范、整理流程、工具使用建议）。需要该技能的细节时调用；返回的是说明性知识，不代表运行时的任何授权结论。",
     parameters: Type.Object(
       { skill: Type.Union(names.map((name) => Type.Literal(name))) },
       { additionalProperties: false },

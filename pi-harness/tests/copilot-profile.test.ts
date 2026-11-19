@@ -14,7 +14,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { PROFILE_ENV, resolveProfile } from "../src/agent/profile.js";
 import { skillsDir } from "../src/agent/skills.js";
 import { copilotPromptFor, copilotSystemPrompt } from "../src/agent/prompt/copilot.js";
 import {
@@ -49,7 +48,6 @@ const RUNTIME_ONLY_FIELDS = [
 const ENV_KEYS = [
   "SMARTCS_SKILLS",
   "SMARTCS_SKILLS_DIR",
-  PROFILE_ENV,
   "SMARTCS_KNOWLEDGE_TRANSPORT",
 ] as const;
 
@@ -81,29 +79,12 @@ function allCopilotTools(): ToolDefinition[] {
   ];
 }
 
-describe("Agent profile switch", () => {
-  it("defaults to ecommerce when unset or empty", () => {
+describe("Copilot skills directory", () => {
+  it("selects the copilot skills directory by default and respects overrides", () => {
     clearProfileEnv();
-    expect(resolveProfile()).toBe("ecommerce");
-    expect(resolveProfile("")).toBe("ecommerce");
-    expect(resolveProfile("ecommerce")).toBe("ecommerce");
-  });
-
-  it("accepts copilot, case- and whitespace-insensitively", () => {
-    expect(resolveProfile("copilot")).toBe("copilot");
-    expect(resolveProfile("  COPILOT ")).toBe("copilot");
-  });
-
-  it("rejects an unrecognised value instead of falling back", () => {
-    expect(() => resolveProfile("personal")).toThrow(/invalid SMARTCS_PROFILE/);
-  });
-
-  it("selects the copilot skills directory only for the copilot profile", () => {
-    clearProfileEnv();
-    expect(skillsDir()).toMatch(/skills[\\/]$/);
-    expect(skillsDir(undefined, "copilot")).toMatch(/skills-copilot[\\/]$/);
-    // An explicit override always wins, in either profile.
-    expect(skillsDir("/tmp/custom", "copilot")).toBe("/tmp/custom");
+    expect(skillsDir()).toMatch(/skills-copilot[\\/]$/);
+    // An explicit override always wins.
+    expect(skillsDir("/tmp/custom")).toBe("/tmp/custom");
   });
 });
 
@@ -181,16 +162,14 @@ describe("Copilot tool surface", () => {
 });
 
 describe("Copilot agent assembly", () => {
-  it("mounts the copilot prompt, tool face and skills without affecting ecommerce", async () => {
+  it("mounts the copilot prompt, tool face and skills", async () => {
     clearProfileEnv();
     process.env.SMARTCS_SKILLS = "on";
 
     const copilot = await createTestAgent([fauxAssistantMessage("ok")], {
-      profile: "copilot",
       toolMode: "business",
     });
     try {
-      expect(copilot.agent.profile).toBe("copilot");
       expect(copilot.agent.session.systemPrompt).toContain("个人受控 Copilot");
 
       const active = copilot.agent.session.getActiveToolNames().sort();
@@ -209,30 +188,6 @@ describe("Copilot agent assembly", () => {
     } finally {
       copilot.cleanup();
     }
-
-    const ecommerce = await createTestAgent([fauxAssistantMessage("ok")], {
-      profile: "ecommerce",
-      toolMode: "business",
-    });
-    try {
-      expect(ecommerce.agent.profile).toBe("ecommerce");
-      expect(ecommerce.agent.session.systemPrompt).toContain("SmartCS 智能客服助手");
-      expect(ecommerce.agent.session.systemPrompt).not.toContain("个人受控 Copilot");
-
-      const active = ecommerce.agent.session.getActiveToolNames().sort();
-      expect(active).toEqual(
-        ["knowledge_search", "order_query", "refund_evaluate", "risk_check", "ticket_query", "skill_load"].sort(),
-      );
-      expect(active).not.toContain("vault_search");
-
-      const skillNames = ecommerce.agent.resourceLoader
-        .getSkills()
-        .skills.map((skill) => skill.name)
-        .sort();
-      expect(skillNames).toEqual(["cs-style", "refund-policy", "tool-guide"]);
-    } finally {
-      ecommerce.cleanup();
-    }
   }, 60_000);
 
   it("mounts copilot write tools when shadow mode is wired", async () => {
@@ -248,7 +203,6 @@ describe("Copilot agent assembly", () => {
     } as unknown as import("../src/db/shadow-plans.js").ShadowPlanStore;
 
     const handle = await createTestAgent([fauxAssistantMessage("ok")], {
-      profile: "copilot",
       toolMode: "business",
       writeMode: "shadow",
       shadowPlanStore: store,

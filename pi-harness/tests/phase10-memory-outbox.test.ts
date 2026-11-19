@@ -358,12 +358,12 @@ describe("Phase 10 §① memory outbox production loop", () => {
     // A tool call, so a replay would be visible as a second tool invocation.
     faux.setResponses([
       fauxAssistantMessage(
-        [fauxText("我查一下。"), fauxToolCall("order_query", { order_id: "ORD-20260801-0001" })],
+        [fauxText("我先搜一下。"), fauxToolCall("vault_search", { query: "Project Alpha" })],
         { stopReason: "toolUse" },
       ),
-      fauxAssistantMessage("已查到您的订单。"),
+      fauxAssistantMessage("已查到您的笔记。"),
     ]);
-    const response = await chat("p10-5", "帮我查一下订单 ORD-20260801-0001");
+    const response = await chat("p10-5", "帮我搜一下 Project Alpha 的笔记");
     expect(response.status).toBe(200);
 
     const session = registry.get(SESSION_ID)!;

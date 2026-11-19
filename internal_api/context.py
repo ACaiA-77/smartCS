@@ -1,26 +1,16 @@
-"""POST /internal/context/turn-snapshot — the per-turn business context snapshot.
+"""POST /internal/context/turn-snapshot — the per-turn Copilot context snapshot.
 
-Contract (phase3-design.md §2):
-
-    body  { "session_id": "...", "client_request_id": "..." }
-    resp  { "blocks": [ { "kind", "title", "content", "priority" } ],
-            "tokenBudget": <char ceiling> }
-
-Design rules honoured here:
-  * Deterministic and LLM-free — the snapshot is assembled from authoritative
-    stores only, so the same request always yields the same blocks;
-  * `protected_fields` comes from Python authority (the order repository), never
-    from the transcript, which is what makes F10 hold: once compaction eats the
-    history, the facts are still re-injected every turn;
-  * the existing `context.compression` extractor defines which fields count as
-    protected, so this endpoint does not invent its own list.
-
-Read-only: it never calls `invoke_agent`, never writes anything.
+Design rules:
+  * Deterministic and LLM-free — assembled from authoritative stores only;
+  * `protected_fields` reads active `pending_action` rows from MySQL rather than
+    the transcript, so compaction never loses an active confirmation target;
+  * Read-only: never invokes an LLM or mutates business state.
 """
 
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 import os
 from typing import Any
 
@@ -36,22 +26,18 @@ from internal_api.tools import _bearer_token, _error
 router = APIRouter(prefix="/internal", tags=["internal"])
 
 PROTECTED_KEYS = {
-    "order_id",
-    "ticket_id",
-    "refund_id",
+    "pending_action_id",
+    "action_id",
     "user_id",
     "client_request_id",
     "idempotency_key",
-    "amount",
-    "currency",
     "timestamp",
     "pending_action",
-    "orderId",
-    "ticketId",
-    "refundId",
     "clientRequestId",
     "idempotencyKey",
 }
+
+DEFAULT_TOKEN_BUDGET = 1200
 
 
 def _set_path(target: dict[str, Any], path: list[str], value: Any) -> None:
@@ -92,10 +78,6 @@ def extract_protected_fields(value: Any, *, prefix: list[str] | None = None) -> 
             nested = extract_protected_fields(item, prefix=[*prefix, str(index)])
             _merge_nested(found, nested)
     return found
-
-#: Total character ceiling for the injected snapshot. Bounded so the snapshot
-#: can never crowd out the conversation itself.
-DEFAULT_TOKEN_BUDGET = 1200
 
 
 def _token_budget() -> int:
@@ -138,14 +120,74 @@ def _render_episodes(episodes: list[dict[str, Any]], limit: int) -> str:
     return "\n".join(lines)
 
 
-def _render_orders(orders: list[dict[str, Any]], limit: int) -> str:
+def _render_pending_actions(pending: list[dict[str, Any]], limit: int) -> str:
     lines: list[str] = []
-    for order in orders[:limit]:
-        lines.append(
-            f"- 订单 {order.get('order_id')}: {order.get('status_label') or order.get('status')}"
-            f"，金额 {order.get('pay_amount')}，商品 {order.get('product') or ''}".rstrip("，")
-        )
+    for item in pending[:limit]:
+        action_id = item.get("pending_action_id") or ""
+        tool = item.get("tool") or "tool"
+        summary = item.get("target_summary") or ""
+        suffix = f" ({summary})" if summary else ""
+        lines.append(f"- 待确认操作 {action_id}: {tool}{suffix}")
     return "\n".join(lines)
+
+
+def summarize_pending_target(tool: str, arguments: dict[str, Any]) -> str:
+    """Summarize the business target of a pending Copilot external action."""
+    fields = {
+        "mail_send": ("account", "to", "subject"),
+        "gh_create_issue": ("owner", "repo", "title"),
+        "gh_post_comment": ("owner", "repo", "number"),
+        "feishu_send_message": ("receive_id", "msg_type"),
+    }.get(tool, ())
+    parts = [f"{field}={arguments[field]}" for field in fields if field in arguments]
+    return ", ".join(parts)
+
+
+_summarize_pending_target = summarize_pending_target
+
+
+async def _load_pending_actions(request: Request, session_id: str, business_user_id: str) -> list[dict[str, Any]]:
+    database = getattr(request.app.state, "platform_database", None)
+    if database is None:
+        return []
+
+    def read(_connection, cursor):
+        cursor.execute(
+            """SELECT id, type, payload, expires_at
+               FROM pending_action
+               WHERE session_id=%s AND user_id=%s AND status='pending'
+                 AND expires_at > CURRENT_TIMESTAMP(3)
+               ORDER BY created_at DESC
+               LIMIT 3""",
+            (session_id, business_user_id),
+        )
+        return cursor.fetchall() or []
+
+    try:
+        rows = await database._call(read)
+    except Exception:
+        return []
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        raw_payload = row.get("payload")
+        if isinstance(raw_payload, str):
+            try:
+                payload = json.loads(raw_payload)
+            except ValueError:
+                payload = {}
+        else:
+            payload = dict(raw_payload or {})
+        tool = str(payload.get("tool") or row.get("type") or "tool")
+        arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+        items.append(
+            {
+                "pending_action_id": str(row["id"]),
+                "tool": tool,
+                "target_summary": _summarize_pending_target(tool, arguments),
+            }
+        )
+    return items
 
 
 @router.post("/context/turn-snapshot")
@@ -161,8 +203,6 @@ async def turn_snapshot(request: Request, body: SnapshotBody) -> dict[str, Any]:
     account, session = await resolve_service_session(request, service, body.session_id)
     business_user_id = service.business_user_id
 
-    # A ContextVar so any downstream helper that reads `current_user` (e.g. the
-    # order repository's owner-scoped reads) sees the verified identity.
     user = UserContext(
         account_id=service.account_id,
         username=str(account.get("username") or ""),
@@ -172,22 +212,15 @@ async def turn_snapshot(request: Request, body: SnapshotBody) -> dict[str, Any]:
     try:
         blocks: list[dict[str, Any]] = []
 
-        # (1) protected fields — Python-authoritative business facts. Highest
-        # priority: these are the values the model must not re-derive.
-        order_repository = getattr(request.app.state, "order_repository", None)
-        orders: list[dict[str, Any]] = []
-        if order_repository is not None:
-            try:
-                orders = order_repository.list_orders_for_user(business_user_id, limit=3) or []
-            except Exception:  # a snapshot must never fail the turn
-                orders = []
-        if orders:
-            protected = extract_protected_fields({"orders": orders})
+        # (1) protected fields — active two-phase pending actions from MySQL.
+        pending_actions = await _load_pending_actions(request, body.session_id, business_user_id)
+        if pending_actions:
+            protected = extract_protected_fields({"pending_actions": pending_actions})
             blocks.append(
                 {
                     "kind": "protected_fields",
-                    "title": "权威业务事实（以此为准）",
-                    "content": _render_orders(orders, 3),
+                    "title": "待确认外部操作（以此为准）",
+                    "content": _render_pending_actions(pending_actions, 3),
                     "priority": 5,
                     "protected": protected,
                 }
@@ -251,4 +284,4 @@ async def turn_snapshot(request: Request, body: SnapshotBody) -> dict[str, Any]:
         current_user.reset(context_token)
 
 
-__all__ = ["router", "SnapshotBody"]
+__all__ = ["router", "SnapshotBody", "PROTECTED_KEYS", "extract_protected_fields"]

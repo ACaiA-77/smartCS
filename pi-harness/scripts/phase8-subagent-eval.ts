@@ -24,16 +24,16 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import { Type } from "@earendil-works/pi-ai";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { createSmartCsAgent } from "../src/agent/create-smartcs-agent.js";
-import { READ_TOOL_NAMES } from "../src/agent/tools/business-tools.js";
+import { COPILOT_READ_TOOL_NAMES } from "../src/agent/tools/copilot-tools.js";
 import { PythonInternalClient } from "../src/business/python-client.js";
 import { TurnContext } from "../src/business/turn-context.js";
 import { makeTmpDir } from "../tests/helpers/harness.js";
 
-const RAG_QUESTION = "你们对已激活的虚拟商品退款是怎么规定的？我在哪里能看到政策原文？";
-const TRANSACTION_TURN = "帮我查一下订单 ORD-20260801-0002 的状态，如果符合条件就发起退款。";
+const RAG_QUESTION = "我们内部关于 Context Engineering 的设计要点有哪些？";
+const WORKSPACE_TURN = "帮我查一下 Obsidian 里的项目 Alpha 笔记和本体关系，如果缺索引就准备发邮件提醒。";
 /** A stand-in for the turn snapshot the pipeline injects (Phase 3). */
 const TURN_SNAPSHOT = (user: string) =>
-  `[SmartCS 业务上下文快照]\n用户：${user}\n最近订单：ORD-20260801-0002（已发货）\n待办：无\n`;
+  `[Copilot 工作台上下文快照 · 权威数据，请以此为准]\n用户：${user}\n待确认外部操作：无\n`;
 
 function fillerTools(count: number): ToolDefinition[] {
   const areas = ["inventory", "logistics", "coupon", "invoice", "member", "campaign", "warehouse", "supplier"];
@@ -114,7 +114,7 @@ async function capture(
     });
     const snapshot = TURN_SNAPSHOT("bu-eval");
     agent.snapshotHolder?.set?.(snapshot);
-    const userMessage = scenario === "rag" ? RAG_QUESTION : TRANSACTION_TURN;
+    const userMessage = scenario === "rag" ? RAG_QUESTION : WORKSPACE_TURN;
     await agent.session.prompt(userMessage);
     seenSystemPrompt = agent.session.systemPrompt;
     return { config, scenario, systemPrompt: seenSystemPrompt, tools: seenTools, userMessage, snapshot };
@@ -125,26 +125,26 @@ async function capture(
 }
 
 async function main(): Promise<void> {
-  const knowledge = (name: string) => ["knowledge_search", "risk_check"].includes(name);
-  const transactional = (name: string) => ["order_query", "refund_evaluate", "ticket_query"].includes(name);
+  const knowledge = (name: string) => ["knowledge_search", "vault_search"].includes(name);
+  const workspace = (name: string) => ["vault_search", "vault_read_note", "onto_query"].includes(name);
   const everything = () => true;
 
   const captures: Capture[] = [];
-  for (const scenario of ["rag", "transaction"]) {
+  for (const scenario of ["rag", "workspace"]) {
     captures.push(await capture("full", scenario, { keep: everything, fillers: 0 }));
     captures.push(await capture("specialist", scenario, {
-      keep: scenario === "rag" ? knowledge : transactional,
+      keep: scenario === "rag" ? knowledge : workspace,
       fillers: 0,
-      whitelist: scenario === "rag" ? ["knowledge_search", "risk_check"] : ["order_query", "refund_evaluate", "ticket_query"],
+      whitelist: scenario === "rag" ? ["knowledge_search", "vault_search"] : ["vault_search", "vault_read_note", "onto_query"],
     }));
   }
   // Tool-surface sensitivity on the SAME scenario: 7 -> 15 -> 30 declared tools.
-  captures.push(await capture("full+8", "transaction", { keep: everything, fillers: 8 }));
-  captures.push(await capture("full+23", "transaction", { keep: everything, fillers: 23 }));
+  captures.push(await capture("full+8", "workspace", { keep: everything, fillers: 8 }));
+  captures.push(await capture("full+23", "workspace", { keep: everything, fillers: 23 }));
 
   const payload = {
     generatedBy: "scripts/phase8-subagent-eval.ts",
-    readToolNames: [...READ_TOOL_NAMES],
+    readToolNames: [...COPILOT_READ_TOOL_NAMES],
     captures,
   };
   const runtimeDir = join(process.cwd(), ".runtime", "phase8");

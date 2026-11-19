@@ -48,20 +48,20 @@ class ScriptedSession {
     this.emit({
       type: "tool_execution_start",
       toolCallId: "call_01_phase6_demo",
-      toolName: "order_query",
-      args: { order_id: "ORD-20260801-0002" },
+      toolName: "vault_search",
+      args: { query: "项目周报" },
     });
     this.emit({
       type: "tool_execution_end",
       toolCallId: "call_01_phase6_demo",
-      toolName: "order_query",
-      result: { details: { found: true } },
+      toolName: "vault_search",
+      result: { details: { hits: 2 } },
       isError: false,
     });
     this.emit({ type: "message_start", message: { role: "assistant" } });
     this.emit({
       type: "message_end",
-      message: { role: "assistant", content: [{ type: "text", text: "订单 ORD-20260801-0002 已发货。" }], usage: { input: 903, output: 52 } },
+      message: { role: "assistant", content: [{ type: "text", text: "已找到 2 篇与项目周报相关的 Obsidian 笔记。" }], usage: { input: 903, output: 52 } },
     });
     this.emit({ type: "agent_settled" });
   }
@@ -82,10 +82,10 @@ async function main(): Promise<void> {
     clientRequestId: "phase6-demo-request",
   });
   turn.setAgentRunId("4242");
-  turn.setAttribute(ATTR.intentLabel, "order");
+  turn.setAttribute(ATTR.intentLabel, "vault");
 
   const stream = new ChatStream(new ScriptedSession() as unknown as AgentSession, { spans: turn });
-  const result = await stream.run("我的订单到哪了？");
+  const result = await stream.run("帮我搜一下 Obsidian 里的项目周报");
 
   // The compliance review runs inside a pi hook and hangs its span off the
   // propagated context instead of a span object (see create-smartcs-agent.ts).

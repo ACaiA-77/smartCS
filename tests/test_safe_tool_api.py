@@ -1,3 +1,5 @@
+"""Public /api/tools/* safety boundary tests for Personal Copilot."""
+
 from __future__ import annotations
 
 import httpx
@@ -5,30 +7,34 @@ import pytest
 
 import api.main as api_main
 from auth.context import UserContext
+from knowledge_engine import ObsidianVault, OntologyStore
 from tool_runtime.approval_store import ApprovalService
 from tool_runtime.execution_ledger import ExecutionLedger
 from tool_runtime.mcp_server import MCPToolServer, ToolDefinition, create_default_tools
-from tool_runtime.order_repository import OrderRepository
 from tool_runtime.tool_execution import ToolExecutor
 
 
 @pytest.fixture
 def api_runtime(tmp_path, monkeypatch):
-    # Component-only identity fixture. Real JWT/MySQL isolation is covered in
-    # test_user_sessions.py; never override authorization or tool policy here.
-    monkeypatch.setitem(api_main.app.dependency_overrides, api_main.get_current_user,
-                        lambda: UserContext(account_id=1, username="component", business_user_id="user_002"))
-    repository = OrderRepository(str(tmp_path / "orders.db"))
-    server = create_default_tools(MCPToolServer(), order_repository=repository)
-    ledger = ExecutionLedger(repository.db_path)
-    approvals = ApprovalService(repository.db_path)
+    monkeypatch.setitem(
+        api_main.app.dependency_overrides,
+        api_main.get_current_user,
+        lambda: UserContext(account_id=1, username="copilot", business_user_id="user_002"),
+    )
+    vault = ObsidianVault(tmp_path / "vault")
+    vault.write_wiki_page("alpha", "Project Alpha", "Alpha roadmap note", tags=["alpha"])
+    ontology = OntologyStore(tmp_path / "ontology.sqlite")
+    server = create_default_tools(MCPToolServer(), vault=vault, ontology=ontology)
+    db_path = str(tmp_path / "copilot.db")
+    ledger = ExecutionLedger(db_path)
+    approvals = ApprovalService(db_path)
     executor = ToolExecutor(server, ledger=ledger, approval_service=approvals)
-    monkeypatch.setattr(api_main, "order_repository", repository)
     monkeypatch.setattr(api_main, "mcp_server", server)
     monkeypatch.setattr(api_main, "execution_ledger", ledger)
     monkeypatch.setattr(api_main, "approval_service", approvals)
     monkeypatch.setattr(api_main, "tool_executor", executor)
-    return repository, server, approvals
+    yield vault, server, approvals
+    ontology.close()
 
 
 async def request(method: str, path: str, **kwargs) -> httpx.Response:
@@ -38,86 +44,83 @@ async def request(method: str, path: str, **kwargs) -> httpx.Response:
 
 
 @pytest.mark.asyncio
-async def test_customer_read_succeeds_and_legacy_write_is_rejected(api_runtime):
-    repository, _, _ = api_runtime
+async def test_public_read_succeeds_and_write_tool_is_rejected(api_runtime):
+    vault, _, _ = api_runtime
     read = await request(
         "POST",
         "/api/tools/call",
-        json={"name": "order_query", "arguments": {"order_id": "ORD-20260801-0002"}},
+        json={"name": "vault_search", "arguments": {"query": "Alpha"}},
     )
     assert read.status_code == 200
     assert read.json()["success"] is True
-    assert read.json()["result"]["found"] is True
+    assert read.json()["result"][0]["title"] == "Project Alpha"
 
-    before = len(repository.get_order("ORD-20260801-0002")["refunds"])
+    before_daily = list((vault.root / "daily").glob("*.md"))
     write = await request(
         "POST",
         "/api/tools/call",
-        json={
-            "name": "refund_create",
-            "arguments": {
-                "order_id": "ORD-20260801-0002",
-                "user_id": "user_002",
-                "reason": "API legacy rejection",
-            },
-        },
+        json={"name": "vault_append_daily", "arguments": {"entry": "forbidden direct call"}},
     )
     assert write.status_code == 403
-    assert len(repository.get_order("ORD-20260801-0002")["refunds"]) == before
+    assert list((vault.root / "daily").glob("*.md")) == before_daily
 
 
 @pytest.mark.asyncio
-async def test_execute_order_query_returns_structured_result(api_runtime):
-    api_runtime
+async def test_execute_vault_search_returns_structured_result(api_runtime):
     response = await request(
         "POST",
         "/api/tools/execute",
-        json={"name": "order_query", "arguments": {"order_id": "ORD-20260801-0002"}},
+        json={"name": "vault_search", "arguments": {"query": "Alpha"}},
     )
     body = response.json()
     assert response.status_code == 200
     assert body["status"] == "completed"
-    assert body["tool_name"] == "order_query"
-    assert {"success", "error_code", "error", "result", "attempts", "duration_ms", "operation_type", "risk_level", "requires_confirmation", "replayed"}.issubset(body)
+    assert body["tool_name"] == "vault_search"
+    assert {
+        "success",
+        "error_code",
+        "error",
+        "result",
+        "attempts",
+        "duration_ms",
+        "operation_type",
+        "risk_level",
+        "requires_confirmation",
+        "replayed",
+    }.issubset(body)
 
 
 @pytest.mark.asyncio
-async def test_customer_cannot_self_authorize_refund_write(api_runtime):
-    repository, _, _ = api_runtime
-    arguments = {
-        "order_id": "ORD-20260801-0002",
-        "user_id": "user_002",
-        "reason": "API refund",
-    }
-    before = len(repository.get_order(arguments["order_id"])["refunds"])
+async def test_caller_cannot_self_authorize_copilot_write(api_runtime):
+    vault, _, _ = api_runtime
+    arguments = {"entry": "API bypass attempt", "date_str": "2026-11-18"}
     unconfirmed = await request(
         "POST",
         "/api/tools/execute",
-        json={"name": "refund_create", "arguments": arguments},
+        json={"name": "vault_append_daily", "arguments": arguments},
     )
     assert unconfirmed.status_code == 403
-    assert len(repository.get_order(arguments["order_id"])["refunds"]) == before
 
     payload = {
-        "name": "refund_create",
+        "name": "vault_append_daily",
         "arguments": arguments,
         "confirmed": True,
-        "idempotency_key": "api-refund-1",
+        "idempotency_key": "api-daily-1",
     }
     first = await request("POST", "/api/tools/execute", json=payload)
     replay = await request("POST", "/api/tools/execute", json=payload)
     conflict = await request(
         "POST",
         "/api/tools/execute",
-        json={**payload, "arguments": {**arguments, "reason": "different"}},
+        json={**payload, "arguments": {**arguments, "entry": "different"}},
     )
     assert first.status_code == replay.status_code == conflict.status_code == 403
-    assert len(repository.get_order(arguments["order_id"])["refunds"]) == before
-    assert api_main.execution_ledger.get("api-refund-1") is None
+    assert not (vault.root / "daily" / "2026-11-18.md").exists()
+    assert api_main.execution_ledger.get("api-daily-1") is None
 
 
 @pytest.mark.asyncio
-async def test_customer_cannot_create_read_or_decide_approvals(api_runtime):
+async def test_caller_cannot_create_read_or_decide_approvals(api_runtime):
     _, _, approvals = api_runtime
     approval = approvals.create_request("high_tool", {"value": 1}, "internal-test")
     created = await request(
@@ -144,11 +147,11 @@ async def test_customer_cannot_create_read_or_decide_approvals(api_runtime):
 
 
 @pytest.mark.asyncio
-async def test_customer_cannot_invoke_unlisted_tools_even_with_confirmation(api_runtime):
+async def test_caller_cannot_invoke_unlisted_tools_even_with_confirmation(api_runtime):
     _, server, _ = api_runtime
 
     async def handler(value: int = 1) -> dict[str, int]:
-        pytest.fail("customer invoked an unlisted tool")
+        pytest.fail("caller invoked an unlisted tool")
 
     server.register_tool(
         ToolDefinition(
@@ -183,9 +186,13 @@ async def test_customer_cannot_invoke_unlisted_tools_even_with_confirmation(api_
 @pytest.mark.asyncio
 @pytest.mark.parametrize("endpoint", ["call", "execute"])
 async def test_tool_identity_spoof_is_rejected(api_runtime, endpoint):
-    response = await request("POST", f"/api/tools/{endpoint}", json={
-        "name": "order_query",
-        "arguments": {"order_id": "ORD-20260801-0001", "user_id": "user_001"},
-    })
+    response = await request(
+        "POST",
+        f"/api/tools/{endpoint}",
+        json={
+            "name": "vault_search",
+            "arguments": {"query": "Alpha", "user_id": "user_001"},
+        },
+    )
     assert response.status_code == 403
-    assert "ORD-20260801-0001" not in response.text
+    assert "Project Alpha" not in response.text

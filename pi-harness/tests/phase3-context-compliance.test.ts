@@ -31,6 +31,7 @@ import {
   type PythonService,
   type SeededAccount,
 } from "./helpers/phase1.js";
+import { createPendingMailAction } from "./helpers/f-matrix.js";
 import type { Database } from "../src/db/mysql.js";
 
 process.env.INTERNAL_SERVICE_JWT_SECRET =
@@ -50,8 +51,10 @@ let paths: SmartCsPaths;
 let faux: FauxProviderRegistration;
 let harness: HarnessServer;
 let account: SeededAccount;
+let pendingActionId: string;
 
-const OWN_ORDER = "ORD-20260801-0081"; // a real order belonging to user_001
+const OWN_SUBJECT = "Project Alpha Weekly";
+const OTHER_SUBJECT = "Secret Beta Report";
 
 function userToken(accountId: number): string {
   const now = Math.floor(Date.now() / 1000);
@@ -131,8 +134,34 @@ beforeAll(async () => {
   mkdirSync(paths.runtimeCwd, { recursive: true });
   mkdirSync(paths.sessionDir, { recursive: true });
 
-  python = await startPythonService({ port: PY_PORT, orderDbPath: join(root, "orders.db") });
+  python = await startPythonService({
+    port: PY_PORT,
+    copilotDbPath: join(root, "copilot.db"),
+    writeMode: "live",
+  });
   client = new PythonInternalClient({ baseUrl: python.url });
+  pendingActionId = await createPendingMailAction(
+    {
+      pythonUrl: python.url,
+      accountId: account.accountId,
+      businessUserId: "user_001",
+      sessionId: SESSION_ID,
+      clientRequestId: "p3-prep-own",
+    },
+    { subject: OWN_SUBJECT },
+  );
+  const otherAccount = await seedAccount(db, { username: "phase3-other", businessUserId: "user_002" });
+  await seedSession(db, { sessionId: "phase3-other-session", accountId: otherAccount.accountId, harnessVersion: "pi" });
+  await createPendingMailAction(
+    {
+      pythonUrl: python.url,
+      accountId: otherAccount.accountId,
+      businessUserId: "user_002",
+      sessionId: "phase3-other-session",
+      clientRequestId: "p3-prep-other",
+    },
+    { subject: OTHER_SUBJECT },
+  );
   faux = createFauxProvider();
   harness = await buildHarness();
 }, 180_000);
@@ -152,39 +181,40 @@ afterAll(async () => {
 describe("Phase 3 acceptance", () => {
   it("P3-1: the turn snapshot is injected into the transcript with authoritative facts", async () => {
     faux.setResponses([fauxAssistantMessage("好的。")]);
-    const response = await chat("p3-1", "我的订单怎么样了？");
+    const response = await chat("p3-1", "我的待确认操作有哪些？");
     expect(response.status).toBe(200);
 
-    const injected = sessionContext().filter((m) => textOf(m).startsWith("[SmartCS 业务上下文快照"));
+    const injected = sessionContext().filter((m) => textOf(m).startsWith("[Copilot 工作台上下文快照"));
     expect(injected.length).toBeGreaterThan(0);
     const text = injected.map(textOf).join("\n");
 
-    // Real business data, sourced from Python authority rather than the model.
-    expect(text).toContain("权威业务事实");
-    expect(text).toContain(OWN_ORDER);
-    // Block titles are what the model reads.
+    // Real Copilot authority data from Python/MySQL, never sourced from the model.
+    expect(text).toContain("权威数据，请以此为准");
+    expect(text).toContain("user_001");
+    expect(text).toContain(pendingActionId);
+    expect(text).toContain(OWN_SUBJECT);
     expect(text).toContain("当前用户");
   }, 120_000);
 
   it("P3-1 (F10): the snapshot is re-injected on later turns, so compaction cannot lose it", async () => {
-    const before = sessionContext().filter((m) => textOf(m).startsWith("[SmartCS 业务上下文快照")).length;
+    const before = sessionContext().filter((m) => textOf(m).startsWith("[Copilot 工作台上下文快照")).length;
 
     faux.setResponses([fauxAssistantMessage("还是老样子。")]);
-    await chat("p3-1b", "再确认一次订单状态");
+    await chat("p3-1b", "再确认一次待确认操作");
 
-    const after = sessionContext().filter((m) => textOf(m).startsWith("[SmartCS 业务上下文快照"));
+    const after = sessionContext().filter((m) => textOf(m).startsWith("[Copilot 工作台上下文快照"));
     // One fresh injection per turn — the facts never depend on history.
     expect(after.length).toBe(before + 1);
-    expect(textOf(after.at(-1)!)).toContain(OWN_ORDER);
+    expect(textOf(after.at(-1)!)).toContain(pendingActionId);
   }, 120_000);
 
   it("P3-2: no other user's data appears in the snapshot", async () => {
     const text = sessionContext()
-      .filter((m) => textOf(m).startsWith("[SmartCS 业务上下文快照"))
+      .filter((m) => textOf(m).startsWith("[Copilot 工作台上下文快照"))
       .map(textOf)
       .join("\n");
     expect(text).not.toContain("user_002");
-    expect(text).not.toContain("ORD-20260801-0002");
+    expect(text).not.toContain(OTHER_SUBJECT);
   });
 
   it("P3-4/P3-6: PII never reaches the user or the transcript unmasked", async () => {
@@ -239,7 +269,7 @@ describe("Phase 3 acceptance", () => {
     expect(response.status).toBe(200);
 
     const delivered = String((response.body.message as { content: string }).content);
-    expect(delivered).toContain("未能通过合规检查");
+    expect(delivered).toContain("未能通过安全合规检查");
     expect(delivered).not.toContain("保证收益");
 
     const state = await receipts.memoryState(SESSION_ID, "p3-7");
@@ -269,28 +299,15 @@ describe("Phase 3 acceptance", () => {
   }, 120_000);
 
   it("P3-8: protected fields come from the snapshot, not from history", async () => {
-    // The model asserts a status that contradicts the authoritative snapshot.
-    faux.setResponses([fauxAssistantMessage("您的订单状态是已取消。")]);
-    await chat("p3-8", "我的订单是不是已取消了？");
+    // The model asserts there are no pending operations, contradicting MySQL.
+    faux.setResponses([fauxAssistantMessage("目前没有任何待确认的外部操作。")]);
+    await chat("p3-8", "我还有待确认操作吗？");
 
-    const injected = sessionContext().filter((m) => textOf(m).startsWith("[SmartCS 业务上下文快照"));
+    const injected = sessionContext().filter((m) => textOf(m).startsWith("[Copilot 工作台上下文快照"));
     const snapshot = textOf(injected.at(-1)!);
-    // The authoritative fact is present and marked as authoritative...
-    expect(snapshot).toContain("权威业务事实（以此为准）");
-    // ...and it carries the real status, not the model's claim.
-    expect(snapshot).toContain(OWN_ORDER);
-    // The authoritative status comes from the order repository, not from the
-    // transcript. Assert on the snapshot's own first order line rather than a
-    // hard-coded id, so the check stays true whatever the demo data says.
-    const status = snapshotOrderStatus(snapshot);
-    expect(status).toBeTruthy();
-    expect(snapshot).toContain("ORD-");
+    expect(snapshot).toContain("待确认外部操作（以此为准）");
+    expect(snapshot).toContain(pendingActionId);
+    expect(snapshot).toContain("mail_send");
+    expect(snapshot).toContain(OWN_SUBJECT);
   }, 120_000);
 });
-
-/** Status the snapshot reported for the first listed order ("- 订单 <id>: <status>，金额 …"). */
-function snapshotOrderStatus(snapshot: string): string | undefined {
-  const line = snapshot.split("\n").find((l) => l.includes("订单 ORD-"));
-  if (!line) return undefined;
-  return line.split(":").slice(1).join(":").split("，")[0]?.trim();
-}

@@ -6,7 +6,7 @@
  *   → dispose → reopen by id → context restored
  *
  * Usage:
- *   npx tsx src/spike/run-spike.ts "帮我查一下订单 1001"
+ *   npx tsx src/spike/run-spike.ts "帮我搜一下 Obsidian 里的项目周报"
  *   SMARTCS_PHASE0_PROVIDER=faux npx tsx src/spike/run-spike.ts "你好"
  */
 
@@ -16,7 +16,7 @@ import { loadLlmConfigFromPythonEnv, resolveProviderMode } from "../config/env.j
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 
-const prompt = process.argv.slice(2).join(" ") || "帮我查一下订单 1001 现在到哪了？";
+const prompt = process.argv.slice(2).join(" ") || "帮我搜一下 Obsidian 里的项目周报";
 const SESSION_ID = "smartcs-phase0-spike";
 
 async function main(): Promise<void> {
@@ -27,10 +27,10 @@ async function main(): Promise<void> {
   if (faux) {
     faux.setResponses([
       fauxAssistantMessage(
-        [fauxText("好的，我帮你查一下订单。"), fauxToolCall("order_query", { orderId: "1001" })],
+        [fauxText("好的，我帮你检索一下知识库。"), fauxToolCall("knowledge_search", { query: "项目周报" })],
         { stopReason: "toolUse" },
       ),
-      fauxAssistantMessage("你的订单已发货，正在派送中。"),
+      fauxAssistantMessage("已为你整理出 Obsidian 与知识库中的相关记录。"),
     ]);
   }
 

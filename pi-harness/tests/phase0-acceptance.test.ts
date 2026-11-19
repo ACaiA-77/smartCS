@@ -33,7 +33,7 @@ describe("Phase 0 acceptance", () => {
       const prompt = prompts[0]!;
 
       // Our identity is present...
-      expect(prompt).toContain("SmartCS 智能客服助手");
+      expect(prompt).toContain("个人受控 Copilot");
       // ...and pi's coding-assistant framing is gone.
       expect(prompt).not.toMatch(/expert coding assistant/i);
       expect(prompt).not.toMatch(/operating inside pi/i);
@@ -59,19 +59,19 @@ describe("Phase 0 acceptance", () => {
 
   it("emits deterministic status frames before the final when a tool runs", async () => {
     const { agent, cleanup } = await createTestAgent([
-      fauxAssistantMessage([fauxText("我查一下。"), fauxToolCall("order_query", { orderId: "1001" })], {
+      fauxAssistantMessage([fauxText("我查一下。"), fauxToolCall("vault_search", { query: "roadmap" })], {
         stopReason: "toolUse",
       }),
-      fauxAssistantMessage("订单 1001 已发货。"),
+      fauxAssistantMessage("已找到 roadmap 笔记。"),
     ]);
     try {
       const stream = new ChatStream(agent.session);
-      const result = await stream.run("查订单 1001");
+      const result = await stream.run("搜一下 roadmap 笔记");
 
       expect(result.frames.map((f) => f.type)).toEqual(["status", "final", "done"]);
       const status = result.frames[0] as { type: "status"; text: string };
-      expect(status.text).toBe("正在查询订单");
-      expect(result.finalText).toBe("订单 1001 已发货。");
+      expect(status.text).toBe("正在检索 Obsidian 笔记");
+      expect(result.finalText).toBe("已找到 roadmap 笔记。");
     } finally {
       cleanup();
     }
@@ -93,13 +93,13 @@ describe("Phase 0 acceptance", () => {
   it("falls back to a deterministic safe final when no eligible candidate exists", async () => {
     // The only assistant message is a tool-call narration -> not eligible.
     const { agent, cleanup } = await createTestAgent([
-      fauxAssistantMessage([fauxToolCall("order_query", { orderId: "1001" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("vault_search", { query: "roadmap" })], { stopReason: "toolUse" }),
       fauxAssistantMessage([], { stopReason: "length" }), // abnormal stop, empty content
     ]);
     try {
       const stream = new ChatStream(agent.session);
-      const result = await stream.run("查订单");
-      expect(result.finalText).toBe("抱歉，我这边暂时无法给出答复，请稍后再试或转人工客服。");
+      const result = await stream.run("搜笔记");
+      expect(result.finalText).toBe("抱歉，暂时无法完成这次处理，请稍后再试或换个方式描述需求。");
     } finally {
       cleanup();
     }
@@ -107,7 +107,7 @@ describe("Phase 0 acceptance", () => {
 
   it("tool_call / tool_result are unreachable from session.subscribe (extension-only)", async () => {
     const { agent, cleanup } = await createTestAgent([
-      fauxAssistantMessage([fauxToolCall("order_query", { orderId: "1001" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("vault_search", { query: "roadmap" })], { stopReason: "toolUse" }),
       fauxAssistantMessage("好了。"),
     ]);
     try {
@@ -115,7 +115,7 @@ describe("Phase 0 acceptance", () => {
       agent.session.subscribe((event) => {
         subscribeTypes.add(event.type);
       });
-      await agent.session.prompt("查订单 1001");
+      await agent.session.prompt("搜笔记 roadmap");
 
       // Plan v2 §8 #7: these never arrive on the public listener, and the
       // failure is silent — no error, the branch simply never matches.

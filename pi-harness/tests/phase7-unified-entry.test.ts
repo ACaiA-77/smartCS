@@ -165,21 +165,21 @@ afterAll(async () => {
 
 describe("Phase 7 unified entry (§2)", () => {
   it("a forwarded turn is served and returns the observation label", async () => {
-    faux.setResponses([fauxAssistantMessage("已收到您的退款申请。")]);
+    faux.setResponses([fauxAssistantMessage("已为您检索 Obsidian 笔记。")]);
 
     const forwarded = await chat({
       session_id: SESSION_PI,
       client_request_id: "p7-forwarded-1",
-      message: "我要退款",
+      message: "帮我查一下 Obsidian 笔记",
     });
 
     expect(forwarded.status).toBe(200);
-    expect(forwarded.body.message.content).toBe("已收到您的退款申请。");
+    expect(forwarded.body.message.content).toBe("已为您检索 Obsidian 笔记。");
     expect(forwarded.body.replayed).toBe(false);
     expect(forwarded.body.session_id).toBe(SESSION_PI);
     expect(forwarded.body.client_request_id).toBe("p7-forwarded-1");
     // Classification is observation-only, but the unified entry surfaces it.
-    expect(forwarded.body.intent_label).toBe("refund");
+    expect(forwarded.body.intent_label).toBe("vault");
   });
 
   it("a tampered runtime signature is refused before the turn runs", async () => {
@@ -210,13 +210,13 @@ describe("Phase 7 unified entry (§2)", () => {
     faux.setResponses([fauxAssistantMessage("不带头部的直连回答。")]);
 
     const direct = await chat(
-      { session_id: SESSION_SIG, client_request_id: "p7-direct-1", message: "查订单" },
+      { session_id: SESSION_SIG, client_request_id: "p7-direct-1", message: "查一下 Gmail 邮件" },
       { serviceToken: null },
     );
 
     expect(direct.status).toBe(200);
     expect(direct.body.message.content).toBe("不带头部的直连回答。");
-    // "查订单" hits the order rule in classifyIntent.
-    expect(direct.body.intent_label).toBe("order");
+    // "查一下 Gmail 邮件" hits the mail rule in classifyIntent.
+    expect(direct.body.intent_label).toBe("mail");
   });
 });

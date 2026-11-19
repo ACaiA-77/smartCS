@@ -16,7 +16,7 @@ from typing import Any
 
 from tool_runtime.approval_store import ApprovalService
 from tool_runtime.execution_ledger import ExecutionLedger, LedgerClaimLost, canonical_arguments_hash
-from tool_runtime.mcp_server import MCPToolServer, ToolCallResult, ToolDefinition, customer_tool_arguments
+from tool_runtime.mcp_server import MCPToolServer, ToolCallResult, ToolDefinition
 
 
 @dataclass(frozen=True)
@@ -101,20 +101,6 @@ class ToolExecutor:
         arguments: dict[str, Any],
         context: ToolExecutionContext | None = None,
     ) -> ToolExecutionResult:
-        tool = self.server.get_tool(name)
-        try:
-            arguments = customer_tool_arguments(name, arguments)
-        except PermissionError as exc:
-            return ToolExecutionResult(
-                tool_name=name,
-                success=False,
-                status="failed",
-                error_code="user_identity_mismatch",
-                error=str(exc),
-                operation_type=tool.operation_type if tool is not None else "read",
-                risk_level=tool.risk_level if tool is not None else "low",
-                requires_confirmation=bool(tool and (tool.requires_confirmation or tool.operation_type == "write")),
-            )
         return await self._execute(name, arguments, context)
 
     async def _execute(

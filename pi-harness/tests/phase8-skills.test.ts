@@ -14,9 +14,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import { createTestAgent } from "./helpers/harness.js";
 
-const SKILL_NAMES = ["cs-style", "refund-policy", "tool-guide"];
-const DESCRIPTION_PHRASE = "退款政策口径与话术边界"; // refund-policy's description
-const BODY_ONLY_PHRASE = "我帮您确认一下"; // appears only in cs-style's body
+const SKILL_NAMES = [
+  "daily-briefing",
+  "github-issue-triage",
+  "mail-triage-reply",
+  "obsidian-wiki-compile",
+];
+const DESCRIPTION_PHRASE = "跨来源每日简报"; // daily-briefing's description
+const BODY_ONLY_PHRASE = "需要今天处理 / 等待他人 / 仅供参考"; // appears only in daily-briefing's body
 
 const saved = process.env.SMARTCS_SKILLS;
 afterEach(() => {
@@ -112,13 +117,14 @@ describe("Phase 8 skills (§8.2)", () => {
     expect(result.systemPrompt).not.toContain(DESCRIPTION_PHRASE);
   });
 
-  it("on: three skills are registered, only their descriptions are disclosed (P8-5)", async () => {
+  it("on: four copilot skills are registered, only their descriptions are disclosed (P8-5)", async () => {
     process.env.SMARTCS_SKILLS = "on";
     const result = await probe();
     expect(result.skillNames).toEqual(SKILL_NAMES);
     expect(result.systemPrompt).toContain(DESCRIPTION_PHRASE);
-    expect(result.systemPrompt).toContain("客服沟通风格与工单话术规范");
-    expect(result.systemPrompt).toContain("knowledge_search 使用建议与工具选择说明");
+    expect(result.systemPrompt).toContain("GitHub 通知、Issue 与 PR 分诊");
+    expect(result.systemPrompt).toContain("163 与 Gmail 邮件统一分诊与回复");
+    expect(result.systemPrompt).toContain("Obsidian 知识库编译与巡检");
     // Progressive disclosure: the body is not in the prompt.
     expect(result.systemPrompt).not.toContain(BODY_ONLY_PHRASE);
   });
@@ -137,7 +143,7 @@ describe("Phase 8 skills (§8.2)", () => {
 
   it("on: skill_load returns the body, and only for a registered name", async () => {
     process.env.SMARTCS_SKILLS = "on";
-    const body = await callTool("skill_load", { skill: "cs-style" });
+    const body = await callTool("skill_load", { skill: "daily-briefing" });
     expect(body.isError, body.text).toBe(false);
     expect(body.text).toContain(BODY_ONLY_PHRASE);
     // The schema is an enum of the registered names: no path is expressible.

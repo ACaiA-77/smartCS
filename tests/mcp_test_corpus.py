@@ -8,9 +8,9 @@ gateway process — where it must not be — can load the exact same documents.
 from __future__ import annotations
 
 DOCUMENTS = [
-    ("退款政策：用户在购买后 7 天内可申请无理由退款，退款将在 3-5 个工作日内原路退回。", "refund_policy.md"),
-    ("工单受理后 24 小时内首次响应，48 小时内给出处理结论。", "ticket_sla.md"),
-    ("订单发货后可在物流页面查询轨迹，签收后 7 天内支持退换。", "shipping.md"),
+    ("上下文工程原则：每轮注入确定性权威状态快照，不依赖模型历史转录。", "context_engineering.md"),
+    ("双段式外部操作：先准备冻结快照，待用户明确确认后再执行发送。", "two_phase_gate.md"),
+    ("Obsidian LLM Wiki：raw 区域保持只读归档，wiki 区域由编译器维护。", "wiki_architecture.md"),
 ]
 
 

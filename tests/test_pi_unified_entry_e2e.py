@@ -61,8 +61,8 @@ pytestmark = pytest.mark.skipif(
     reason="cross-service end-to-end needs node and pi-harness/node_modules/tsx",
 )
 
-TURN_TEXT = "我的订单发货了吗？"
-HARNESS_ANSWER = "E2E 回答：订单已发货。"
+TURN_TEXT = "帮我查一下 Obsidian 笔记里的项目周报"
+HARNESS_ANSWER = "E2E 回答：已找到项目周报笔记。"
 
 
 class _TripwireOrchestrator:
@@ -250,7 +250,7 @@ async def test_a_new_session_goes_through_the_unified_entry_into_the_harness(
         # (a) the answer came back through the harness and was adapted
         assert first.response == HARNESS_ANSWER
         assert first.harness_version == "pi"
-        assert first.intent == "order"            # the harness's own label
+        assert first.intent == "vault"            # the harness's own label
         assert first.compliance_passed is True
         assert first.client_request_id == "e2e-turn-1"
 

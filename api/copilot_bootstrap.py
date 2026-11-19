@@ -7,8 +7,7 @@ from environment variables. The rule is deliberately conservative:
   present, so a half-configured deployment registers no tool rather than a
   broken one;
 * a partially configured mail provider is skipped, not raised on — the e-mail
-  surface degrades to "not configured" while the rest still works;
-* the e-commerce profile imports nothing from here.
+  surface degrades to "not configured" while the rest still works.
 """
 
 from __future__ import annotations
@@ -27,12 +26,6 @@ from knowledge_engine import ObsidianVault, OntologyStore, WikiCompiler
 _MAIL_163_KEYS = ("MAIL_163_USERNAME",)
 _MAIL_163_SECRET_KEYS = ("MAIL_163_PASSWORD", "MAIL_163_AUTH_CODE")
 _GMAIL_KEYS = ("GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET", "GMAIL_REFRESH_TOKEN")
-
-
-def is_copilot_profile() -> bool:
-    """Whether this deployment runs the personal Copilot profile."""
-
-    return os.getenv("SMARTCS_PROFILE", "ecommerce").strip().lower() == "copilot"
 
 
 def _env_value(env: Mapping[str, str], key: str) -> str | None:
@@ -121,4 +114,4 @@ def build_copilot_dependencies(env: Mapping[str, str] | None = None) -> dict[str
     }
 
 
-__all__ = ["build_copilot_dependencies", "is_copilot_profile"]
+__all__ = ["build_copilot_dependencies"]

@@ -38,13 +38,12 @@ import {
 } from "./helpers/phase1.js";
 import {
   crashMarker,
-  createPendingRefund,
+  createPendingMailAction,
   ledgerCount,
   ledgerRow,
-  refundCount,
+  sentMailCount,
   sleep,
   startMatrixHarness,
-  ticketCount,
   waitFor,
   type MatrixHarness,
 } from "./helpers/f-matrix.js";
@@ -63,7 +62,7 @@ let python: PythonService;
 let db: Database;
 let root: string;
 let paths: SmartCsPaths;
-let orderDbPath: string;
+let copilotDbPath: string;
 let harness: MatrixHarness | undefined;
 
 function userToken(accountId: number): string {
@@ -207,9 +206,9 @@ describe("F matrix — crash windows (F1/F3/F5/F6/F12)", () => {
     });
     mkdirSync(paths.runtimeCwd, { recursive: true });
     mkdirSync(paths.sessionDir, { recursive: true });
-    orderDbPath = join(root, "orders.db");
+    copilotDbPath = join(root, "copilot.db");
 
-    python = await startPythonService({ port: PY_PORT, orderDbPath, writeMode: "live" });
+    python = await startPythonService({ port: PY_PORT, copilotDbPath, writeMode: "live" });
   }, 180_000);
 
   afterAll(async () => {
@@ -227,16 +226,15 @@ describe("F matrix — crash windows (F1/F3/F5/F6/F12)", () => {
   it("F1 — a crash BEFORE the model runs leaves no side effect and the request can be re-sent", async () => {
     const sessionId = "f1-session";
     const account = await seedOwner("f1-owner", "user_002", sessionId);
-    const refundsBefore = refundCount(orderDbPath);
-    const ticketsBefore = ticketCount(orderDbPath);
-    const ledgerBefore = ledgerCount(orderDbPath);
+    const mailsBefore = sentMailCount(copilotDbPath);
+    const ledgerBefore = ledgerCount(copilotDbPath);
 
     const boot = await bootHarness("f1a", [{ kind: "text", text: "（这一轮不应产生回答）" }], {
       crashPoint: "before_llm_call",
     });
     harness = boot.harness;
 
-    const crashed = await chat(sessionId, "f1-req", "我的订单到哪了？", account);
+    const crashed = await chat(sessionId, "f1-req", "帮我搜一下 Project Alpha 笔记", account);
     expect(crashed.dropped, JSON.stringify(crashed.body)).toBe(true);
 
     await waitFor(() => existsSync(boot.marker), { label: "F1 crash marker" });
@@ -246,9 +244,8 @@ describe("F matrix — crash windows (F1/F3/F5/F6/F12)", () => {
     expect(crashMarker(boot.marker)?.point).toBe("before_llm_call");
 
     // No side effect of any kind, and nothing reached the ledger.
-    expect(refundCount(orderDbPath)).toBe(refundsBefore);
-    expect(ticketCount(orderDbPath)).toBe(ticketsBefore);
-    expect(ledgerCount(orderDbPath)).toBe(ledgerBefore);
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore);
+    expect(ledgerCount(copilotDbPath)).toBe(ledgerBefore);
 
     // The receipt is the crash residue: `processing`, with no write operations.
     const residue = await receiptOf(sessionId, "f1-req");
@@ -256,53 +253,53 @@ describe("F matrix — crash windows (F1/F3/F5/F6/F12)", () => {
     expect(await openWritesOf(sessionId, "f1-req")).toEqual([]);
 
     await stopHarness();
-    harness = (await bootHarness("f1b", [{ kind: "text", text: "您的订单正在运输中。" }])).harness;
+    harness = (await bootHarness("f1b", [{ kind: "text", text: "已找到 Project Alpha 笔记。" }])).harness;
 
-    const retried = await chat(sessionId, "f1-req", "我的订单到哪了？", account);
+    const retried = await chat(sessionId, "f1-req", "帮我搜一下 Project Alpha 笔记", account);
     expect(retried.status).toBe(200);
     expect(retried.body.replayed).toBe(false);
-    expect(String((retried.body.message as { content: string }).content)).toContain("运输中");
+    expect(String((retried.body.message as { content: string }).content)).toContain("Project Alpha");
 
     const settled = await receiptOf(sessionId, "f1-req");
     expect(settled?.status).toBe("completed");
-    expect(refundCount(orderDbPath)).toBe(refundsBefore);
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore);
   }, 180_000);
 
   // -------------------------------------------------------------------------
   it("F3 — a crash BEFORE the write is sent leaves the ledger empty, and the re-send writes exactly once", async () => {
     const sessionId = "f3-session";
     const account = await seedOwner("f3-owner", "user_004", sessionId);
-    const orderId = "ORD-20260801-0004";
-    const refundsBefore = refundCount(orderDbPath);
-    const ledgerBefore = ledgerCount(orderDbPath);
+    const subject = "F3 Weekly Report";
+    const mailsBefore = sentMailCount(copilotDbPath);
+    const ledgerBefore = ledgerCount(copilotDbPath);
 
-    const pendingId = await createPendingRefund(
+    const pendingId = await createPendingMailAction(
       {
         pythonUrl: python.url,
         accountId: account.accountId,
         businessUserId: "user_004",
         sessionId,
-        clientRequestId: "f3-eval",
+        clientRequestId: "f3-prep",
       },
-      orderId,
+      { subject },
     );
 
     const script: ScriptStep[] = [
-      { kind: "tool", calls: [{ name: "refund_confirm", arguments: { pending_action_id: pendingId } }] },
+      { kind: "tool", calls: [{ name: "copilot_action_confirm", arguments: { pending_action_id: pendingId } }] },
     ];
 
     const boot = await bootHarness("f3a", script, { crashPoint: "before_write_send" });
     harness = boot.harness;
 
-    const crashed = await chat(sessionId, "f3-req", `确认退款 ${orderId}`, account);
+    const crashed = await chat(sessionId, "f3-req", `确认发送 ${subject}`, account);
     expect(crashed.dropped, JSON.stringify(crashed.body)).toBe(true);
 
     await waitFor(() => existsSync(boot.marker), { label: "F3 crash marker" });
     expect(crashMarker(boot.marker)?.point).toBe("before_write_send");
 
-    // Nothing left the harness: no refund, and no ledger claim at all.
-    expect(refundCount(orderDbPath)).toBe(refundsBefore);
-    expect(ledgerCount(orderDbPath)).toBe(ledgerBefore);
+    // Nothing left the harness: no sent mail, and no ledger claim at all.
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore);
+    expect(ledgerCount(copilotDbPath)).toBe(ledgerBefore);
 
     const residue = await receiptOf(sessionId, "f3-req");
     expect(residue?.status).toBe("processing");
@@ -311,13 +308,13 @@ describe("F matrix — crash windows (F1/F3/F5/F6/F12)", () => {
     await stopHarness();
     harness = (await bootHarness("f3b", script)).harness;
 
-    const retried = await chat(sessionId, "f3-req", `确认退款 ${orderId}`, account);
+    const retried = await chat(sessionId, "f3-req", `确认发送 ${subject}`, account);
     expect(retried.status).toBe(200);
 
-    // Exactly one refund, exactly one ledger claim: the retry completed the
+    // Exactly one sent mail, exactly one ledger claim: the retry completed the
     // write that never left, and did not double it.
-    expect(refundCount(orderDbPath)).toBe(refundsBefore + 1);
-    expect(ledgerCount(orderDbPath)).toBe(ledgerBefore + 1);
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore + 1);
+    expect(ledgerCount(copilotDbPath)).toBe(ledgerBefore + 1);
     const settled = await receiptOf(sessionId, "f3-req");
     expect(settled?.status).toBe("completed");
   }, 180_000);
@@ -326,34 +323,34 @@ describe("F matrix — crash windows (F1/F3/F5/F6/F12)", () => {
   it("F5 — a crash AFTER the write landed leaves the toolResult unappended, and recovery never re-executes", async () => {
     const sessionId = "f5-session";
     const account = await seedOwner("f5-owner", "user_006", sessionId);
-    const orderId = "ORD-20260801-0006";
-    const refundsBefore = refundCount(orderDbPath);
-    const ledgerBefore = ledgerCount(orderDbPath);
+    const subject = "F5 Weekly Report";
+    const mailsBefore = sentMailCount(copilotDbPath);
+    const ledgerBefore = ledgerCount(copilotDbPath);
 
-    const pendingId = await createPendingRefund(
+    const pendingId = await createPendingMailAction(
       {
         pythonUrl: python.url,
         accountId: account.accountId,
         businessUserId: "user_006",
         sessionId,
-        clientRequestId: "f5-eval",
+        clientRequestId: "f5-prep",
       },
-      orderId,
+      { subject },
     );
 
     const script: ScriptStep[] = [
-      { kind: "tool", calls: [{ name: "refund_confirm", arguments: { pending_action_id: pendingId } }] },
+      { kind: "tool", calls: [{ name: "copilot_action_confirm", arguments: { pending_action_id: pendingId } }] },
     ];
     const boot = await bootHarness("f5a", script, { crashPoint: "after_write_success" });
     harness = boot.harness;
 
-    const crashed = await chat(sessionId, "f5-req", `确认退款 ${orderId}`, account);
+    const crashed = await chat(sessionId, "f5-req", `确认发送 ${subject}`, account);
     expect(crashed.dropped, JSON.stringify(crashed.body)).toBe(true);
     await waitFor(() => existsSync(boot.marker), { label: "F5 crash marker" });
     expect(crashMarker(boot.marker)?.point).toBe("after_write_success");
 
     // The side effect is REAL and durable...
-    expect(refundCount(orderDbPath)).toBe(refundsBefore + 1);
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore + 1);
 
     // ...the receipt already carries the operation id (durable BEFORE sending,
     // which is the only reason any of this is recoverable)...
@@ -361,26 +358,26 @@ describe("F matrix — crash windows (F1/F3/F5/F6/F12)", () => {
     expect(residue?.status).toBe("processing");
     const openOps = await openWritesOf(sessionId, "f5-req");
     expect(openOps).toHaveLength(1);
-    expect(ledgerRow(orderDbPath, openOps[0]!.operation_id)?.status).toBe("completed");
+    expect(ledgerRow(copilotDbPath, openOps[0]!.operation_id)?.status).toBe("completed");
 
     // ...but the transcript never learned about it: the injection window is real.
     const shape = transcriptShape(sessionId);
-    expect(shape.toolCalls).toContain("refund_confirm");
+    expect(shape.toolCalls).toContain("copilot_action_confirm");
     expect(shape.toolResults).toBe(0);
 
     const entriesBefore = shape.entries.length;
     await stopHarness();
     harness = (await bootHarness("f5b", script)).harness;
 
-    const recovered = await chat(sessionId, "f5-req", `确认退款 ${orderId}`, account);
+    const recovered = await chat(sessionId, "f5-req", `确认发送 ${subject}`, account);
     expect(recovered.status).toBe(200);
     const content = String((recovered.body.message as { content: string }).content);
     expect(content).toContain("业务已完成");
 
     // No second execution, and — the stronger claim — the model was never
     // consulted again, so it had no opportunity to decide otherwise.
-    expect(refundCount(orderDbPath)).toBe(refundsBefore + 1);
-    expect(ledgerCount(orderDbPath)).toBe(ledgerBefore + 1);
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore + 1);
+    expect(ledgerCount(copilotDbPath)).toBe(ledgerBefore + 1);
     expect(transcriptShape(sessionId).entries.length).toBe(entriesBefore);
     expect((await receiptOf(sessionId, "f5-req"))?.status).toBe("completed");
   }, 180_000);
@@ -389,49 +386,49 @@ describe("F matrix — crash windows (F1/F3/F5/F6/F12)", () => {
   it("F6 — a crash AFTER the final, BEFORE the receipt completes, does not duplicate the write", async () => {
     const sessionId = "f6-session";
     const account = await seedOwner("f6-owner", "user_011", sessionId);
-    const orderId = "ORD-20260801-0011";
-    const refundsBefore = refundCount(orderDbPath);
-    const ledgerBefore = ledgerCount(orderDbPath);
+    const subject = "F6 Weekly Report";
+    const mailsBefore = sentMailCount(copilotDbPath);
+    const ledgerBefore = ledgerCount(copilotDbPath);
 
-    const pendingId = await createPendingRefund(
+    const pendingId = await createPendingMailAction(
       {
         pythonUrl: python.url,
         accountId: account.accountId,
         businessUserId: "user_011",
         sessionId,
-        clientRequestId: "f6-eval",
+        clientRequestId: "f6-prep",
       },
-      orderId,
+      { subject },
     );
 
     const script: ScriptStep[] = [
-      { kind: "tool", calls: [{ name: "refund_confirm", arguments: { pending_action_id: pendingId } }] },
+      { kind: "tool", calls: [{ name: "copilot_action_confirm", arguments: { pending_action_id: pendingId } }] },
     ];
     const boot = await bootHarness("f6a", script, { crashPoint: "before_receipt_complete" });
     harness = boot.harness;
 
-    const crashed = await chat(sessionId, "f6-req", `确认退款 ${orderId}`, account);
+    const crashed = await chat(sessionId, "f6-req", `确认发送 ${subject}`, account);
     expect(crashed.dropped, JSON.stringify(crashed.body)).toBe(true);
     await waitFor(() => existsSync(boot.marker), { label: "F6 crash marker" });
     expect(crashMarker(boot.marker)?.point).toBe("before_receipt_complete");
 
-    expect(refundCount(orderDbPath)).toBe(refundsBefore + 1);
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore + 1);
 
     // The F6 window differs from F5: the toolResult AND the final answer were
     // already produced — only the receipt never got its terminal state.
     const shape = transcriptShape(sessionId);
-    expect(shape.toolCalls).toContain("refund_confirm");
+    expect(shape.toolCalls).toContain("copilot_action_confirm");
     expect(shape.toolResults).toBe(1);
     expect((await receiptOf(sessionId, "f6-req"))?.status).toBe("processing");
 
     await stopHarness();
     harness = (await bootHarness("f6b", script)).harness;
 
-    const recovered = await chat(sessionId, "f6-req", `确认退款 ${orderId}`, account);
+    const recovered = await chat(sessionId, "f6-req", `确认发送 ${subject}`, account);
     expect(recovered.status).toBe(200);
     expect(String((recovered.body.message as { content: string }).content)).toContain("业务已完成");
-    expect(refundCount(orderDbPath)).toBe(refundsBefore + 1);
-    expect(ledgerCount(orderDbPath)).toBe(ledgerBefore + 1);
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore + 1);
+    expect(ledgerCount(copilotDbPath)).toBe(ledgerBefore + 1);
     expect((await receiptOf(sessionId, "f6-req"))?.status).toBe("completed");
   }, 180_000);
 
@@ -439,7 +436,7 @@ describe("F matrix — crash windows (F1/F3/F5/F6/F12)", () => {
   it("F12 — a hard kill preserves the transcript, the receipt log and the business facts on the same volume", async () => {
     const sessionId = "f12-session";
     const account = await seedOwner("f12-owner", "user_099", sessionId);
-    const refundsBefore = refundCount(orderDbPath);
+    const mailsBefore = sentMailCount(copilotDbPath);
 
     harness = (await bootHarness("f12", [{ kind: "text", text: "崩溃前生成的第一条回答。" }])).harness;
     const first = await chat(sessionId, "f12-req-1", "崩溃前的第一条消息", account);
@@ -451,7 +448,7 @@ describe("F matrix — crash windows (F1/F3/F5/F6/F12)", () => {
     // SIGKILL-equivalent: nothing gets a chance to flush.
     await stopHarness();
     expect(JSON.parse(transcript(sessionId)).length).toBe(entriesBefore);
-    expect(refundCount(orderDbPath)).toBe(refundsBefore);
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore);
 
     harness = (await bootHarness("f12b", [{ kind: "text", text: "重启后的第二条回答。" }])).harness;
     const second = await chat(sessionId, "f12-req-2", "重启后的第二条消息", account);
@@ -468,6 +465,6 @@ describe("F matrix — crash windows (F1/F3/F5/F6/F12)", () => {
     expect(context).toContain("重启后的第二条消息");
 
     // The business facts survived on the same volume too.
-    expect(refundCount(orderDbPath)).toBe(refundsBefore);
+    expect(sentMailCount(copilotDbPath)).toBe(mailsBefore);
   }, 180_000);
 });

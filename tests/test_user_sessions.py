@@ -1,4 +1,4 @@
-"""Real Argon2 + JWT + MySQL customer isolation across sessions, chat, and tools."""
+"""Real Argon2 + JWT + MySQL isolation across sessions, chat, and Copilot tools."""
 from __future__ import annotations
 
 import os
@@ -7,6 +7,7 @@ import secrets
 import httpx
 import pytest
 
+from knowledge_engine import ObsidianVault, OntologyStore
 from platform_db.database import PlatformDatabase
 from platform_db.sessions import Sessions
 from platform_db.users import Users
@@ -14,7 +15,6 @@ from tests.app_state import patch_app_state
 from tests.auth_integration_helpers import auth_test_data
 from tool_runtime.execution_ledger import ExecutionLedger
 from tool_runtime.mcp_server import MCPToolServer, create_default_tools
-from tool_runtime.order_repository import OrderRepository
 from tool_runtime.tool_execution import ToolExecutor
 
 
@@ -38,9 +38,22 @@ async def authenticated_runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "")
     monkeypatch.setenv("SMARTCS_PI_ROLLOUT_PERCENT", "100")
 
-    repository = OrderRepository(str(tmp_path / "orders.db"))
-    server = create_default_tools(MCPToolServer(), order_repository=repository)
-    executor = ToolExecutor(server, ledger=ExecutionLedger(repository.db_path))
+    vault = ObsidianVault(tmp_path / "vault")
+    vault.write_wiki_page("alpha", "Project Alpha", "Weekly progress summary", tags=["project"])
+    ontology = OntologyStore(tmp_path / "ontology.sqlite")
+    ontology.upsert_entity("Project", "Project Alpha")
+
+    deps = {
+        "vault": vault,
+        "ontology": ontology,
+        "wiki_compiler": None,
+        "mail_router": None,
+        "github_client": None,
+        "feishu_client": None,
+    }
+    server = create_default_tools(MCPToolServer(), **deps)
+    ledger = ExecutionLedger(str(tmp_path / "copilot.db"))
+    executor = ToolExecutor(server, ledger=ledger)
 
     transcripts: dict[str, list[dict]] = {}
 
@@ -51,7 +64,7 @@ async def authenticated_runtime(tmp_path, monkeypatch):
             history.append(
                 {
                     "role": "assistant",
-                    "content": "已为您处理查询请求。",
+                    "content": "已为您检索 Obsidian 笔记。",
                     "client_request_id": client_request_id,
                 }
             )
@@ -60,9 +73,9 @@ async def authenticated_runtime(tmp_path, monkeypatch):
             {
                 "session_id": session_id,
                 "client_request_id": client_request_id,
-                "message": {"role": "assistant", "content": "已为您处理查询请求。"},
+                "message": {"role": "assistant", "content": "已为您检索 Obsidian 笔记。"},
                 "replayed": False,
-                "intent_label": "order_query",
+                "intent_label": "vault",
             },
         )
 
@@ -76,10 +89,11 @@ async def authenticated_runtime(tmp_path, monkeypatch):
         ]
         return _FakeHarnessResponse(200, {"messages": msgs})
 
-    async with auth_test_data(repository) as data:
+    async with auth_test_data() as data:
         for name, value in (
-            ("order_repository", repository),
+            ("copilot_dependencies", deps),
             ("mcp_server", server),
+            ("execution_ledger", ledger),
             ("tool_executor", executor),
             ("forward_chat", fake_forward_chat),
             ("call_harness", fake_call_harness),
@@ -102,20 +116,21 @@ async def authenticated_runtime(tmp_path, monkeypatch):
                 assert result.status_code == 200
                 assert "HttpOnly" in result.headers["set-cookie"]
                 assert client.cookies.get("smartcs_auth")
-            yield api, data, alice, bob, repository
+            yield api, data, alice, bob, vault
+    ontology.close()
 
 
 async def create_chat(client, request_id="first"):
     response = await client.post(
         "/api/chat",
-        json={"message": "查询订单 ORD-20260801-0002", "client_request_id": request_id},
+        json={"message": "搜索 Project Alpha 笔记", "client_request_id": request_id},
     )
     assert response.status_code == 200
     return response.json()
 
 
 async def test_real_jwt_session_ownership_blocks_all_cross_user_paths(authenticated_runtime):
-    _api, _data, alice, bob, _repository = authenticated_runtime
+    _api, _data, alice, bob, _vault = authenticated_runtime
     created = await create_chat(alice)
     sid = created["session_id"]
     assert len((await alice.get(f"/api/history/{sid}")).json()["messages"]) == 2
@@ -131,12 +146,12 @@ async def test_real_jwt_session_ownership_blocks_all_cross_user_paths(authentica
         (
             "POST",
             "/api/tools/execute",
-            {"name": "order_query", "session_id": sid, "arguments": {"order_id": "ORD-20260801-0001"}},
+            {"name": "vault_search", "session_id": sid, "arguments": {"query": "Alpha"}},
         ),
         (
             "POST",
             "/api/tools/call",
-            {"name": "order_query", "session_id": sid, "arguments": {"order_id": "ORD-20260801-0001"}},
+            {"name": "vault_search", "session_id": sid, "arguments": {"query": "Alpha"}},
         ),
     ]
     for method, path, body in attempts:
@@ -146,83 +161,45 @@ async def test_real_jwt_session_ownership_blocks_all_cross_user_paths(authentica
     assert len((await alice.get(f"/api/history/{sid}")).json()["messages"]) == 2
 
 
-async def test_real_jwt_identity_spoof_orders_refunds_and_tool_policy(authenticated_runtime):
-    _api, data, alice, bob, repository = authenticated_runtime
+async def test_real_jwt_copilot_context_and_tool_policy(authenticated_runtime):
+    _api, data, alice, bob, vault = authenticated_runtime
     sid = (await create_chat(alice))["session_id"]
     owner = data.accounts[0]["business_user_id"]
-    for path in ("/api/sessions", "/api/demo/orders", f"/api/history/{sid}"):
+    for path in ("/api/sessions", "/api/copilot/context", f"/api/history/{sid}"):
         response = await alice.get(path)
         assert response.status_code == 200
         assert response.headers.get("cache-control") == "no-store"
-    for index, client in enumerate((alice, bob)):
-        orders = (await client.get("/api/demo/orders")).json()["orders"]
-        assert orders
-        assert all(
-            repository.get_order(o["order_id"])["user_id"] == data.accounts[index]["business_user_id"]
-            for o in orders
-        )
-    before = repository.get_order("ORD-20260801-0002")["refunds"]
-    evaluated = await bob.post(
-        "/api/tools/execute", json={"name": "refund_evaluate", "arguments": {"order_id": "ORD-20260801-0002"}}
+
+    read_ok = await bob.post(
+        "/api/tools/execute", json={"name": "vault_search", "arguments": {"query": "Alpha"}}
     )
-    assert evaluated.status_code == 200
-    assert evaluated.json()["result"].get("eligible") is False
+    assert read_ok.status_code == 200
+    assert read_ok.json()["result"][0]["title"] == "Project Alpha"
+
     for endpoint in ("call", "execute"):
         denied = await bob.post(
             f"/api/tools/{endpoint}",
             json={
-                "name": "refund_create",
+                "name": "vault_append_daily",
                 "confirmed": True,
                 "idempotency_key": "customer-cannot-write",
-                "arguments": {"order_id": "ORD-20260801-0002", "reason": "cross user"},
+                "arguments": {"entry": "forbidden", "date_str": "2026-11-18"},
             },
         )
         assert denied.status_code == 403
         spoof = await bob.post(
             f"/api/tools/{endpoint}",
-            json={"name": "order_query", "arguments": {"order_id": "ORD-20260801-0002", "user_id": owner}},
+            json={"name": "vault_search", "arguments": {"query": "Alpha", "user_id": owner}},
         )
         assert spoof.status_code == 403
-    assert repository.get_order("ORD-20260801-0002")["refunds"] == before
+
+    assert not (vault.root / "daily" / "2026-11-18.md").exists()
     assert (await bob.get("/api/metrics")).status_code == 403
     assert set((await bob.get("/api/metrics/runtime")).json()) == {"requests", "tools", "recovery"}
 
 
-async def test_real_jwt_ticket_query_isolation_and_identity_spoof(authenticated_runtime):
-    _api, data, alice, bob, repository = authenticated_runtime
-    from tickets.service import TicketService
-
-    created = TicketService(repository).create_ticket(
-        client_request_id="isolated-ticket-request",
-        user_id=data.accounts[0]["business_user_id"],
-        title="private-A-title",
-        description="private-A-description",
-    )
-    assert created["success"] is True
-    ticket_id = created["ticket_id"]
-    for endpoint in ("call", "execute"):
-        payload = {"name": "ticket_query", "arguments": {"ticket_id": ticket_id}}
-        own = await alice.post(f"/api/tools/{endpoint}", json=payload)
-        assert own.status_code == 200
-        assert own.json()["result"]["title"] == "private-A-title"
-        hidden = await bob.post(f"/api/tools/{endpoint}", json=payload)
-        assert hidden.status_code == 200
-        assert hidden.json()["result"] == {
-            "success": False,
-            "reason_code": "ticket_not_found",
-            "ticket_id": ticket_id,
-        }
-        spoof = await bob.post(
-            f"/api/tools/{endpoint}",
-            json={"name": "ticket_query", "arguments": {"ticket_id": ticket_id, "user_id": data.accounts[0]["business_user_id"]}},
-        )
-        assert spoof.status_code == 403
-    with repository.transaction() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM support_tickets").fetchone()[0] == 1
-
-
 async def test_real_mysql_reopen_login_ownership_and_initial_request_replay(authenticated_runtime, monkeypatch):
-    api, data, alice, bob, _repository = authenticated_runtime
+    api, data, alice, bob, _vault = authenticated_runtime
     first = await create_chat(alice, "lost-initial-response")
     assert await create_chat(alice, "lost-initial-response") == first
     sid = first["session_id"]

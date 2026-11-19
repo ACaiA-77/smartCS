@@ -1,7 +1,7 @@
-"""Real MySQL acceptance data, scoped to UUID accounts and a caller's temp SQLite.
+"""Real MySQL acceptance data, scoped to UUID accounts.
 
-Never use live business identities: the temporary sandbox maps sample orders to
-UUID identities, so parallel acceptance cannot claim or delete a real account.
+Never use live business identities: parallel acceptance generates UUID accounts
+and removes all created sessions and rows on teardown.
 """
 from __future__ import annotations
 
@@ -22,12 +22,12 @@ class AuthTestData:
     accounts: list[dict] = field(default_factory=list, repr=False)
     passwords: list[str] = field(default_factory=list, repr=False)
 
-    def credentials(self, index):
+    def credentials(self, index: int) -> dict[str, str]:
         return {"username": self.accounts[index]["username"], "password": self.passwords[index]}
 
 
 @asynccontextmanager
-async def auth_test_data(repository):
+async def auth_test_data(_repository=None):
     from dotenv import load_dotenv
 
     load_dotenv()
@@ -37,19 +37,12 @@ async def auth_test_data(repository):
     users = Users(database)
     prefix = "auth-accept-" + uuid.uuid4().hex
     try:
-        for index, source in enumerate(("user_002", "user_001")):
+        for index in range(2):
             identity = f"{prefix}-{index}"
             password = secrets.token_urlsafe(24)
             account = await users.create(identity, hash_password(password), identity)
             data.accounts.append(account)
             data.passwords.append(password)
-            with repository.transaction() as connection:
-                connection.execute(
-                    "INSERT INTO users (user_id,display_name,created_at) "
-                    "SELECT ?,display_name,created_at FROM users WHERE user_id=?",
-                    (identity, source),
-                )
-                connection.execute("UPDATE orders SET user_id=? WHERE user_id=?", (identity, source))
         yield data
     finally:
         for account in data.accounts:

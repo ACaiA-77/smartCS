@@ -17,26 +17,50 @@ import sys
 
 
 async def run(url: str, token: str, command: dict) -> dict:
+    from contextlib import AsyncExitStack
     from mcp import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
+    import mcp.client.streamable_http as streamable_http
 
-    async with streamablehttp_client(url, headers={"Authorization": f"Bearer {token}"}) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            if command["op"] == "list_tools":
-                tools = await session.list_tools()
-                return {
-                    "tools": [
-                        {"name": tool.name, "description": tool.description,
-                         "input_schema": tool.inputSchema}
-                        for tool in tools.tools
-                    ]
-                }
-            if command["op"] == "call":
-                result = await session.call_tool(command["name"], command.get("arguments", {}))
-                texts = [block.text for block in result.content if getattr(block, "type", "") == "text"]
-                return {"isError": bool(result.isError), "texts": texts}
-            raise ValueError(f"unknown op: {command['op']}")
+    async with AsyncExitStack() as stack:
+        if hasattr(streamable_http, "streamablehttp_client"):
+            read, write, _ = await stack.enter_async_context(
+                streamable_http.streamablehttp_client(
+                    url, headers={"Authorization": f"Bearer {token}"}
+                )
+            )
+        else:
+            http_client = await stack.enter_async_context(
+                streamable_http.create_mcp_http_client(
+                    headers={"Authorization": f"Bearer {token}"}
+                )
+            )
+            read, write = await stack.enter_async_context(
+                streamable_http.streamable_http_client(url, http_client=http_client)
+            )
+        session = await stack.enter_async_context(ClientSession(read, write))
+        await session.initialize()
+        if command["op"] == "list_tools":
+            tools = await session.list_tools()
+            return {
+                "tools": [
+                    {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "input_schema": (
+                            tool.inputSchema
+                            if hasattr(tool, "inputSchema")
+                            else tool.input_schema
+                        ),
+                    }
+                    for tool in tools.tools
+                ]
+            }
+        if command["op"] == "call":
+            result = await session.call_tool(command["name"], command.get("arguments", {}))
+            texts = [block.text for block in result.content if getattr(block, "type", "") == "text"]
+            is_error = getattr(result, "isError", getattr(result, "is_error", False))
+            return {"isError": bool(is_error), "texts": texts}
+        raise ValueError(f"unknown op: {command['op']}")
 
 
 def main() -> None:
